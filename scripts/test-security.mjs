@@ -6,7 +6,10 @@
 //   1. Record ids become filenames. `upsert-application {"id":"../../ESCAPED"}` returned
 //      {"file":"../../ESCAPED.md"} and wrote outside data/. Reachable from untrusted input, because
 //      ids reach record.mjs from agents parsing job posts, recruiter email and chat messages.
-//   2. The dashboard bound every interface. It was reachable from this machine's LAN address and
+//   2. The dashboard had no CSRF protection: any web page you visited could POST to
+//      localhost:4319 and dismiss proposals or rewrite records. A cross-origin form POST needs no
+//      CORS permission, so loopback binding does not help.
+//   3. The dashboard bound every interface. It was reachable from this machine's LAN address and
 //      serves personal data with no authentication, so "loopback only" IS the authentication.
 //
 //   npm run test:security
@@ -124,6 +127,25 @@ async function main() {
   } else {
     console.log("  skip  no non-loopback interface on this host — cannot test external binding");
   }
+
+  // 5. Cross-site POSTs must be rejected, and same-origin/scripted ones must still work.
+  const post = (headers) =>
+    fetch(`http://127.0.0.1:${port}/add-task-nl`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+      body: "nl=csrf probe",
+      redirect: "manual",
+    }).then((r) => r.status).catch(() => 0);
+
+  check("cross-origin POST is rejected", (await post({ origin: "http://evil.example" })) === 403);
+  check("Sec-Fetch-Site: cross-site is rejected", (await post({ "sec-fetch-site": "cross-site" })) === 403);
+  // 3xx means the handler ran and redirected -- i.e. it was allowed through.
+  const same = await post({ origin: `http://127.0.0.1:${port}`, "sec-fetch-site": "same-origin" });
+  check("same-origin POST is allowed", same >= 300 && same < 400, `status ${same}`);
+  // curl/scripts send neither header; blocking them buys nothing, since anything able to make the
+  // request already has local code execution.
+  const scripted = await post({});
+  check("scripted POST (no browser headers) is allowed", scripted >= 300 && scripted < 400, `status ${scripted}`);
 
   child.kill();
   await fs.rm(tmp, { recursive: true, force: true });

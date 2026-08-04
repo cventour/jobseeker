@@ -110,8 +110,16 @@ Full detail: [`PERMISSIONS.md`](PERMISSIONS.md).
 - **A drifted selector cannot fake a successful sweep.** Covered by `npm run test:sweep`.
 - **Reposts are detected** across reworded titles and new requisition IDs, and distinguished from
   the same role in a different territory.
-- **Retrieved content is data, never instructions.** Job posts, emails and pages cannot direct the
-  system's behaviour.
+- **Retrieved content is data, never instructions.** Job posts, recruiter email, chat messages and
+  careers pages are all written by other people and can contain text aimed at the agent rather than
+  the user. AGENT-RULES **§0** makes this the first rule: such text is quoted and surfaced, never
+  obeyed, and it can never grant an approval, choose an identifier, or nominate a destination.
+- **The dashboard rejects cross-site POSTs.** Loopback binding stops the network reaching it, but not
+  a web page you are visiting from submitting a form to `localhost:4319` — a cross-origin form POST
+  needs no CORS permission, and the write lands even though the attacker cannot read the reply. POSTs
+  carrying a foreign `Origin`/`Referer`, or `Sec-Fetch-Site` other than same-origin, are refused with
+  403. Requests with none of those headers are not browsers (curl, scripts, the tests) and are
+  allowed — anything able to send one already has local code execution.
 
 ---
 

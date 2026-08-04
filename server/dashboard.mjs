@@ -2255,6 +2255,41 @@ async function logActivity(type, detail) {
   await appendTableRow(file, { timestamp: nowISO(), type, detail: sanitizeCell(detail) }, "top");
 }
 
+// Reject cross-site POSTs.
+//
+// The dashboard has no authentication -- binding to loopback IS the authentication. But loopback
+// does not stop a WEB PAGE you happen to be visiting from submitting a form to
+// http://localhost:4319/dismiss-proposal: a plain cross-origin form POST needs no CORS permission,
+// and while the attacker cannot read the response, the write still lands. Any site open in your
+// browser could quietly dismiss proposals or rewrite records.
+//
+// Browsers label those requests, so the fix is to check the label:
+//   * Sec-Fetch-Site  -- sent by every current browser; "cross-site"/"same-site" both mean not us.
+//   * Origin          -- present on all cross-origin form POSTs.
+//   * Referer         -- fallback for the rare browser that omits Origin.
+//
+// A request carrying NONE of these is not a browser -- curl, a script, the test suite -- and is
+// allowed, because anything able to make one already has local code execution and does not need
+// CSRF. Rejecting them would break scripted use for no security gain.
+function crossSitePost(req) {
+  const host = String(req.headers.host || "");
+
+  const fetchSite = req.headers["sec-fetch-site"];
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+    return `Sec-Fetch-Site: ${fetchSite}`;
+  }
+
+  const stated = req.headers.origin || req.headers.referer;
+  if (stated) {
+    try {
+      if (new URL(stated).host !== host) return `Origin/Referer ${new URL(stated).host} != ${host}`;
+    } catch {
+      return `unparseable Origin/Referer: ${String(stated).slice(0, 60)}`;
+    }
+  }
+  return null;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
@@ -2284,6 +2319,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === "POST") {
+      const bad = crossSitePost(req);
+      if (bad) {
+        // 403 with no detail to the caller; the reason goes to the operator's console.
+        console.warn(`[csrf] rejected POST ${url.pathname} — ${bad}`);
+        res.writeHead(403, { "content-type": "text/plain" });
+        return res.end("Cross-site request rejected");
+      }
       // Every mutation below shares data/ with record.mjs, which agents may be running right
       // now (a scheduled /job-run writing while you click Advance). Take the same lock so the
       // two never interleave a read-modify-write. GET is unlocked — a slightly stale render is
