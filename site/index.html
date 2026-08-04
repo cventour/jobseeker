@@ -1,0 +1,75 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JobSeeker — your job search, remembered</title>
+<meta name="description" content="A local-first job-search assistant. Reads your email, chats and calendar, and each morning tells you the few things that need you. Never applies or sends without your approval.">
+<link rel="icon" href="img/logo-mark.png">
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header class="nav">
+  <a class="wordmark" href="index.html">JOBSEEKER</a>
+  <nav>
+    <a href="how-it-works.html">How it works</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="install.html">Install</a>
+    <a href="https://github.com/cventour/jobseeker">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Your job search,<br><mark>remembered.</mark></h1>
+    <p class="lede">A job search falls apart in the gaps between apps. Applications live in ATS
+      portals, recruiters reply by email, referrals arrive over WhatsApp, interviews land in a
+      calendar. Nothing joins them up.</p>
+    <p class="sub">JobSeeker reads the channels you already use, keeps one honest picture of where
+      everything stands, and each morning tells you the few things that actually need you. It runs
+      entirely on your own machine.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/cventour/jobseeker">Get it on GitHub</a>
+      <a class="btn ghost" href="how-it-works.html">How it works</a>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">The problem</p>
+    <ul class="problems">
+      <li>An application goes quiet and you notice three weeks later.</li>
+      <li>Someone offers a referral in a chat. The CV never gets sent.</li>
+      <li>You apply to the same job twice, because it was reposted with a new reference number.</li>
+      <li>You find a great role, then lose it in a list of forty.</li>
+      <li>You agree a follow-up in one app and complete it in another, so it stays open forever.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Every morning</p>
+    <h2>The only screen most days need.</h2>
+    <figure><img src="img/today.png" alt="The Today screen"></figure>
+  </section>
+
+  <section class="panel">
+    <p class="eyebrow">What it never does</p>
+    <ul class="never">
+      <li><b>Never applies to a job</b> without you approving that exact application.</li>
+      <li><b>Never sends a message</b> without you approving that exact message.</li>
+      <li><b>Never opens your chat threads</b> — opening marks them read and destroys your own signal.</li>
+      <li><b>Never logs private conversations</b> — only threads with a job-search signal are recorded.</li>
+      <li><b>Never sends your data anywhere.</b> Everything stays in files on your machine.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Getting started</p>
+    <h2>Two commands.</h2>
+    <pre><code>git clone https://github.com/cventour/jobseeker
+cd jobseeker &amp;&amp; npm run setup</code></pre>
+    <p class="sub">No dependencies to install — the whole system runs on Node built-ins and shell.
+      Setup checks what you have, installs what it can, and verifies each permission actually worked.</p>
+  </section>
+</main>
+
+<footer>
+  <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
+  <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
+</footer>
+</body></html>

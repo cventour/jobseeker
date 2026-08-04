@@ -40,27 +40,27 @@ decision, application and message to you.
 **Today** — the only screen most mornings need: what is due, what is waiting on a click, what is
 overdue.
 
-![Today tab](docs/screenshots/01-today.png)
+![Today tab](site/img/today.png)
 
 **Jobs** — roles found and scored against your CV, best match first. Reposts of jobs you have already
 applied to are flagged rather than silently re-offered.
 
-![Jobs tab](docs/screenshots/02-jobs.png)
+![Jobs tab](site/img/jobs.png)
 
 **Applications** — every application and lead, with its stage, its next action, and when it last
 moved.
 
-![Applications tab](docs/screenshots/03-applications.png)
+![Applications tab](site/img/applications.png)
 
 **Activity** — an append-only log of everything the system did, with run boundaries marked, so you
 can always reconstruct what happened and when.
 
-![Activity tab](docs/screenshots/04-activity.png)
+![Activity tab](site/img/activity.png)
 
 **Settings** — scoring weights, target markets, and the careers-board registry, which records where
 each company's job board is and whether it can be read without a browser.
 
-![Settings — careers boards](docs/screenshots/05-settings-boards.png)
+![Settings — careers boards](site/img/settings-boards.png)
 
 > Every screenshot above uses a fictional sample dataset, not real data.
 > See it yourself: `JOBSEEKER_DATA_DIR=data/.example npm run dashboard`

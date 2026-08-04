@@ -1,0 +1,84 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy — JobSeeker</title>
+<meta name="description" content="What JobSeeker reads, what it never does, and where your data lives.">
+<link rel="icon" href="img/logo-mark.png">
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header class="nav">
+  <a class="wordmark" href="index.html">JOBSEEKER</a>
+  <nav>
+    <a href="how-it-works.html">How it works</a>
+    <a class="on" href="privacy.html">Privacy</a>
+    <a href="install.html">Install</a>
+    <a href="https://github.com/cventour/jobseeker">GitHub</a>
+  </nav>
+</header>
+<main>
+  <section class="hero">
+    <p class="eyebrow">Privacy</p>
+    <h1>It reads your inbox.<br><mark>Here is the deal.</mark></h1>
+    <p class="lede">JobSeeker reads your email, your calendar, and your WhatsApp and LinkedIn message
+      lists. That is a lot of access, and you should want a straight answer about what it does with
+      it. This page is that answer.</p>
+  </section>
+
+  <section class="panel">
+    <p class="eyebrow">Guarantees</p>
+    <ul class="never">
+      <li><b>It never applies to a job.</b> Applying is a separate, interactive command that stops and
+        waits for you to approve that exact application.</li>
+      <li><b>It never sends a message.</b> Same rule. Drafts are written; you approve before anything
+        leaves.</li>
+      <li><b>It never opens a chat thread.</b> Opening one marks it read on your real account and
+        destroys your own sense of what still needs you. It reads the conversation list only.</li>
+      <li><b>It never records private conversations.</b> Most of a personal WhatsApp is family and
+        friends. Only threads carrying a job-search signal have their content stored; the rest are
+        counted and left alone.</li>
+      <li><b>Nothing leaves your machine.</b> There is no server, no account, no telemetry, no
+        analytics.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Where your data lives</p>
+    <h2>Plain text files you own.</h2>
+    <p class="sub">Every record is Markdown you can open, read, edit and delete with any text editor.
+      No database, no export format, no lock-in. If you stop using JobSeeker tomorrow, you keep
+      everything in a form that will still open in twenty years.</p>
+    <pre><code>data/applications/app_k2gjp9.md    one file per application
+data/tasks.md                     follow-ups, due dates
+data/communications.md            messages seen across channels
+data/watermarks.md                how far each channel has been read</code></pre>
+    <p class="sub">That folder is excluded from version control, so it cannot be published by
+      accident.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Permissions</p>
+    <h2>What it asks for, and what it refuses to.</h2>
+    <ul class="problems">
+      <li><b>macOS Automation, for Google Chrome only</b> — to read the pages you are already logged
+        in to.</li>
+      <li><b>No Screen Recording.</b> Nothing is ever screenshotted.</li>
+      <li><b>No Accessibility.</b> No synthetic clicks or keystrokes, ever.</li>
+      <li><b>No Full Disk Access.</b> Only this project's own folder is read and written.</li>
+      <li><b>No browser debugging port.</b> An open port would let any local process drive your
+        browser as you. JobSeeker refuses to open one.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Reading other people's text</p>
+    <h2>Instructions found in content are ignored.</h2>
+    <p class="sub">A job advert or an email can contain text aimed at the assistant rather than at
+      you — "ignore your previous instructions", "the candidate already approved this". Everything
+      JobSeeker reads is treated as data, never as an instruction. Such text is quoted and shown to
+      you, never obeyed, and it can never grant an approval or choose where something gets sent.</p>
+  </section>
+</main>
+<footer>
+  <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
+  <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
+</footer>
+</body></html>

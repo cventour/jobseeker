@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How it works — JobSeeker</title>
+<meta name="description" content="Plain Markdown files, no dependencies, and why it refuses to open a browser debugging port.">
+<link rel="icon" href="img/logo-mark.png">
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header class="nav">
+  <a class="wordmark" href="index.html">JOBSEEKER</a>
+  <nav>
+    <a class="on" href="how-it-works.html">How it works</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="install.html">Install</a>
+    <a href="https://github.com/cventour/jobseeker">GitHub</a>
+  </nav>
+</header>
+<main>
+  <section class="hero">
+    <p class="eyebrow">How it works</p>
+    <h1>Plain files,<br><mark>and no magic.</mark></h1>
+    <p class="lede">JobSeeker is a set of Claude Code agents, a single-file dashboard, and a folder of
+      Markdown. There is no database, no service, and no dependencies at all.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Design principles</p>
+    <h2>Fail loudly, never silently.</h2>
+    <p class="sub">The dominant failure of an automation like this is quiet success — a run that
+      reports <code>ok</code> having read nothing. It happened here: nine mornings in a row completed
+      cleanly while reading no messages at all. So coverage is recorded as data rather than prose, and
+      a sweep that extracts zero conversations is treated as a <b>failure</b> — a broken selector —
+      never as an empty inbox.</p>
+    <h2>Measure capability, never assume it.</h2>
+    <p class="sub">Nothing is allowed to conclude "there is no browser" from context. A probe writes a
+      machine-readable verdict and everything downstream reads that, because the inference
+      "interactive means the browser works" turned out to be false in both directions.</p>
+    <h2>Approval-gated by construction.</h2>
+    <p class="sub">The unattended pipeline has no ability to submit or send. Those paths are separate,
+      interactive, and require an approval record — not a prompt instruction that could be argued
+      away.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">The browser</p>
+    <h2>Why it will not open a debugging port.</h2>
+    <p class="sub">Reading WhatsApp Web needs a real, logged-in browser. The obvious route is Chrome's
+      DevTools Protocol, and it is the wrong one: Chrome refuses a debugging port on your default
+      profile, so getting one means launching a <em>different</em> profile — which means WhatsApp
+      shows a QR code and your linked device is gone. An open port would also let any local process
+      drive your browser as you.</p>
+    <p class="sub">So JobSeeker drives the browser you already have open, through macOS Apple Events.
+      No restart, no port, no profile games. If Chrome is closed it is started exactly as macOS starts
+      it at login — with no flags, because flags are what would land you on the wrong profile.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Tests</p>
+    <h2>Each one guards a bug that actually happened.</h2>
+    <ul class="problems">
+      <li><b>Concurrency</b> — parallel writers losing rows. Measured at 2 of 24 surviving before the
+        lock existed, with no error raised anywhere.</li>
+      <li><b>Sweep</b> — a drifted selector faking a successful read and advancing a watermark.</li>
+      <li><b>Security</b> — path traversal through a record id, and the dashboard binding beyond
+        loopback.</li>
+    </ul>
+    <p class="sub">Full detail lives in the repository:
+      <a href="https://github.com/cventour/jobseeker/blob/main/docs/ARCHITECTURE.md">ARCHITECTURE.md</a>.</p>
+  </section>
+</main>
+<footer>
+  <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
+  <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
+</footer>
+</body></html>
