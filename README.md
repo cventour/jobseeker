@@ -14,6 +14,13 @@
   <em>It never applies to anything, and never sends a message, without your explicit approval.</em>
 </p>
 
+<p align="center">
+  <a href="LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-111?style=flat-square"></a>
+  <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-D6F84C?style=flat-square&labelColor=111">
+  <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-111?style=flat-square">
+  <a href="https://cventour.github.io/jobseeker/"><img alt="Website" src="https://img.shields.io/badge/website-jobseeker-111?style=flat-square"></a>
+</p>
+
 ---
 
 ## The problem
@@ -180,6 +187,8 @@ npm run audit        # a plain-text health check of your whole pipeline
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — **how it works, and why** (start here if you are technical)
 - [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — what the system must do, and the constraints behind it
 - [`.claude/AGENT-RULES.md`](.claude/AGENT-RULES.md) — normative rules every agent follows
+- [`SECURITY.md`](SECURITY.md) — the trust model, what is protected, and what is knowingly exposed
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — the rules that are not negotiable, and why
 - [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) — macOS permissions, what is *not* needed, and troubleshooting
 - [`docs/SCHEDULER.md`](docs/SCHEDULER.md) — the unattended run
 - [`docs/boards.md`](docs/boards.md) — careers-board quirks
@@ -197,3 +206,13 @@ unattended outbound messaging.
 **Respecting the services it reads.** Channel access is read-only, low-volume, human-paced, and runs
 from your own machine and connection. If a service challenges the session, JobSeeker stops and tells
 you rather than working around it.
+
+**Support.** This is a personal project, maintained as time allows. Bug reports with a reproduction
+are welcome; a slow reply is bandwidth, not indifference. Security issues should go through
+[private reporting](https://github.com/cventour/jobseeker/security/advisories/new) rather than a
+public issue — see [`SECURITY.md`](SECURITY.md).
+
+## Licence
+
+[Apache-2.0](LICENSE). You may use, modify and distribute it, including commercially, provided you
+keep the notice and state your changes. It comes with no warranty.

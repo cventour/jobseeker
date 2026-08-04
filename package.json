@@ -2,6 +2,32 @@
   "name": "jobseeker",
   "version": "0.1.0",
   "private": true,
+  "description": "A local-first job-search assistant. Reads your email, chats and calendar, finds roles worth your time, and each morning surfaces the few things that need you. Never applies or sends without your approval.",
+  "license": "Apache-2.0",
+  "author": "Christos Ventouris",
+  "homepage": "https://cventour.github.io/jobseeker/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cventour/jobseeker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cventour/jobseeker/issues"
+  },
+  "keywords": [
+    "job-search",
+    "claude-code",
+    "ai-agents",
+    "local-first",
+    "markdown",
+    "macos",
+    "automation"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin"
+  ],
   "scripts": {
     "dashboard": "node server/dashboard.mjs",
     "audit": "node server/audit.mjs",
