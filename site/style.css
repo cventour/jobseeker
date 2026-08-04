@@ -16,7 +16,12 @@ img{max-width:100%;display:block}
 .nav{position:sticky;top:0;z-index:9;display:flex;align-items:center;justify-content:space-between;
   gap:24px;padding:22px max(24px,calc((100% - 1180px)/2));background:var(--bg);
   border-bottom:1px solid var(--rule)}
-.wordmark{font-weight:700;letter-spacing:.18em;font-size:15px;text-decoration:none}
+.wordmark{display:inline-flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.18em;
+  font-size:15px;text-decoration:none}
+/* Ink silhouette rather than the colour mark: the reference's discipline is exactly one accent, and
+   the brand's blue-green would be a second one competing with the lime. The colour mark is kept for
+   the favicon, where recognition in a crowded tab bar matters more than restraint. */
+.wordmark img{width:26px;height:26px;display:block;flex:0 0 auto}
 .nav nav{display:flex;flex-wrap:wrap;gap:14px 26px}
 .nav nav a{font-size:14px;text-decoration:none;color:var(--muted)}
 .nav nav a.on{color:var(--ink);border-bottom:2px solid var(--accent);padding-bottom:3px}
