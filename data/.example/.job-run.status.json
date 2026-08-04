@@ -1,0 +1,17 @@
+{
+  "state": "ok",
+  "started": "2026-08-03T04:00:11Z",
+  "finished": "2026-08-03T04:09:44Z",
+  "attempts": 1,
+  "timeout_secs": 2700,
+  "detail": "completed on attempt 1 of 2",
+  "coverage": {
+    "browser_mode": "apple-events",
+    "can_read_pages": true,
+    "chrome_running": true,
+    "chrome_launched_by_us": false,
+    "whatsapp_unread": 3,
+    "blockers": [],
+    "boards_browser_pending": 2
+  }
+}

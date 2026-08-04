@@ -1,0 +1,50 @@
+---
+# Job-Seeker agent configuration — technical settings.
+# (Your TARGETING criteria — markets & roles — live in data/criteria.md and are edited
+#  from the dashboard. This file holds the machine settings the agents read.)
+# Keys are flat "key: value" so the tiny dashboard server and the agents can both parse it.
+
+dashboard_port: 4319
+
+# Where approval requests are sent. Comma list of: whatsapp, chat
+approval_channels: whatsapp, chat
+# Your paired WhatsApp owner JID (approvals are sent here). Leave blank to auto-detect the owner.
+whatsapp_owner_jid:
+
+# Apply agent browser engine: chrome (Claude-in-Chrome, drives your logged-in Chrome) or playwright.
+apply_engine: chrome
+# Where the apply agent PAUSES for your approval before continuing.
+# Comma list of checkpoints: each_section, file_upload, unknown_question, submit
+apply_stop_before: unknown_question, submit
+# Drive your already-logged-in Chrome profile (so you stay signed in on job sites).
+apply_use_chrome_profile: true
+
+# Message tracking via your logged-in Chrome (chat-tracker, read-only, interactive/local).
+# Reads your PERSONAL WhatsApp Web and LinkedIn messages — not the paired Claude WhatsApp channel.
+whatsapp_web_enabled: true
+# LinkedIn messages: read via Chrome by chat-tracker (read-mostly per ToS).
+linkedin_enabled: true
+linkedin_mode: read-only
+
+# Local scheduler cadence (cron expression used by the launchd/cron entrypoint).
+schedule_job_run: 0 8 * * *
+
+# Chats that must NEVER be logged (comma list, matched as a case-insensitive prefix on the chat
+# name). Group communities, family threads, anything out of scope for a job search. Empty = log
+# nothing extra. The chat sweep records message CONTENT only for job-related threads anyway.
+ignored_chats:
+
+# Company aliases, so one employer known by two names does not become two records — an acquisition,
+# a rebrand, an agency trading name. Comma list of `from=Canonical` pairs; the left side is matched
+# case- and punctuation-insensitively. Example: acquiredco=Parent Company
+company_aliases:
+
+---
+
+# Notes
+
+- Copy this file to `config/job-seeker.config.md` and edit. The real file is gitignored so
+  your settings stay out of version control.
+- `apply_stop_before` is the safety valve: the application-agent fills the form but always
+  halts at these points and asks you to approve (via the channels in `approval_channels`).
+- Nothing here contains personal data — that lives in `data/` and `templates/` (both gitignored).

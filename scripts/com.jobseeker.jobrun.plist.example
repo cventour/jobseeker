@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd job that runs the daily job-search pipeline.
+     1. Replace __REPO__ with the absolute path to this repo
+        (e.g. /Users/you/Documents/ClaudeProjects/JobSeeker).
+     2. Replace __PATH__ with your shell PATH so the `claude` CLI resolves
+        (run `echo $PATH` and paste it, or include the dir that holds `claude`).
+     3. Adjust Hour/Minute to when you want the daily run.
+     Install: see docs/SCHEDULER.md -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jobseeker.jobrun</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/scripts/job-run.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__PATH__</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/data/.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/data/.launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

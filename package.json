@@ -1,0 +1,19 @@
+{
+  "name": "jobseeker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dashboard": "node server/dashboard.mjs",
+    "audit": "node server/audit.mjs",
+    "check:urls": "node scripts/check-urls.mjs",
+    "test:concurrency": "node scripts/test-concurrency.mjs",
+    "guard": "bash scripts/rss-guard.sh",
+    "icons": "python3 scripts/make-icons.py",
+    "browser:probe": "node scripts/browser-do.mjs probe",
+    "chat:sweep": "node scripts/browser-do.mjs chat-sweep",
+    "test:sweep": "node scripts/test-chat-sweep.mjs",
+    "test:security": "node scripts/test-security.mjs",
+    "browser:install-agent": "bash scripts/install-browser-agent.sh",
+    "setup": "bash scripts/setup.sh"
+  }
+}

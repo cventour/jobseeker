@@ -1,0 +1,16 @@
+node_modules/
+.env*
+.DS_Store
+
+# Local secrets & datastore — never commit
+.data/
+.jobseeker.json
+
+# Job-seeker agent layer — local state & personal files (never commit).
+# data/* ignores your live state but keeps the committed schema samples in data/.example/.
+data/*
+!data/.example/
+config/job-seeker.config.md
+templates/cv/
+templates/answers.md
+
