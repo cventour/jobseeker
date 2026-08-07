@@ -141,6 +141,7 @@ Highlights
 
 New Job Postings
 <Company name> - <Job posting>
+<job_url on its own line, so it is tappable on a phone>
 <… best matches first, MAXIMUM 5. If none were found this run, write "None found today.">
 
 Follow ups for Today
@@ -160,6 +161,21 @@ Rules for the content:
   5. Not the standing proposal queue. Say "None found today." rather than padding it with older
   proposals; a quiet day is information. **Exclude anything flagged `repost_of`** — a job already
   applied to is not a new posting; if it matters, it goes in Highlights instead.
+- **Every posting carries its link, and the link comes from the data — never from you.** Get the rows
+  with:
+
+  ```
+  node server/record.mjs list-proposals --since <this run's date> --limit 5
+  ```
+
+  Copy `job_url` **verbatim** onto its own line beneath the title. Never reconstruct, shorten,
+  "clean" or guess a URL: the user taps these on a phone to apply, so a plausible-but-wrong link
+  costs them a real opportunity and they may not notice it was wrong. Query strings are part of the
+  address — `?gh_jid=` is Greenhouse's job id, not tracking, and removing it breaks the link.
+  A URL on its own line also keeps WhatsApp from swallowing it into surrounding text.
+- **Do not send a link you know is dead.** If `scripts/check-urls.mjs` put that posting in
+  `needs_attention`, either omit it or mark it `(link unverified)` — never present a broken link as
+  an opportunity. A posting with no `job_url` at all is listed without one rather than dropped.
 - **Follow ups for Today = tasks due today**, not the overdue backlog (that is a Highlights line).
   Name the person or company, then the ask in a few words. Cap at 6 and add "+N more" so a heavy day
   does not produce an unreadable message.
