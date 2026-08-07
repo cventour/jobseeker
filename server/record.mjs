@@ -17,6 +17,7 @@
 //   node server/record.mjs log <type> <detail...>
 //   node server/record.mjs dismissal-patterns          -> why roles get rejected, so scouts stop repeating them
 //   node server/record.mjs list-keys                    -> dedupe keys, skip flags, seen_req_ids, repost_of
+//   node server/record.mjs list-proposals [--since d] [--limit n] [--status s] -> digest rows with exact job_url
 //   node server/record.mjs get-watermark <channel>      -> last swept timestamp for gmail|whatsapp|linkedin
 //   node server/record.mjs set-watermark <channel> <iso> [note]
 //   node server/record.mjs list-boards [access|needs-browser] -> the registry; needs-browser = blocked+browser
@@ -654,6 +655,45 @@ async function dismissalPatterns() {
   };
 }
 
+// The digest needs company, role and the EXACT posting URL for the roles a run just found. It used
+// to assemble that by reading the proposal files itself, which is how a plausible-but-wrong link
+// reaches a phone: the user taps it to apply and lands on the wrong job, or nothing.
+//
+// So the URL comes from here, verbatim, and never from anything reconstructed. Note that query
+// strings are preserved: `?gh_jid=` is Greenhouse's job id, not tracking, and stripping it breaks
+// the link entirely.
+//
+//   node server/record.mjs list-proposals [--since <iso-or-date>] [--limit N] [--status s]
+async function listProposals({ since = null, limit = 0, status = "proposed" } = {}) {
+  const records = await readRecordDir(path.join(DATA, "proposals"));
+  let rows = records.map((r) => r.data).filter((d) => d && d.id);
+
+  if (status && status !== "any") rows = rows.filter((d) => String(d.status || "") === status);
+  if (since) {
+    const cut = String(since).slice(0, 10);
+    rows = rows.filter((d) => String(d.found_date || "").slice(0, 10) >= cut);
+  }
+  // A repost of something already applied to is not a new posting; the digest must not offer it.
+  rows = rows.filter((d) => !d.repost_of);
+
+  rows.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+  if (limit > 0) rows = rows.slice(0, limit);
+
+  return {
+    count: rows.length,
+    proposals: rows.map((d) => ({
+      id: d.id,
+      company: d.company || "",
+      role: d.role || "",
+      location: d.location || "",
+      priority: Number(d.priority || 0),
+      found_date: d.found_date || "",
+      // Verbatim. Do not normalise, shorten or strip parameters.
+      job_url: d.job_url || "",
+    })),
+  };
+}
+
 async function listKeys() {
   const applications = await readRecordDir(path.join(DATA, "applications"));
   const proposals = await readRecordDir(path.join(DATA, "proposals"));
@@ -956,6 +996,18 @@ async function dispatch(cmd, rest) {
     case "list-keys":
       result = await listKeys();
       break;
+    case "list-proposals": {
+      const flag = (name, dflt = null) => {
+        const i = rest.indexOf(name);
+        return i >= 0 && rest[i + 1] ? rest[i + 1] : dflt;
+      };
+      result = await listProposals({
+        since: flag("--since"),
+        limit: Number(flag("--limit", 0)) || 0,
+        status: flag("--status", "proposed"),
+      });
+      break;
+    }
     case "get-watermark":
       result = await getWatermark(rest[0]);
       break;
