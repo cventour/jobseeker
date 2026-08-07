@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/cventour/jobseeker/security/advisories/new
+    about: Please report privately, not as a public issue.
+  - name: Setup and permissions
+    url: https://github.com/cventour/jobseeker/blob/main/docs/PERMISSIONS.md
+    about: Most install problems are one of the documented macOS permissions.

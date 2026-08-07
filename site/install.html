@@ -1,0 +1,61 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Install — JobSeeker</title>
+<meta name="description" content="Two commands to install JobSeeker on macOS.">
+<link rel="icon" href="img/mark.png">
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header class="nav">
+  <a class="wordmark" href="index.html"><img src="img/mark-ink.png" alt=""><span>JOBSEEKER</span></a>
+  <nav>
+    <a href="how-it-works.html">How it works</a>
+    <a href="privacy.html">Privacy</a>
+    <a class="on" href="install.html">Install</a>
+    <a href="https://github.com/cventour/jobseeker">GitHub</a>
+  </nav>
+</header>
+<main>
+  <section class="hero">
+    <p class="eyebrow">Install</p>
+    <h1>Two commands,<br><mark>then one click.</mark></h1>
+    <p class="lede">Setup checks what you have, installs what it can, and verifies each permission
+      actually worked rather than assuming it did.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">You need</p>
+    <ul class="problems">
+      <li>A Mac. JobSeeker drives macOS and is not portable to Windows or Linux.</li>
+      <li><a href="https://google.com/chrome">Google Chrome</a>, logged in to the accounts you want read.</li>
+      <li><a href="https://nodejs.org">Node 20 or newer</a>.</li>
+      <li><a href="https://claude.com/claude-code">Claude Code</a> — the agents run inside it.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Install</p>
+    <pre><code>git clone https://github.com/cventour/jobseeker
+cd jobseeker
+npm run setup</code></pre>
+    <p class="sub">There is nothing to <code>npm install</code>. The whole system runs on Node
+      built-ins and shell, so there are no dependencies to audit and nothing to rot.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Then</p>
+    <pre><code>claude
+&gt; /onboard</code></pre>
+    <p class="sub">Onboarding asks what you are looking for — markets, roles, locations, seniority —
+      reads your CV, and saves your answers. After that, one command each morning:</p>
+    <pre><code>&gt; /job-run</code></pre>
+    <div class="cta">
+      <a class="btn" href="https://github.com/cventour/jobseeker">Open the repository</a>
+      <a class="btn ghost" href="privacy.html">What it never does</a>
+    </div>
+  </section>
+</main>
+<footer>
+  <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
+  <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
+</footer>
+</body></html>
