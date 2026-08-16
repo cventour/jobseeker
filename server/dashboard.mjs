@@ -192,8 +192,17 @@ async function loadMarkets() {
   const out = [];
   for (const f of files.sort()) {
     if (!f.endsWith(".md") || f.startsWith(".")) continue;
-    const table = await readTable(path.join(dir, f));
-    out.push({ name: f.replace(/\.md$/, ""), table });
+    const p = path.join(dir, f);
+    const table = await readTable(p);
+    // Two spellings of the same market exist: the FILENAME ("consulting-big4") and the display name
+    // the prioritization-agent writes into the heading and into boards.md ("Consulting - Big 4").
+    // Carry both — the filename is the stable key, the heading is what a person should read.
+    let label = "";
+    try {
+      const m = /^#\s*Market:\s*(.+)$/m.exec(await fs.readFile(p, "utf8"));
+      if (m) label = m[1].trim();
+    } catch {}
+    out.push({ name: f.replace(/\.md$/, ""), label: label || f.replace(/\.md$/, ""), table });
   }
   return out;
 }
@@ -634,103 +643,193 @@ function proposalsSection(propRecords, appliedByCompany, reposts = {}) {
   ${proposalsHTML(propRecords, appliedByCompany, reposts)}`;
 }
 
-function marketsHTML(markets) {
-  if (!markets.length)
-    return `<p class="empty">No market lists yet. Add a market below, then run <code>/markets</code>.</p>`;
-  return markets
-    .map(
-      (m) =>
-        `<details open><summary>${esc(m.name)} <span class="muted">(${m.table.rows.length})</span></summary>
-          ${addCompanyFormHTML(m.name)}
-          ${tableHTML(m.table, "Empty — the prioritization-agent will fill this.")}
-        </details>`
-    )
-    .join("");
-}
+// ---------- Companies (markets + careers boards, joined) ----------
+// These were two settings pages describing ONE entity. `data/markets/*.md` answered "why this
+// company" (tier, HQ, rationale) and `data/boards.md` answered "how do we read its jobs" (ats,
+// access, endpoint) — 183 of the ~230 companies appeared in both, and 204 market rows carried a
+// `careers_url` duplicating `boards.endpoint`. Looking a company up meant visiting both tabs and
+// joining them by eye.
+//
+// The join is on boardKey() (the same normalisation record.mjs dedupes with), grouped by market,
+// collapsible, sortable and searchable. STORAGE IS UNCHANGED: the two files keep their separate
+// owners (prioritization-agent and role-scout) — merging them would touch both agents and both
+// writers for no user-visible gain. `boards.endpoint` is authoritative; the market `careers_url` is
+// shown only as a fallback, which was already the implicit rule.
+// "Cybersecurity", "cybersecurity" and "Consulting - Big 4" vs "consulting-big4" are the same market
+// spelled by two different writers. Without this the page rendered each market twice.
+const marketKey = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
 
-// Add a company by hand. Adding it also kicks off scripts/discover-board.mjs for that company, so
-// the careers board is looked up immediately rather than waiting for the next scout run — the whole
-// point being that a company you just thought of should not sit there with no way to read its jobs.
-function addCompanyFormHTML(market) {
-  return `<form method="POST" action="/add-company" class="addco">
-    <input type="hidden" name="market" value="${esc(market)}">
-    <input name="company" placeholder="Add a company to ${esc(market)} — e.g. Broadcom" autocomplete="off" required>
-    <button type="submit">Add</button>
-    <span class="muted addco-hint">Adds the row and immediately searches for its careers board.</span>
-  </form>`;
-}
+function joinCompanies(all) {
+  const byKey = new Map();
+  const get = (name) => {
+    const k = boardKey(name);
+    if (!k) return null;
+    if (!byKey.has(k))
+      byKey.set(k, { key: k, company: name, market: "", marketFile: "", board: null, vendor: null });
+    return byKey.get(k);
+  };
 
-// ---------- careers boards ----------
-// The scouts can read most boards from a stateless endpoint, but some cannot be found at all
-// (no board exists, 403s a script, or is JS-only). Those are dead ends the agents cannot fix by
-// trying harder — the user pasting the real careers URL is the only thing that unblocks them. So
-// they are highlighted at the top with an ✏️ to paste it, and everything already working collapses
-// out of the way underneath.
-function boardsHTML(all) {
-  // Dismissed boards are gone from the user's view as well as the scouts'. They remain in
-  // data/boards.md with the date they were written off, so the decision is recoverable.
-  const rows = (all.boards?.rows ?? []).filter((r) => !String(r.dismissed || "").trim());
-  const dismissedCount = (all.boards?.rows ?? []).length - rows.length;
-  // careers_url from the market lists makes a useful prefill — it is the prioritization-agent's
-  // best guess at the company's careers page, which is often right even when it is not machine-readable.
-  const hint = new Map();
-  const marketOf = new Map();
   for (const m of all.markets ?? []) {
     for (const r of m.table.rows) {
-      const k = boardKey(r.company);
-      if (!k) continue;
-      if (r.careers_url && !hint.has(k)) hint.set(k, r.careers_url);
-      if (!marketOf.has(k)) marketOf.set(k, m.name);
+      const e = get(r.company);
+      if (!e) continue;
+      e.company = r.company || e.company;
+      if (!e.market) {
+        e.market = m.label;
+        e.marketFile = m.name; // the file the add-company form must write to
+      }
+      if (!e.vendor) e.vendor = r;
     }
   }
+  // Dismissed boards are gone from the user's view as well as the scouts'. They remain in
+  // data/boards.md with the date they were written off, so the decision is recoverable.
+  for (const r of (all.boards?.rows ?? []).filter((r) => !String(r.dismissed || "").trim())) {
+    const e = get(r.company);
+    if (!e) continue;
+    e.board = r;
+    if (!e.market && r.market) {
+      e.market = r.market;
+      const hit = (all.markets ?? []).find((m) => marketKey(m.name) === marketKey(r.market) || marketKey(m.label) === marketKey(r.market));
+      if (hit) {
+        e.market = hit.label;
+        e.marketFile = hit.name;
+      }
+    }
+    // Prefer the registry's spelling once a board exists — that is the name record.mjs writes.
+    e.company = r.company || e.company;
+  }
+  return [...byKey.values()];
+}
 
-  const known = new Set(rows.map((r) => boardKey(r.company)));
-  const notInvestigated = [...marketOf.keys()].filter((k) => !known.has(k)).length;
+const UNGROUPED = "Not in a market list";
 
-  const needs = rows.filter(
-    (r) => BOARD_UNREADABLE[r.access] || r.access === "pending" || !String(r.endpoint || "").trim()
-  );
-  const manual = rows.filter((r) => r.access === "manual");
-  const working = rows.filter(
-    (r) => !BOARD_UNREADABLE[r.access] && r.access !== "manual" && r.access !== "pending" && String(r.endpoint || "").trim()
-  );
+// Truncate on a word boundary. A hard slice left rows ending "an exact match for the user's target
+// r", which reads like corrupted data rather than a summary.
+function clip(s, n) {
+  const t = String(s || "").trim();
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:.\s]+$/, "") + "…";
+}
 
-  const editRow = (r, i) => {
-    const k = boardKey(r.company);
-    const id = `bd${i}`;
-    const prefill = String(r.endpoint || "").trim() || hint.get(k) || "";
-    const why =
-      r.access === "pending"
-        ? BOARD_PENDING_LABEL
-        : BOARD_UNREADABLE[r.access] || (r.access === "manual" ? "awaiting verification" : "no endpoint recorded");
-    const guess = !String(r.endpoint || "").trim() && hint.get(k);
-    return `<tr class="bneed">
-      <td><strong>${esc(r.company)}</strong>${r.market ? `<br><span class="muted" style="font-size:11px">${esc(r.market)}</span>` : ""}</td>
-      <td><span class="pill b-${esc(r.access || "unknown")}">${esc(r.access || "unknown")}</span><br><span class="muted" style="font-size:11px">${esc(why)}</span></td>
+// Four states worth telling apart, and the access pill keeps them visibly separate on purpose.
+// "we have not looked yet" and "there is no board" are different facts, and folding them together
+// is how 53 companies got written off on a guess (AGENT-RULES §13b).
+//
+// ONE definition, used by both the page and the topbar banner. They used to compute this
+// separately and disagreed — the banner said 55 boards needed a URL while the page said 10,
+// because the banner counted `browser`/`blocked` rows that the sweep now handles by itself.
+function companyState(e) {
+  if (!e.board) return "unknown";
+  const a = e.board.access || "";
+  const hasEndpoint = Boolean(String(e.board.endpoint || "").trim());
+  if (a === "pending") return "pending";
+  if (a === "browser" || a === "blocked") return "queued";
+  if (a === "manual") return hasEndpoint ? "manual" : "needs-url";
+  if (a === "none" || !hasEndpoint) return "needs-url";
+  return "readable";
+}
+
+function companiesHTML(all) {
+  const entries = joinCompanies(all);
+  if (!entries.length)
+    return `<p class="empty">No companies yet. Add a market in <b>Criteria</b>, then run <code>/markets</code>.</p>`;
+
+  const dismissedCount = (all.boards?.rows ?? []).filter((r) => String(r.dismissed || "").trim()).length;
+
+  const state = companyState;
+  const STATE_LABEL = {
+    readable: "readable",
+    queued: "queued for a browser pass",
+    "needs-url": "needs a URL from you",
+    manual: "you pasted this — awaiting verification",
+    pending: BOARD_PENDING_LABEL,
+    unknown: "not investigated yet",
+  };
+  const count = (s) => entries.filter((e) => state(e) === s).length;
+
+  // Grouped by NORMALISED market, so "Cybersecurity" from boards.md and "cybersecurity.md" from the
+  // market lists are one group rather than two.
+  const groups = new Map();
+  for (const e of entries) {
+    const k = marketKey(e.market) || "~none";
+    if (!groups.has(k)) groups.set(k, { label: e.market || UNGROUPED, file: e.marketFile, list: [] });
+    const g = groups.get(k);
+    if (!g.file && e.marketFile) g.file = e.marketFile;
+    g.list.push(e);
+  }
+  // Markets in their configured order, then anything the market lists never claimed.
+  const order = [
+    ...(all.markets ?? []).map((m) => marketKey(m.name)),
+    ...[...groups.keys()].filter((k) => !(all.markets ?? []).some((m) => marketKey(m.name) === k)),
+  ];
+
+  const row = (e, i) => {
+    const b = e.board || {};
+    const v = e.vendor || {};
+    const st = state(e);
+    const id = `co${i}`;
+    const endpoint = String(b.endpoint || "").trim();
+    const prefill = endpoint || v.careers_url || "";
+    const tier = String(v.tier || "").trim();
+    // Everything the search box should match, in one attribute — so filtering does not depend on
+    // which columns happen to be rendered.
+    const hay = [e.company, e.market, v.hq, v.why, v.notes, b.ats, b.notes, endpoint].filter(Boolean).join(" ").toLowerCase();
+    return `<tr class="corow" data-name="${esc(e.company.toLowerCase())}" data-tier="${esc(tier || "9")}" data-state="${st}" data-q="${esc(hay.slice(0, 900))}">
+      <td>
+        <strong>${esc(e.company)}</strong>${tier ? ` <span class="pill tier tier-${esc(tier)}" title="Fit tier from the market list — 1 is strongest">T${esc(tier)}</span>` : ""}
+        ${b.volatile === "yes" ? ` <span class="pill b-volatile" title="URL rotates — re-derive each run">volatile</span>` : ""}
+        <div class="muted comini">${[v.hq, e.market || UNGROUPED, v.last_reviewed ? `reviewed ${v.last_reviewed}` : ""].filter(Boolean).map(esc).join(" · ")}</div>
+        ${
+          v.why
+            ? // The prioritization-agent's full rationale (score, why this tier, what changed) lives
+              // in `notes` and is far too long for a row — it hangs off the title so it is one hover
+              // away rather than lost, and the search box matches it either way.
+              `<div class="muted cowhy"${v.notes ? ` title="${esc(String(v.notes).slice(0, 600))}"` : ""}>${esc(clip(v.why, 160))}</div>`
+            : ""
+        }
+      </td>
+      <td>
+        <span class="pill st-${st}">${esc(b.access || (st === "unknown" ? "unknown" : ""))}</span>
+        <div class="muted comini">${esc(STATE_LABEL[st])}</div>
+        ${b.ats ? `<div class="muted comini">${esc(b.ats)}</div>` : ""}
+      </td>
       <td class="bep">${
-        String(r.endpoint || "").trim()
-          ? `<code>${esc(r.endpoint)}</code>`
-          : r.access === "pending"
+        endpoint
+          ? `<code>${esc(endpoint)}</code>`
+          : st === "pending"
             ? `<span class="bpending">searching greenhouse / lever / ashby / smartrecruiters + careers pages…</span>`
-            : `<span class="bmissing">website not found</span>`
-      }${r.notes ? `<div class="muted" style="font-size:11px;margin-top:3px">${esc(String(r.notes).slice(0, 150))}</div>` : ""}</td>
+            : v.careers_url
+              ? `<span class="muted">from the market list: </span><code>${esc(v.careers_url)}</code>`
+              : `<span class="bmissing">no board recorded</span>`
+      }${b.notes ? `<div class="muted conote">${esc(clip(b.notes, 180))}</div>` : ""}</td>
       <td style="text-align:right"><span class="bacts">
-        <a class="bsearch" href="https://duckduckgo.com/?q=${encodeURIComponent(r.company + " careers")}" target="_blank" rel="noopener"
-           title="Search for ${esc(r.company)}'s own site — we do not store company websites, so this is a search rather than a guess">🔎</a>
-        <button class="bedit" onclick="bToggle('${id}')" title="Paste the careers website for ${esc(r.company)}">✏️</button>
-        <form method="POST" action="/dismiss-board" class="inline" onsubmit="return confirm('Remove ${esc(r.company).replace(/'/g, "\\'")} from the registry? It will stop appearing here and scouts will skip it. You can restore it from data/boards.md.')">
-          <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="boards">
-          <input type="hidden" name="company" value="${esc(r.company)}">
-          <button type="submit" class="btrash" aria-label="Remove ${esc(r.company)}" title="No careers page exists — remove it for good"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6.5 1a.5.5 0 0 0-.5.5V2H3.5a.5.5 0 0 0 0 1H4v9.5A1.5 1.5 0 0 0 5.5 14h5a1.5 1.5 0 0 0 1.5-1.5V3h.5a.5.5 0 0 0 0-1H10v-.5a.5.5 0 0 0-.5-.5h-3ZM5 3h6v9.5a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5V3Zm1.5 1.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Z"/></svg></button>
-        </form>
+        ${v.linkedin_url ? `<a class="bsearch" href="${esc(v.linkedin_url)}" target="_blank" rel="noopener" title="${esc(e.company)} on LinkedIn">in</a>` : ""}
+        <a class="bsearch" href="https://duckduckgo.com/?q=${encodeURIComponent(e.company + " careers")}" target="_blank" rel="noopener"
+           title="Search for ${esc(e.company)}'s own careers page — we do not store company websites, so this is a search rather than a guess">🔎</a>
+        <button class="bedit" onclick="bToggle('${id}')" title="Paste the careers website for ${esc(e.company)}">✏️</button>
+        ${
+          e.board
+            ? `<form method="POST" action="/dismiss-board" class="inline" onsubmit="return confirm('Remove ${esc(e.company).replace(/'/g, "\\'")} from the registry? It will stop appearing here and scouts will skip it. You can restore it from data/boards.md.')">
+                 <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="companies">
+                 <input type="hidden" name="company" value="${esc(e.company)}">
+                 <button type="submit" class="btrash" aria-label="Remove ${esc(e.company)}" title="No careers page exists — remove it for good"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6.5 1a.5.5 0 0 0-.5.5V2H3.5a.5.5 0 0 0 0 1H4v9.5A1.5 1.5 0 0 0 5.5 14h5a1.5 1.5 0 0 0 1.5-1.5V3h.5a.5.5 0 0 0 0-1H10v-.5a.5.5 0 0 0-.5-.5h-3ZM5 3h6v9.5a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5V3Zm1.5 1.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Z"/></svg></button>
+               </form>`
+            : ""
+        }
       </span></td>
     </tr>
     <tr id="${id}" class="hide bform"><td colspan="4">
       <form method="POST" action="/set-board">
-        <input type="hidden" name="company" value="${esc(r.company)}">
-        <input type="hidden" name="market" value="${esc(r.market || marketOf.get(k) || "")}">
-        <label style="display:block;font-size:12px;color:var(--mut);margin-bottom:4px">Careers website / board URL for <strong>${esc(r.company)}</strong>${
-          guess ? ` <span class="muted">— prefilled from the market list, correct it if wrong</span>` : ""
+        <input type="hidden" name="company" value="${esc(e.company)}">
+        <input type="hidden" name="market" value="${esc(e.market || "")}">
+        <label style="display:block;font-size:12px;color:var(--mut);margin-bottom:4px">Careers website / board URL for <strong>${esc(e.company)}</strong>${
+          !endpoint && v.careers_url ? ` <span class="muted">— prefilled from the market list, correct it if wrong</span>` : ""
         }</label>
         <div style="display:flex;gap:8px;align-items:center">
           <input name="endpoint" value="${esc(prefill)}" placeholder="https://careers.example.com/jobs?location=United+Arab+Emirates" style="flex:1" autocomplete="off">
@@ -742,79 +841,103 @@ function boardsHTML(all) {
     </td></tr>`;
   };
 
-  // Two different problems were sharing one table. A `blocked`/`browser` board EXISTS and is refusing
-  // a script — that is browser work an agent can still do, not something the user has to paste. Only
-  // `none` / no-endpoint genuinely needs a human. Splitting them stops us asking for URLs we can get
-  // ourselves (AGENT-RULES §12).
-  // `access: none` means discovery probed greenhouse, lever, ashby and smartrecruiters and found
-  // nothing. For a small or young company that is usually the truth -- there is no careers page --
-  // rather than a lookup worth retrying. Offering to clear them in one go is the difference between
-  // a list you act on and a list you learn to ignore.
-  const noBoard = rows.filter((r) => r.access === "none");
+  let n = 0;
+  const seen = new Set();
+  const groupHTML = order
+    .filter((k) => groups.has(k) && !seen.has(k) && seen.add(k) !== false)
+    .map((k) => {
+      const g = groups.get(k);
+      // Sorted by name server-side, so the default order is right before any JavaScript runs.
+      const list = g.list.slice().sort((a, b) => a.company.localeCompare(b.company));
+      const attn = list.filter((e) => state(e) === "needs-url" || state(e) === "unknown").length;
+      return `<details class="cogroup" data-group="${esc(g.label)}" open>
+        <summary>${esc(g.label)} <span class="muted">(<span class="cocount">${list.length}</span>)</span>${
+          attn ? ` <span class="warntx" style="font-size:11px">${attn} need attention</span>` : ""
+        }</summary>
+        ${g.file ? addCompanyFormHTML(g.file, g.label) : ""}
+        <div class="scroll"><table class="btable cotable">
+          <colgroup><col class="c-name"><col class="c-access"><col class="c-ep"><col class="c-act"></colgroup>
+          <thead><tr><th>Company</th><th>Board access</th><th>Endpoint</th><th></th></tr></thead>
+          <tbody>${list.map((e) => row(e, n++)).join("")}</tbody></table></div>
+      </details>`;
+    })
+    .join("");
+
+  // `access: none` came from agents that guessed one or two ATS slugs and recorded a 404. Spot
+  // checking twelve found four with a live /careers page at the obvious address, so the batch action
+  // stays but the copy no longer implies the verdict is usually right (AGENT-RULES §13b).
+  const noBoard = entries.filter((e) => e.board?.access === "none");
   const batchHTML = noBoard.length
     ? `<div class="alert warn">
-         <b>${noBoard.length} companies have no careers page.</b> Discovery checked Greenhouse, Lever,
-         Ashby and SmartRecruiters for each and found nothing — for small or young companies that is
-         usually the truth rather than a lookup worth retrying.
+         <b>${noBoard.length} companies are marked "no board found".</b> Treat that as unproven:
+         these rows were written by agents that guessed one or two ATS slugs and recorded a 404 as
+         "no board", without running the mechanical probe or checking the company's own site. Spot
+         checking twelve of them found four with a live <code>/careers</code> page at the obvious
+         address. Use the 🔎 on a row to check before removing it, and remove in bulk only once you
+         are satisfied.
          <form method="POST" action="/dismiss-board" class="inline" style="margin-left:8px"
-               onsubmit="return confirm('Remove all ${noBoard.length} companies with no careers page? Scouts will skip them from now on. They stay in data/boards.md and can be restored.')">
-           <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="boards">
+               onsubmit="return confirm('Remove all ${noBoard.length}? Some of these DO have a careers page — the \'no board\' verdict came from agents that only guessed ATS slugs. They stay in data/boards.md and can be restored.')">
+           <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="companies">
            <input type="hidden" name="scope" value="none">
            <button type="submit" class="btn-small">Remove all ${noBoard.length}</button>
          </form>
        </div>`
     : "";
 
-
-  const isBrowserWork = (r) => r.access === "blocked" || r.access === "browser";
-  const needsHuman = [
-    ...needs.filter((r) => !isBrowserWork(r)),
-    ...manual.filter((r) => String(r.endpoint || "").trim()),
-  ];
-  const browserWork = rows.filter(isBrowserWork);
-
-  const tbl = (list) =>
-    `<div class="scroll"><table class="btable"><thead><tr><th>Company</th><th>Status</th><th>Board / endpoint</th><th></th></tr></thead><tbody>${list
-      .map(editRow)
-      .join("")}</tbody></table></div>`;
-
-  const attentionHTML = needsHuman.length
-    ? tbl(needsHuman)
-    : `<p class="empty">Nothing waiting on you — every unreadable board is queued for a browser pass. 🎉</p>`;
-
-  const browserHTML = browserWork.length
-    ? `<div class="alert warn" style="margin-top:22px">
-         <strong>${browserWork.length} boards exist but refuse scripted access.</strong>
-         An HTTP 401/402/403/429/5xx or a TLS failure means the board <em>is</em> there — so these are
-         queued for a browser pass, not dead ends. Run <code>/curate</code> with Chrome open and
-         role-scout works the queue (<code>record.mjs list-boards needs-browser</code>) and reclassifies
-         each one. Paste a URL anyway if you already know it.
-       </div>${tbl(browserWork)}`
+  const queued = count("queued");
+  const queuedHTML = queued
+    ? `<div class="alert warn">
+         <b>${queued} boards exist but refuse scripted access.</b> An HTTP 401/402/403/429/5xx or a TLS
+         failure means the board <em>is</em> there. The daily run now opens these in your Chrome
+         (<code>scripts/board-sweep.mjs</code>, 15 per run, oldest first) and reclassifies them, so the
+         queue drains on its own. Paste a URL anyway if you already know it.
+       </div>`
     : "";
 
-  const workingHTML = working.length
-    ? `<div class="scroll"><table class="btable"><thead><tr><th>Company</th><th>ATS</th><th>Access</th><th>Endpoint</th></tr></thead><tbody>${working
-        .map(
-          (r) => `<tr><td>${esc(r.company)}${r.volatile === "yes" ? ` <span class="pill b-volatile" title="URL rotates — re-derive each run">volatile</span>` : ""}</td>
-        <td class="muted">${esc(r.ats || "")}</td>
-        <td><span class="pill b-${esc(r.access)}">${esc(r.access)}</span></td>
-        <td><code style="font-size:11px">${esc(r.endpoint)}</code></td></tr>`
-        )
-        .join("")}</tbody></table></div>`
-    : `<p class="empty">Nothing verified yet — run <code>/curate</code>.</p>`;
-
   return `<p class="muted" style="margin:0 0 10px">
-    ${needsHuman.length} need${needsHuman.length === 1 ? "s" : ""} your input ·
-    ${browserWork.length} queued for a browser pass · ${working.length} readable ·
-    ${notInvestigated} ${notInvestigated === 1 ? "company" : "companies"} in your market lists not investigated yet.${
-      dismissedCount ? ` · <b>${dismissedCount} removed</b> — kept in <code>data/boards.md</code>, restore with <code>record.mjs restore-board "Company"</code>` : ""
-    }
-  </p>
-  ${batchHTML}
-  <h3 style="margin:0 0 6px;font-size:13px">⚠️ Website not found — paste it here</h3>
-  ${attentionHTML}
-  ${browserHTML}
-  <details style="margin-top:14px"><summary>Working boards <span class="muted">(${working.length})</span></summary>${workingHTML}</details>`;
+      ${entries.length} companies ·
+      <b>${count("readable")}</b> readable ·
+      ${queued} queued for a browser pass ·
+      <b>${count("needs-url")}</b> need a URL from you ·
+      ${count("unknown")} not investigated yet${
+        dismissedCount ? ` · <b>${dismissedCount} removed</b> — kept in <code>data/boards.md</code>, restore with <code>record.mjs restore-board "Company"</code>` : ""
+      }
+    </p>
+    ${batchHTML}
+    ${queuedHTML}
+    <div class="cotools">
+      <input class="tsearch cosearch" placeholder="search companies, markets, notes…" autocomplete="off">
+      <label class="comini">Sort
+        <select class="cosort">
+          <option value="name">by name</option>
+          <option value="tier">by tier</option>
+          <option value="state">by board access</option>
+        </select>
+      </label>
+      <span class="taskfilters costates">
+        <button type="button" class="tf active" data-f="all">All</button>
+        <button type="button" class="tf" data-f="needs-url">Needs a URL (${count("needs-url")})</button>
+        <button type="button" class="tf" data-f="queued">Queued (${queued})</button>
+        <button type="button" class="tf" data-f="unknown">Not investigated (${count("unknown")})</button>
+      </span>
+      <button type="button" class="btn-secondary btn-small coexpand" data-open="1">Collapse all</button>
+      <span class="muted comatch"></span>
+    </div>
+    ${groupHTML}`;
+}
+
+// Add a company by hand. Adding it also kicks off scripts/discover-board.mjs for that company, so
+// the careers board is looked up immediately rather than waiting for the next scout run — the whole
+// point being that a company you just thought of should not sit there with no way to read its jobs.
+// `market` is the FILE the row is written to; `label` is what the person reads. They differ
+// ("consulting-big4" vs "Consulting - Big 4") and posting the label would create a second file.
+function addCompanyFormHTML(market, label = market) {
+  return `<form method="POST" action="/add-company" class="addco">
+    <input type="hidden" name="market" value="${esc(market)}">
+    <input name="company" placeholder="Add a company to ${esc(label)} — e.g. Broadcom" autocomplete="off" required>
+    <button type="submit">Add</button>
+    <span class="muted addco-hint">Adds the row and immediately searches for its careers board.</span>
+  </form>`;
 }
 
 // ---------- Activity ----------
@@ -1178,9 +1301,10 @@ function todayHTML(all, dueToday, appTok, appIds) {
   // Dismissed boards are not outstanding work. Counting them would leave the banner unchanged after
   // a removal, which teaches the user the button does nothing.
   const boardRows = (all.boards?.rows ?? []).filter((r) => !String(r.dismissed || "").trim());
-  const boardsNeeding = boardRows.filter(
-    (r) => BOARD_UNREADABLE[r.access] || !String(r.endpoint || "").trim()
-  ).length;
+  // Only what a person can fix, by the same rule the Companies page uses. `browser`/`blocked`
+  // boards are the sweep's job now, not the user's, and counting them here asked for attention 45
+  // times over for work already automated.
+  const boardsNeeding = boardRows.filter((r) => companyState({ board: r }) === "needs-url").length;
   const run = all.lastRun;
 
   // A failed scheduled run is the one thing you would otherwise never notice — no digest arrives
@@ -1287,7 +1411,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
   const boardsBlock = boardsNeeding
     ? `<div class="alert warn"><strong>${boardsNeeding} careers boards have no readable URL.</strong>
          Agents cannot fix these by trying harder — paste the real careers page and the next scout run
-         will use it. <a href="/settings?tab=boards">Open in Settings →</a></div>`
+         will use it. <a href="/settings?tab=companies">Open in Settings →</a></div>`
     : "";
 
   return `${browserBanner}
@@ -1439,15 +1563,18 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
 // Configuration only: things set once and changed rarely. Split out so the daily page holds nothing
 // but what actually changes daily. Same tab mechanics, its own small set of panes.
 function settingsPage(all, flash) {
-  const boardRows = all.boards?.rows ?? [];
-  const liveBoards = boardRows.filter((r) => !String(r.dismissed || "").trim());
-  const needing = liveBoards.filter((r) => BOARD_UNREADABLE[r.access] || !String(r.endpoint || "").trim()).length;
-  const vendorCount = (all.markets ?? []).reduce((n, m) => n + m.table.rows.length, 0);
+  // One tab, not two. "Markets & vendors" and "Careers boards" described the same entity from two
+  // angles and overlapped on 183 companies — see joinCompanies().
+  const companies = joinCompanies(all);
+  const companyCount = companies.length;
+  // Only rows a person can actually fix, using the SAME classification the page renders. The old
+  // count folded in `browser` and `blocked`, which the board sweep now works on its own — so the
+  // banner demanded attention for 45 boards nobody needed to touch.
+  const needing = companies.filter((e) => companyState(e) === "needs-url").length;
   const TABS = [
     { id: "setup", label: "Setup", count: null },
     { id: "criteria", label: "Criteria &amp; weights", count: null },
-    { id: "markets", label: "Markets &amp; vendors", count: vendorCount },
-    { id: "boards", label: "Careers boards", count: boardRows.length },
+    { id: "companies", label: "Companies", count: companyCount },
     { id: "cv", label: "CV / profile", count: null },
   ];
   const active = TABS.some((x) => x.id === all.tab) ? all.tab : "setup";
@@ -1474,8 +1601,7 @@ ${tabStrip(TABS, active)}
 <div id="panels">
 ${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, setupHTML(all.status, all.criteria)))}
 ${tabPanel("criteria", on("criteria"), sec("criteria", `Criteria <span class="muted">— what the agents target and how they weight fit</span>`, criteriaFormHTML(all.criteria)))}
-${tabPanel("markets", on("markets"), sec("markets", `Markets &amp; vendors <span class="muted">— ranked company lists, maintained by the prioritization agent</span>`, marketsHTML(all.markets)))}
-${tabPanel("boards", on("boards"), sec("boards", `Careers boards <span class="muted">— where each company's jobs are read from (⚠️ = not found, ✏️ to paste it)</span>`, boardsHTML(all)))}
+${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
 <footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a></footer>
@@ -1580,8 +1706,7 @@ nav.tabs .tab[data-tab="contacts"]{--h:30}        /* orange */
 nav.tabs .tab[data-tab="activity"]{--h:228;--tab-c:.3}  /* muted on purpose: it is a log */
 /* Settings tabs reuse the same hues so the two pages read as one system. */
 nav.tabs .tab[data-tab="criteria"]{--h:213}
-nav.tabs .tab[data-tab="markets"]{--h:152}
-nav.tabs .tab[data-tab="boards"]{--h:70}
+nav.tabs .tab[data-tab="companies"]{--h:152}
 nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel[hidden]{display:none}
 .tabpanel .sec{margin-bottom:0;border:0;background:transparent}
@@ -1693,6 +1818,32 @@ tr.bform td{background:rgba(110,168,254,.06);border-bottom:2px solid var(--line)
 .b-json{background:#1f5b46}.b-html{background:#2b3a67}.b-browser{background:#4a3a2a}
 .b-blocked{background:#6b2330}.b-none{background:#4a2a30;color:#f0c6cf}
 .b-manual{background:#3a2f67}.b-volatile{background:#6b4a23;font-size:10px}
+/* Companies: the four board states stay visually distinct on purpose. "not investigated yet" and
+   "no board found" are different facts, and collapsing them is how 53 companies got written off. */
+.st-readable{background:#1f5b46}.st-queued{background:#4a3a2a}
+.st-needs-url{background:#6b2330}.st-manual{background:#3a2f67}
+.st-pending{background:#2b3a67}.st-unknown{background:#3a3f57;color:var(--mut)}
+.tier{font-size:10px;background:#2b3a67}.tier-1{background:#1f6b2f}.tier-2{background:#2b3a67}.tier-3{background:#3a3f57}
+/* Fixed layout, explicit widths. With auto layout the endpoint column grew to fit 200-character
+   agent notes, pushing the actions column off the right edge and letting the rationale text spill
+   over the neighbouring cell. Percentages keep it responsive without a horizontal scrollbar. */
+.cotable{table-layout:fixed}
+/* Beat the global "table td:first-child { white-space: nowrap }" — meant to stop dates and short
+   labels breaking, but here the first cell carries a sentence of rationale, which then ran straight
+   across the neighbouring columns. (No backticks in this block: it is a template literal.) */
+.cotable td,.cotable th,.cotable td:first-child{overflow-wrap:anywhere;white-space:normal}
+.cotable col.c-name{width:34%}.cotable col.c-access{width:15%}
+.cotable col.c-ep{width:41%}.cotable col.c-act{width:10%}
+.comini{font-size:11px;margin-top:2px}
+.cowhy{font-size:11px;margin-top:2px}
+.conote{font-size:11px;margin-top:3px}
+.cotools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.cotools .cosearch{flex:1 1 220px;min-width:180px}
+.cotools select{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:6px 8px;font:inherit}
+.cotools label{display:inline-flex;gap:6px;align-items:center;color:var(--mut)}
+.costates{margin:0}
+.cogroup[hidden]{display:none}
+.comatch{margin-left:auto;font-size:11.5px}
 .s-applied{background:#2b3a67}.s-screening{background:#3a2f67}.s-interview{background:#1f5b46}.s-offer{background:#1f6b2f}.s-rejected{background:#6b2330}.s-saved{background:#3a3f57}.s-withdrawn{background:#4a3a2a}
 form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 form.grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut)}
@@ -1995,6 +2146,80 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   });
   var s=sec.querySelector('.asearch');
   if(s) s.addEventListener('input', function(){ q=s.value.toLowerCase().trim(); apply(); });
+  apply();
+})();
+
+// Companies section: search + sort + state chips + collapse-all, all client-side.
+// ~230 rows across a handful of markets is too many to scan, so the groups collapse and the search
+// is what makes the page usable rather than decorative. A search that matches inside a collapsed
+// group OPENS that group — otherwise the box would appear to find nothing.
+(function(){
+  var sec=document.querySelector('.sec[data-id="companies"]');
+  if(!sec) return;
+  var groups=Array.prototype.slice.call(sec.querySelectorAll('.cogroup'));
+  var q='', state='all', sort='name';
+
+  function rowsOf(g){ return Array.prototype.slice.call(g.querySelectorAll('tr.corow')); }
+  // The edit form is a SECOND <tr> right after its row. It must follow its row when sorting and
+  // hide with it when filtering, or the page silently pairs a form with the wrong company.
+  function formOf(tr){ var n=tr.nextElementSibling; return (n && n.classList.contains('bform'))?n:null; }
+
+  function apply(){
+    var total=0;
+    groups.forEach(function(g){
+      var shown=0;
+      rowsOf(g).forEach(function(tr){
+        var okQ=!q||((tr.getAttribute('data-q')||'').indexOf(q)>=0);
+        var okS=(state==='all')||(tr.getAttribute('data-state')===state);
+        var vis=okQ&&okS;
+        tr.style.display=vis?'':'none';
+        var f=formOf(tr); if(f&&!vis) f.style.display='none'; else if(f) f.style.display='';
+        if(vis) shown++;
+      });
+      var c=g.querySelector('.cocount'); if(c) c.textContent=shown;
+      g.hidden=(shown===0);
+      // A filtered-down group is worth opening; restore the user's own choice when the box clears.
+      if((q||state!=='all')&&shown>0) g.open=true;
+      total+=shown;
+    });
+    var m=sec.querySelector('.comatch');
+    if(m) m.textContent=(q||state!=='all')?(total+' matching'):'';
+  }
+
+  function resort(){
+    groups.forEach(function(g){
+      var body=g.querySelector('tbody'); if(!body) return;
+      var pairs=rowsOf(g).map(function(tr){ return [tr, formOf(tr)]; });
+      pairs.sort(function(a,b){
+        if(sort==='name') return (a[0].getAttribute('data-name')||'').localeCompare(b[0].getAttribute('data-name')||'');
+        if(sort==='tier'){
+          var d=(a[0].getAttribute('data-tier')||'9').localeCompare(b[0].getAttribute('data-tier')||'9');
+          return d||((a[0].getAttribute('data-name')||'').localeCompare(b[0].getAttribute('data-name')||''));
+        }
+        var e=(a[0].getAttribute('data-state')||'').localeCompare(b[0].getAttribute('data-state')||'');
+        return e||((a[0].getAttribute('data-name')||'').localeCompare(b[0].getAttribute('data-name')||''));
+      });
+      pairs.forEach(function(p){ body.appendChild(p[0]); if(p[1]) body.appendChild(p[1]); });
+    });
+  }
+
+  var s=sec.querySelector('.cosearch');
+  if(s) s.addEventListener('input', function(){ q=s.value.toLowerCase().trim(); apply(); });
+  var so=sec.querySelector('.cosort');
+  if(so) so.addEventListener('change', function(){ sort=so.value; resort(); });
+  sec.querySelectorAll('.costates .tf').forEach(function(b){
+    b.addEventListener('click', function(){
+      sec.querySelectorAll('.costates .tf').forEach(function(x){x.classList.remove('active');});
+      b.classList.add('active'); state=b.getAttribute('data-f'); apply();
+    });
+  });
+  var ex=sec.querySelector('.coexpand');
+  if(ex) ex.addEventListener('click', function(){
+    var open=ex.getAttribute('data-open')==='1';
+    groups.forEach(function(g){ g.open=!open; });
+    ex.setAttribute('data-open', open?'0':'1');
+    ex.textContent=open?'Expand all':'Collapse all';
+  });
   apply();
 })();
 

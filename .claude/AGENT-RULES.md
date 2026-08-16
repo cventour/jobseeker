@@ -374,6 +374,30 @@ unreadable, which makes the work *harder* to act on — the opposite of the poin
   before any market starts the next. Only a step that genuinely needs *all* prior results (e.g. the
   supervisor's audit) should be a barrier.
 
+## 13b. NEVER write `access: none` from a guess — run the probe
+
+`none` in the board registry means **no careers board exists**. That is a strong claim and it must be
+earned, because a board marked `none` is dropped from every future run.
+
+It was not earned. Every `none` row in the registry was written by an agent that tried one or two
+ATS slugs, got a 404, and recorded it as "no board found". Spot-checking twelve of those companies
+found **four with a live `/careers` page at the most obvious address** — the exact thing
+`scripts/discover-board.mjs` checks in its fallback, which had never been run on any of them.
+
+So, before writing `access: none`:
+
+1. **Run the mechanical probe.** `node scripts/discover-board.mjs "<Company>" "<market>"` tries four
+   ATS providers across six slug variants, then twenty-four careers-page URLs. It is far more
+   thorough than a hand-guessed slug or two, and it writes the row itself.
+2. **If you cannot run it, do not write `none`.** Write `access: pending` and say what you tried.
+   "I did not find one" and "there is not one" are different claims; only the probe can support
+   the second.
+3. **A 404 on an ATS slug says nothing about the company's own site.** Most companies of this size
+   have a careers page and no ATS at all.
+4. **Notes must record what was actually attempted**, so the next agent can tell a thorough miss
+   from a cursory one. `discover-board.mjs` prefixes its notes `AUTO-DISCOVERY` and states the probe
+   count; a note without that is a hand verdict and should be treated as unproven.
+
 ## 14. The board registry is the FIRST thing a scout reads, and the last thing it writes
 - **Never hunt for a company's careers site from scratch.** `data/boards.md` is a registry of every
   company whose board has been investigated: where it is, and whether a stateless run can read it.
@@ -387,15 +411,28 @@ unreadable, which makes the work *harder* to act on — the opposite of the poin
   - `browser` — JS-rendered or session-walled.
   - `blocked` — actively rejects scripted access (401/402/403/429/5xx, or a TLS mismatch).
 - **`blocked` and `browser` mean ESCALATE TO THE BROWSER, not give up.** An HTTP error is evidence
-  that a board *exists* and is refusing a script — the opposite of absence. Whenever Claude-in-Chrome
-  is available you must **retry those companies in the browser** and then reclassify the row. Get the
-  queue in one call:
+  that a board *exists* and is refusing a script — the opposite of absence. Get the queue in one call:
   ```
   node server/record.mjs list-boards needs-browser
   ```
-  Only a headless run may defer them, and then it must say how many are waiting. Never report a
-  blocked board as "no board found", and never leave an HTTP error as the final answer while a
-  browser is sitting there unused.
+  **Use the Apple Events path, NOT the Chrome MCP tools.** `mcp__claude-in-chrome__*` exists only in
+  an interactive session; a scheduled `claude -p` run does not have it. Telling an agent to "switch
+  to Chrome" while its only Chrome tools were absent is why this queue reached 45 boards without one
+  of them ever being read. What works in both:
+  ```
+  node scripts/browser-do.mjs read-url <url>      # one page
+  node scripts/browser-do.mjs board-sweep --max N # drain the queue, oldest first
+  ```
+  **Read `data/.board-cache/<company>.txt` before fetching anything** — the scheduled run sweeps the
+  queue up front, so the text is usually already there. Each file carries a `# fetched:` header;
+  ignore anything older than ~3 days and re-read it. Never report a blocked board as "no board
+  found", and never leave an HTTP error as the final answer while a browser is sitting there unused.
+- **A page that loaded is not a page that was read.** Chrome's own error interstitial is a real
+  document with thousands of characters of text: reading it as content once filed Microsoft as
+  "readable — 7123 chars" when those chars were *"Your connection is not private"*. Before believing
+  an extraction, check the FINAL url is still `http(s)`, that the body is more than a couple of
+  hundred characters, and that it is not a login, consent or bot-check wall. Record what actually
+  happened, not that something came back.
 - **The same rule applies mid-run.** If a stateless fetch to any careers site returns 401/402/403/429
   or a 5xx, or fails TLS: record it as `blocked` with the status, then **open it in the browser**
   instead of moving on. Only when the browser also fails is it genuinely uncovered — say so with both

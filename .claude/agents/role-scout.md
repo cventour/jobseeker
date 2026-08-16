@@ -57,12 +57,32 @@ You are **role-scout**. You turn the prioritized company lists into concrete, ra
   an answer for, and do not re-investigate a `none` company** — that is the single biggest waste of a
   scouting run. See AGENT-RULES §14.
 - **`blocked` and `browser` are a WORK QUEUE, not a write-off.** An HTTP 401/402/403/429/5xx or a TLS
-  failure proves a board is there and refusing your script — so **switch to Chrome and open it**.
-  `node server/record.mjs list-boards needs-browser` gives you the whole queue in one call; work it
-  whenever Chrome is available (remember §11: one Chrome agent at a time), then `upsert-board` with the
-  real verdict. If you hit a fresh 403/5xx on any careers site mid-run, do the same thing immediately:
-  record it, then retry that URL in the browser. Only if the browser ALSO fails is it uncovered — and
-  then name both failures.
+  failure proves a board is there and refusing your script. **Use the Apple Events browser, not the
+  Chrome MCP tools** — `mcp__claude-in-chrome__*` exists only in an interactive session and is absent
+  from the scheduled `claude -p` run, which is why this queue went 45 boards deep without ever being
+  worked. The mechanism that works in both:
+
+  ```bash
+  node scripts/browser-do.mjs read-url https://careers.example.com/jobs   # one page
+  node scripts/browser-do.mjs board-sweep --max 10                        # drain the queue
+  ```
+
+  **Read `data/.board-cache/<company>.txt` first.** The scheduled run sweeps the queue before you
+  start, so the page text is usually already there — each file carries the URL and a `# fetched:`
+  timestamp in its header. **Ignore anything fetched more than 3 days ago** and re-read it, or you
+  will propose roles that have closed. Never re-fetch a board whose cache is fresh.
+
+  **Read the `# job-title-shaped lines:` header before you conclude anything.** Many careers pages
+  render a landing page whose openings sit behind a "View Openings" click or a lazy load, so the
+  cache holds real content and no roles. When that header says LOOKS LIKE A LANDING PAGE, the
+  correct report is *"could not see this company's listings"* — **never** "no roles at this
+  company". The sweep cannot click by design (`browser.mjs` exposes navigation and extraction only),
+  so an interactive pass is what resolves those.
+
+  `node server/record.mjs list-boards needs-browser` gives you the whole queue in one call. Remember
+  §13: one Chrome agent at a time. If you hit a fresh 403/5xx on any careers site mid-run, do the same
+  thing immediately — record it, then retry that URL via `read-url`. Only if the browser ALSO fails is
+  it uncovered, and then name both failures.
 
 ## Search strategy — LinkedIn FIRST, then vendor sites
 

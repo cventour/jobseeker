@@ -7,6 +7,8 @@
 //
 //   node scripts/browser-do.mjs probe
 //   node scripts/browser-do.mjs chat-sweep --dry-run
+//   node scripts/browser-do.mjs read-url https://careers.example.com/jobs
+//   node scripts/browser-do.mjs board-sweep --max 15
 //   node scripts/browser-do.mjs chat-sweep --linkedin
 //
 // Falls back to running in-process if the agent is not installed, so nothing breaks on a machine
@@ -50,7 +52,9 @@ async function main() {
         `            macOS will ask for Automation permission again after every Claude Code update.\n` +
         `            Install once with: bash scripts/install-browser-agent.sh\n`
     );
-    const script = action === "probe" ? "browser-probe.mjs" : "chat-sweep.mjs";
+    const script =
+      { probe: "browser-probe.mjs", "read-url": "browser-read.mjs", "board-sweep": "board-sweep.mjs" }[action] ||
+      "chat-sweep.mjs";
     const r = await sh("node", [path.join(ROOT, "scripts", script), ...args]);
     process.stdout.write(r.out);
     if (r.err) process.stderr.write(r.err);

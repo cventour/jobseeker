@@ -216,11 +216,37 @@ export async function evalJson(tab, js) {
   }
 }
 
-/** Fail early and precisely, so callers never mistake "not permitted" for "not working". */
+/**
+ * Fail early and precisely, so callers never mistake "not permitted" for "not working".
+ *
+ * Callers that open their own tab should tolerate the "no http(s) tab to probe" case — it means the
+ * permission is unknown, not denied, and the real read will report the truth either way.
+ */
 export async function assertCanReadContent(tabs) {
-  const probe = tabs[0];
-  if (!probe) throw new Error("Chrome has no open tabs to read");
-  await evalInTab(probe, "1");
+  const candidates = (tabs || []).filter((t) => /^https?:/i.test(String(t.url || "")));
+  if (!candidates.length) {
+    // No scriptable tab open is not a permission failure — callers that open their own tab can
+    // carry on, so say what is actually true rather than claiming reads are blocked.
+    throw new Error("Chrome has no http(s) tab to probe (permission unknown, not denied)");
+  }
+  // Try several tabs, not just the first. Two separate ways a single blind probe lies:
+  // a chrome:// or New Tab page refuses injected JS regardless of permission, and a heavy SPA
+  // (the Emirates careers portal, for one) leaves the Apple Event pending until it times out.
+  // Either turned "your first tab is busy" into "you cannot read pages", which is the exact false
+  // negative this function exists to prevent. A permission denial, by contrast, is instant and
+  // affects every tab — so it still surfaces, from the last attempt.
+  let last;
+  for (const tab of candidates.slice(0, 4)) {
+    try {
+      await evalInTab(tab, "1");
+      return;
+    } catch (e) {
+      last = e;
+      // A denial is conclusive on the first tab; no point asking three more.
+      if (/not authori[sz]ed|not allowed|Allow JavaScript from Apple Events/i.test(String(e?.message))) throw e;
+    }
+  }
+  throw last;
 }
 
 /**

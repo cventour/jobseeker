@@ -44,8 +44,10 @@ paths are separate, interactive, and require an approval record.
 Claude Code agents  ──►  server/record.mjs  ──►  data/*.md      (single writer, locked, atomic)
    (parallel)                    ▲                  │
                                  │                  ▼
-scripts/chat-sweep.mjs ──► scripts/browser.mjs   server/dashboard.mjs  (localhost:4319)
-   (WhatsApp/LinkedIn)      (Apple Events)       server/audit.mjs      (read-only report)
+scripts/chat-sweep.mjs  ─┐
+   (WhatsApp/LinkedIn)   ├─► scripts/browser.mjs   server/dashboard.mjs  (localhost:4319)
+scripts/board-sweep.mjs ─┘    (Apple Events)       server/audit.mjs      (read-only report)
+   (careers boards)
 ```
 
 | Component | Role |
@@ -58,6 +60,7 @@ scripts/chat-sweep.mjs ──► scripts/browser.mjs   server/dashboard.mjs  (lo
 | `server/dashboard.mjs` | Single-file, dependency-free web UI |
 | `scripts/browser.mjs` | Reads the live Chrome over Apple Events |
 | `scripts/chat-sweep.mjs` | Unattended WhatsApp / LinkedIn sweep |
+| `scripts/board-sweep.mjs` | Unattended careers-board sweep: opens boards that refuse scripts, caches the text for role-scout |
 | `scripts/job-run.sh` | Scheduler entry point: guards, probe, retries, status |
 
 ## How browser access works — and why it is unusual

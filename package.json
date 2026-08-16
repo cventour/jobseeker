@@ -37,6 +37,7 @@
     "icons": "python3 scripts/make-icons.py",
     "browser:probe": "node scripts/browser-do.mjs probe",
     "chat:sweep": "node scripts/browser-do.mjs chat-sweep",
+    "board:sweep": "node scripts/browser-do.mjs board-sweep",
     "test:sweep": "node scripts/test-chat-sweep.mjs",
     "test:security": "node scripts/test-security.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",

@@ -32,6 +32,10 @@ TIMEOUT_SECS="${JOBRUN_TIMEOUT_SECS:-2700}"   # 45 min
 MAX_BUDGET_USD="${JOBRUN_MAX_BUDGET_USD:-}"
 ATTEMPTS="${JOBRUN_ATTEMPTS:-2}"              # initial try + 1 retry
 RETRY_SLEEP="${JOBRUN_RETRY_SLEEP:-60}"
+# How many browser-only careers boards to read per run. Chrome is serial, so this is a budget, not a
+# limit on ambition: 15 x ~10s drains the queue over a few days without starving the chat sweep.
+BOARD_SWEEP_MAX="${JOBRUN_BOARD_SWEEP_MAX:-15}"
+BOARD_SWEEP_TIMEOUT="${JOBRUN_BOARD_SWEEP_TIMEOUT:-900}"   # 15 min ceiling on the whole sweep
 # Memory guard. Defaults leave plenty of room for a healthy run (the session itself sits around
 # 0.5 GB) while catching a leaker within minutes. Set JOBRUN_GUARD=0 to disable.
 GUARD_ENABLED="${JOBRUN_GUARD:-1}"
@@ -218,6 +222,20 @@ write_status "running" 0 "in progress"
   JOBRUN_BROWSER="$(read_mech)"
   export JOBRUN_BROWSER
   echo "browser capability: read-pages via ${JOBRUN_BROWSER}"
+
+  # Drain some of the browser board queue BEFORE claude runs, so the scout reads cached page text
+  # instead of being told to "open Chrome" with tools it does not have in a headless run. This is
+  # the mechanical half; scoring the listings against the CV stays with role-scout.
+  # Skipped entirely when the probe says pages are unreadable — there is nothing it could do.
+  if [ "$JOBRUN_BROWSER" != "none" ] && [ "$JOBRUN_BROWSER" != "unknown" ]; then
+    echo "---- board sweep (max ${BOARD_SWEEP_MAX} boards, oldest first, ${BOARD_SWEEP_TIMEOUT}s cap) ----"
+    # Hard-capped. Every step inside is bounded, but this runs BEFORE the claude attempt and outside
+    # its watchdog — one wedged page must not be able to eat the morning.
+    run_with_timeout "$BOARD_SWEEP_TIMEOUT" node "$REPO/scripts/board-sweep.mjs" --max "$BOARD_SWEEP_MAX" 2>&1 ||
+      echo "board-sweep did not finish cleanly (continuing; the queue is picked up next run)"
+  else
+    echo "board sweep skipped: no way to read pages (${JOBRUN_BROWSER})"
+  fi
 
   rc=1
   for attempt in $(seq 1 "$ATTEMPTS"); do

@@ -64,8 +64,9 @@ can always reconstruct what happened and when.
 
 ![Activity tab](site/img/activity.png)
 
-**Settings** — scoring weights, target markets, and the careers-board registry, which records where
-each company's job board is and whether it can be read without a browser.
+**Settings** — scoring weights, and one **Companies** page listing every company you are targeting:
+why it is on the list, and where its jobs are read from. Grouped by market, collapsible, sortable,
+and searchable across names, markets and notes.
 
 ![Settings — careers boards](site/img/settings-boards.png)
 

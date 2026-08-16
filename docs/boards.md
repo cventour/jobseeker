@@ -20,6 +20,43 @@ worth a paragraph here.
 > Note the sections below are organised by *when* they were learned, which is why the registry
 > exists: chronological prose is not a lookup.
 
+## "Browser-only" no longer means "not covered"
+
+A board marked `browser` or `blocked` is **read automatically now**. `scripts/board-sweep.mjs` opens
+each one in the user's real Chrome over Apple Events, extracts the visible text, and reclassifies it
+— 15 boards per run, oldest `last_verified` first, wired into `scripts/job-run.sh`.
+
+```bash
+npm run board:sweep -- --dry-run          # what it would read, writes nothing
+npm run board:sweep -- --max 10           # drain 10
+node scripts/browser-do.mjs read-url URL  # one page, through the same path
+```
+
+**Why it had to be built:** role-scout's only browser tools were `mcp__claude-in-chrome__*`, which an
+interactive Claude Code session injects and the scheduled `claude -p` run does not have. The agent
+was told to "switch to Chrome" and could not, so the queue grew to 45 boards and every digest
+reported the gap instead of closing it.
+
+**Read the cache before fetching anything.** Each swept board lands in
+`data/.board-cache/<company>.txt` with a `# fetched:` timestamp in its header. Anything older than
+~3 days is stale — re-read it rather than proposing roles that have since closed.
+
+**What the sweep will NOT do**, so a person still has to:
+
+- Guess a URL. Rows whose endpoint is prose ("unknown — cyberark.wd1 … returns 422") or empty are
+  reported as skipped, not opened.
+- Open single LinkedIn postings. Those are one req, already verified when written, and re-opening
+  dozens is what gets rate-limited.
+- Believe a page that loaded. A Chrome error interstitial is thousands of characters of text —
+  reading it as content filed Microsoft as "readable, 7123 chars" when those chars were *"Your
+  connection is not private"*. Chrome error pages, thin bodies (<200 chars) and login/consent walls
+  are each detected and recorded as what they are.
+- Click anything. `browser.mjs` exposes navigation and extraction only, deliberately. Boards whose
+  openings sit behind a **"View Openings"** button or a lazy load (Tarabut, Temenos, Pyypl) return a
+  real careers page with no listings on it. The cache header says
+  `# job-title-shaped lines: N — LOOKS LIKE A LANDING PAGE` when that happens, and the right report
+  is *"could not see the listings"*, never *"no roles"*. Those need an interactive pass.
+
 ## General SPA hazards
 
 - **`get_page_text` caches STALE on SPA job boards.** After typing in a search box or applying a

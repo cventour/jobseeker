@@ -317,7 +317,13 @@ async function main() {
     sinceFor[ch] = SINCE_ARG || ts || new Date(Date.now() - 7 * 864e5).toISOString();
   }
   const results = await withBrowser(async (ctx) => {
-    await assertCanReadContent(ctx.tabs);
+    // A cold Chrome at 08:00 sits on the New Tab Page with nothing scriptable open — and this sweep
+    // opens its own WhatsApp tab anyway, so that is not a reason to abandon the run. A real
+    // permission denial still throws here and stops it.
+    await assertCanReadContent(ctx.tabs).catch((e) => {
+      if (/no http\(s\) tab to probe/.test(String(e?.message))) return;
+      throw e;
+    });
 
     const waTab = ctx.findTab("web.whatsapp.com");
     const liTab = ctx.findTab("linkedin.com/messaging");

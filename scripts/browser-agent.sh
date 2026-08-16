@@ -59,9 +59,15 @@ log "request $ID: $ACTION ${ARGS[*]:-}"
 case "$ACTION" in
   probe)      OUT="$("$NODE" "$REPO/scripts/browser-probe.mjs" 2>&1)"; CODE=$? ;;
   chat-sweep) OUT="$("$NODE" "$REPO/scripts/chat-sweep.mjs" ${ARGS[@]+"${ARGS[@]}"} 2>&1)"; CODE=$? ;;
+  # Read one page through the live Chrome. This is how the blocked/browser board queue gets worked in
+  # an unattended run -- the interactive-only Chrome MCP tools are not available there.
+  read-url)   OUT="$("$NODE" "$REPO/scripts/browser-read.mjs" ${ARGS[@]+"${ARGS[@]}"} 2>&1)"; CODE=$? ;;
+  # Drain the blocked/browser board queue. Same reason as read-url, in bulk: one Chrome session,
+  # capped per run, so the scheduled pipeline finally works the queue instead of reporting it.
+  board-sweep) OUT="$("$NODE" "$REPO/scripts/board-sweep.mjs" ${ARGS[@]+"${ARGS[@]}"} 2>&1)"; CODE=$? ;;
   # An allowlist, not a passthrough: this runs with a standing permission to drive the user's
   # logged-in browser, so it must never become "execute whatever the request file says".
-  *)          OUT="unknown action: $ACTION (allowed: probe, chat-sweep)"; CODE=64 ;;
+  *)          OUT="unknown action: $ACTION (allowed: probe, chat-sweep, read-url, board-sweep)"; CODE=64 ;;
 esac
 
 "$NODE" -e '
