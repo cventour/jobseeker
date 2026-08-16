@@ -9,7 +9,7 @@ import http from "http";
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn } from "child_process";
+import { spawn, execFile } from "child_process";
 import {
   parseFrontmatter,
   stringifyFrontmatter,
@@ -175,6 +175,7 @@ async function loadAll() {
     boards,
     lastRun,
     browser,
+    status: await systemStatus(),
     lastDigest,
     tab: "",
   };
@@ -933,6 +934,203 @@ function tabStrip(tabs, activeId) {
 // show. Every block states WHERE it came from, because an aggregate view whose selection rules
 // drift from reality is worse than no aggregate view at all — it looks authoritative while lying.
 // Nothing here is a new source of truth; it is a query over data/.
+// Everything the Setup page needs to tell the truth about this machine. Read, never assumed: the
+// browser verdict comes from the probe's own machine-readable output, the schedule is read back out
+// of the plist, and channel freshness comes from the watermarks the sweeps actually advanced.
+// The Setup page. Three jobs: let the user set what is settable, show honestly what is working, and
+// for the handful of things a web page CANNOT do (macOS permissions, Chrome's own setting, the
+// Claude Code connections) say so plainly and give the steps rather than pretending.
+function setupHTML(st, criteria) {
+  if (!st) return `<p class="empty">Status unavailable.</p>`;
+  const cfg = st.config || {};
+  const b = st.browser;
+  const hidden = `<input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="setup">`;
+
+  const pill = (ok, okTxt, badTxt) =>
+    ok ? `<span class="ok-pill">${esc(okTxt)}</span>` : `<span class="bad-pill">${esc(badTxt)}</span>`;
+
+  const actionBtn = (name, label, extra = "") =>
+    `<form method="POST" action="/run-action" class="inline">${hidden}
+      <input type="hidden" name="action_name" value="${esc(name)}">${extra}
+      <button type="submit" class="btn-small">${esc(label)}</button></form>`;
+
+  // --- what we can act on -------------------------------------------------------------------
+  const canRead = Boolean(b?.capabilities?.read_page_content);
+  const rows = [
+    [
+      "Browser access",
+      pill(canRead, b?.capabilities?.read_mechanism || "working", "cannot read pages"),
+      actionBtn("probe", "Re-check"),
+      canRead ? "" : (b?.blockers || []).join(" "),
+    ],
+    [
+      "Browser agent",
+      pill(st.agentInstalled, "installed", "not installed"),
+      actionBtn("install-browser-agent", st.agentInstalled ? "Reinstall" : "Install"),
+      "Lets the scheduled run drive Chrome with a permission that survives Claude Code updates.",
+    ],
+    [
+      "Daily run",
+      st.schedInstalled ? `<span class="ok-pill">${esc(st.schedTime)}</span>` : `<span class="bad-pill">not scheduled</span>`,
+      `<form method="POST" action="/run-action" class="inline">${hidden}
+         <input type="hidden" name="action_name" value="set-schedule">
+         <input type="time" name="time" value="${esc(/^\d\d:\d\d$/.test(st.schedTime) ? st.schedTime : "08:00")}" required>
+         <button type="submit" class="btn-small">Set</button></form>` +
+        (st.schedInstalled ? actionBtn("remove-schedule", "Remove") : ""),
+      "Reads your channels each morning and sends the digest. It never applies or sends anything.",
+    ],
+  ];
+
+  // --- what only you can do -----------------------------------------------------------------
+  const manual = [];
+  if (b?.blockers?.some((x) => /Allow JavaScript from Apple Events/i.test(x))) {
+    manual.push([
+      "Chrome setting",
+      "<ol><li>Open Chrome</li><li>Menu bar ▸ View ▸ Developer</li>" +
+        "<li>Click &quot;Allow JavaScript from Apple Events&quot;</li></ol>" +
+        "<p class='muted'>Automating this would need Accessibility permission — control of your whole UI. " +
+        "JobSeeker never asks for that.</p>",
+    ]);
+  }
+  if (b?.apple_events === "denied" || b?.apple_events === "prompt-pending") {
+    manual.push([
+      "macOS Automation",
+      "<ol><li>Open System Settings</li><li>Privacy &amp; Security ▸ Automation</li>" +
+        "<li>Tick <b>Google Chrome</b> under Claude</li></ol>",
+    ]);
+  }
+  const chanRow = (label, days, how) =>
+    `<tr><td class="nw"><b>${esc(label)}</b></td><td class="nw">${
+      days === null ? `<span class="bad-pill">never read</span>` : days > 2
+        ? `<span class="bad-pill">${days}d ago</span>` : `<span class="ok-pill">${days}d ago</span>`
+    }</td><td class="nw"></td><td class="muted">${esc(how)}</td></tr>`;
+
+  // --- spend ----------------------------------------------------------------------------------
+  const sp = st.spend || {};
+  const spendRows = (sp.recent || []).length
+    ? (sp.recent || []).map((r) => `<tr><td class="nw">${esc(r.date)}</td><td class="nw">$${(r.cost_usd || 0).toFixed(2)}</td><td>${esc(r.outcome)}</td></tr>`).join("")
+    : `<tr><td colspan="3" class="muted">No runs recorded yet. Cost tracking starts from the next run — earlier runs were never measured.</td></tr>`;
+
+  return `
+  <p class="th">What you are looking for</p>
+  ${criteriaFormHTML(criteria)}
+
+  <form method="POST" action="/save-config" class="cfgform">${hidden}
+    <p class="th">Spend</p>
+    <div class="cfggrid">
+      <label>Cap per run (USD)<input name="max_spend_per_run_usd" value="${esc(cfg.max_spend_per_run_usd ?? "5")}" inputmode="decimal"></label>
+      <label>Monthly ceiling (USD, blank = none)<input name="max_spend_per_month_usd" value="${esc(cfg.max_spend_per_month_usd ?? "")}" inputmode="decimal"></label>
+    </div>
+    <p class="muted">This month: <b>$${(sp.month_total_usd || 0).toFixed(2)}</b> across ${sp.month_runs || 0} run(s).
+      Past the ceiling the daily run does not start, and tells you why.</p>
+
+    <p class="th">Channels</p>
+    <div class="cfggrid">
+      <label>Approval channels<input name="approval_channels" value="${esc(cfg.approval_channels ?? "")}"></label>
+      <label>WhatsApp owner JID<input name="whatsapp_owner_jid" value="${esc(cfg.whatsapp_owner_jid ?? "")}"></label>
+      <label>Read WhatsApp Web<input name="whatsapp_web_enabled" value="${esc(cfg.whatsapp_web_enabled ?? "true")}"></label>
+      <label>Read LinkedIn<input name="linkedin_enabled" value="${esc(cfg.linkedin_enabled ?? "true")}"></label>
+    </div>
+
+    <p class="th">Privacy</p>
+    <div class="cfggrid">
+      <label>Chats never to log<input name="ignored_chats" value="${esc(cfg.ignored_chats ?? "")}" placeholder="comma list, prefix match"></label>
+      <label>Company aliases<input name="company_aliases" value="${esc(cfg.company_aliases ?? "")}" placeholder="oldname=New Name"></label>
+      <label>Pause applying before<input name="apply_stop_before" value="${esc(cfg.apply_stop_before ?? "")}"></label>
+    </div>
+    <button type="submit" class="btn">Save settings</button>
+  </form>
+
+  <p class="th">System</p>
+  <div class="scroll"><table><tbody>
+    ${rows.map(([k, v, act, note]) => `<tr><td class="nw"><b>${esc(k)}</b></td><td class="nw">${v}</td><td class="nw">${act}</td><td class="muted">${note}</td></tr>`).join("")}
+    ${chanRow("Gmail / Calendar", st.channels.gmail, "Connected in Claude Code, not here.")}
+    ${chanRow("WhatsApp", st.channels.whatsapp, "Read through Chrome by the daily run.")}
+    ${chanRow("LinkedIn", st.channels.linkedin, "Read through Chrome by the daily run.")}
+    <tr><td class="nw"><b>CV</b></td><td class="nw">${st.profileParsed ? `<span class="ok-pill">parsed</span>` : `<span class="bad-pill">not parsed</span>`}</td><td class="nw"></td><td class="muted">Upload on the CV tab, then run <code>/parse-cv</code> in Claude Code.</td></tr>
+  </tbody></table></div>
+
+  ${manual.length ? `<p class="th">Only you can do these</p>` + manual.map(([k, v]) => `<div class="alert warn"><b>${esc(k)}</b>${v}</div>`).join("") : ""}
+
+  <p class="th">Spend history</p>
+  <div class="scroll"><table><thead><tr><th>date</th><th>cost</th><th>outcome</th></tr></thead><tbody>${spendRows}</tbody></table></div>
+  `;
+}
+
+async function systemStatus() {
+  const sh = (cmd, args, timeout = 8000) =>
+    new Promise((resolve) =>
+      execFile(cmd, args, { cwd: ROOT, timeout }, (err, stdout) =>
+        resolve({ ok: !err, out: String(stdout || "").trim() })
+      )
+    );
+
+  let browser = null;
+  try {
+    browser = JSON.parse(await fs.readFile(path.join(DATA, ".browser-status.json"), "utf8"));
+  } catch {
+    /* probe has not run here yet */
+  }
+
+  const uid = process.getuid();
+  const [agent, sched, schedTime, spendRaw] = await Promise.all([
+    sh("launchctl", ["print", `gui/${uid}/com.jobseeker.browser`]),
+    sh("launchctl", ["print", `gui/${uid}/com.jobseeker.jobrun`]),
+    sh("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--show"]),
+    sh("node", [path.join(ROOT, "server", "record.mjs"), "list-spend", "--limit", "10"]),
+  ]);
+
+  let spend = { month_total_usd: 0, month_runs: 0, runs_recorded: 0, recent: [], month: "" };
+  try {
+    spend = JSON.parse(spendRaw.out);
+  } catch {
+    /* no ledger yet */
+  }
+
+  const wm = {};
+  try {
+    for (const r of (await readTable(path.join(DATA, "watermarks.md"))).rows) {
+      if (r.channel) wm[r.channel] = r.timestamp || "";
+    }
+  } catch {
+    /* none yet */
+  }
+  const ageDays = (iso) => {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : Math.floor((Date.now() - t) / 86400000);
+  };
+
+  let profileParsed = false;
+  try {
+    profileParsed = !/no cv parsed/i.test(await fs.readFile(path.join(DATA, "profile.md"), "utf8"));
+  } catch {
+    /* absent */
+  }
+
+  let config = {};
+  try {
+    config = parseFrontmatter(await fs.readFile(path.join(ROOT, "config", "job-seeker.config.md"), "utf8")).data || {};
+  } catch {
+    /* not configured yet — the form shows defaults */
+  }
+
+  return {
+    config,
+    browser,
+    agentInstalled: agent.ok,
+    schedInstalled: sched.ok,
+    schedTime: schedTime.out || "not scheduled",
+    spend,
+    channels: {
+      gmail: ageDays(wm.gmail),
+      whatsapp: ageDays(wm.whatsapp),
+      linkedin: ageDays(wm.linkedin),
+    },
+    profileParsed,
+  };
+}
+
 function todayHTML(all, dueToday, appTok, appIds) {
   const t = today();
   const tasks = all.tasks.rows.filter((r) => r.status === "open");
@@ -1208,12 +1406,13 @@ function settingsPage(all, flash) {
   const needing = boardRows.filter((r) => BOARD_UNREADABLE[r.access] || !String(r.endpoint || "").trim()).length;
   const vendorCount = (all.markets ?? []).reduce((n, m) => n + m.table.rows.length, 0);
   const TABS = [
+    { id: "setup", label: "Setup", count: null },
     { id: "criteria", label: "Criteria &amp; weights", count: null },
     { id: "markets", label: "Markets &amp; vendors", count: vendorCount },
     { id: "boards", label: "Careers boards", count: boardRows.length },
     { id: "cv", label: "CV / profile", count: null },
   ];
-  const active = TABS.some((x) => x.id === all.tab) ? all.tab : "criteria";
+  const active = TABS.some((x) => x.id === all.tab) ? all.tab : "setup";
   const on = (id) => id === active;
 
   return `<!doctype html><html lang="en"><head>
@@ -1235,6 +1434,7 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
+${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, setupHTML(all.status, all.criteria)))}
 ${tabPanel("criteria", on("criteria"), sec("criteria", `Criteria <span class="muted">— what the agents target and how they weight fit</span>`, criteriaFormHTML(all.criteria)))}
 ${tabPanel("markets", on("markets"), sec("markets", `Markets &amp; vendors <span class="muted">— ranked company lists, maintained by the prioritization agent</span>`, marketsHTML(all.markets)))}
 ${tabPanel("boards", on("boards"), sec("boards", `Careers boards <span class="muted">— where each company's jobs are read from (⚠️ = not found, ✏️ to paste it)</span>`, boardsHTML(all)))}
@@ -1355,6 +1555,18 @@ nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel .secbody .scroll tr:last-child td{border-bottom:0}
 th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
+/* Setup page */
+.cfgform{margin:0 0 26px}
+.cfggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px 18px;margin:0 0 18px}
+.cfggrid label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--mut)}
+.cfggrid input{padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg);font:inherit}
+.ok-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(46,160,67,.16);color:#3fb950}
+.bad-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
+form.inline{display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0}
+.btn-small{padding:5px 11px;font-size:12.5px;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg);cursor:pointer}
+.btn-small:hover{border-color:var(--acc)}
+.alert.warn ol{margin:8px 0 4px 18px;padding:0}
+.alert.warn li{margin:3px 0}
 /* Dates are fixed-width and meaningless when split across lines ("2026-07-" / "13"),
    so no date column may wrap even if a renderer forgets the .nw class. */
 table td:first-child{white-space:nowrap}
@@ -2009,6 +2221,80 @@ async function handleSetBoard(form) {
   return { company: merged.company, cleared: !endpoint };
 }
 
+// The config file was hand-edited only: of its keys, the UI edited none. This writes it through the
+// same frontmatter helpers everything else uses, preserving the comment body so the file stays
+// self-documenting for anyone who opens it in an editor.
+//
+// Allowlisted keys, not "whatever the form posted" — this writes a file the agents and the scheduler
+// read, and an unknown key silently accepted is a setting that appears to work and does nothing.
+const CONFIG_KEYS = [
+  "dashboard_port",
+  "approval_channels",
+  "whatsapp_owner_jid",
+  "apply_stop_before",
+  "whatsapp_web_enabled",
+  "linkedin_enabled",
+  "ignored_chats",
+  "company_aliases",
+  "max_spend_per_run_usd",
+  "max_spend_per_month_usd",
+];
+
+async function handleSaveConfig(form) {
+  const file = path.join(ROOT, "config", "job-seeker.config.md");
+  const existing = await safeRead(file);
+  const { data, body } = parseFrontmatter(existing);
+  const merged = { ...data };
+  for (const k of CONFIG_KEYS) {
+    if (!(k in form)) continue; // absent field = not on this form, leave it alone
+    merged[k] = sanitizeCell(String(form[k] ?? "").trim());
+  }
+  // Numbers must be numbers or blank; a typo here would otherwise be compared as a string and
+  // silently disable a spend cap.
+  for (const k of ["max_spend_per_run_usd", "max_spend_per_month_usd"]) {
+    const v = String(merged[k] ?? "").trim();
+    if (v && !/^\d+(\.\d+)?$/.test(v)) {
+      throw new Error(`${k} must be a number or blank (got ${JSON.stringify(v)})`);
+    }
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await writeFileAtomic(file, stringifyFrontmatter(merged, body || "", Object.keys(merged)));
+  await logActivity("config-edit", `Updated settings: ${CONFIG_KEYS.filter((k) => k in form).join(", ")}`);
+}
+
+// Actions the Setup page may run. An ALLOWLIST of named actions mapped to fixed scripts — never a
+// command from the request. This endpoint changes OS state (installs launch agents), so the set of
+// things it can do is closed and auditable, exactly as scripts/browser-agent.sh does.
+const ACTIONS = new Map([
+  ["probe", { script: "scripts/browser-probe.mjs", runner: "node", detached: false }],
+  ["install-browser-agent", { script: "scripts/install-browser-agent.sh", runner: "bash", detached: false }],
+  ["set-schedule", { script: "scripts/set-schedule.sh", runner: "bash", detached: false, arg: "time" }],
+  ["remove-schedule", { script: "scripts/set-schedule.sh", runner: "bash", detached: false, fixedArgs: ["--remove"] }],
+]);
+
+async function handleRunAction(form) {
+  const name = String(form.action_name || "");
+  const spec = ACTIONS.get(name);
+  if (!spec) throw new Error(`Unknown action: ${JSON.stringify(name).slice(0, 40)}`);
+
+  const args = [path.join(ROOT, spec.script), ...(spec.fixedArgs || [])];
+  if (spec.arg === "time") {
+    const t = String(form.time || "").trim();
+    // Validated here as well as in the script: defence in depth on the boundary that faces the web.
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new Error(`Invalid time ${JSON.stringify(t)} — expected HH:MM`);
+    args.push(t);
+  }
+
+  const out = await new Promise((resolve) => {
+    execFile(spec.runner, args, { cwd: ROOT, timeout: 120_000 }, (err, stdout, stderr) =>
+      resolve({ ok: !err, text: String(stdout || stderr || err?.message || "").trim() })
+    );
+  });
+  await logActivity("setup-action", `${name}: ${out.ok ? "ok" : "failed"} — ${out.text.slice(0, 120)}`);
+  if (!out.ok) throw new Error(out.text.split("\n")[0] || `${name} failed`);
+  return out.text.split("\n").filter(Boolean).pop() || `${name} done`;
+}
+
 async function handleSaveCriteria(form) {
   const file = path.join(DATA, "criteria.md");
   const { body } = parseFrontmatter(await safeRead(file));
@@ -2293,6 +2579,23 @@ function crossSitePost(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
+    // First run: if there is no config and no targeting, the dashboard is useless and the user has
+    // nowhere obvious to start. Send them to Setup once. Any query string (including the flash
+    // params a redirect adds) means they have been somewhere deliberately, so this cannot loop.
+    if (req.method === "GET" && url.pathname === "/" && !url.search) {
+      const unconfigured = await (async () => {
+        try {
+          await fs.access(path.join(ROOT, "config", "job-seeker.config.md"));
+          return false;
+        } catch {
+          return true;
+        }
+      })();
+      if (unconfigured) {
+        res.writeHead(302, { location: "/settings?tab=setup&flash=ok&msg=" + encodeURIComponent("Welcome — set these up once and JobSeeker can start.") });
+        return res.end();
+      }
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/settings")) {
       const all = await loadAll();
       // The active tab is chosen server-side from ?tab= so there is no flash of the wrong pane, and
@@ -2351,6 +2654,22 @@ async function handlePost(req, res, url) {
   // Stamped by the client on every POST form so redirect() can return you to the same pane.
   res._returnTab = form._tab || "";
   res._returnPage = form._page || "";
+  if (url.pathname === "/save-config") {
+    try {
+      await handleSaveConfig(form);
+      return redirect(res, { kind: "ok", msg: "Settings saved." });
+    } catch (e) {
+      return redirect(res, { kind: "err", msg: e.message });
+    }
+  }
+  if (url.pathname === "/run-action") {
+    try {
+      const msg = await handleRunAction(form);
+      return redirect(res, { kind: "ok", msg });
+    } catch (e) {
+      return redirect(res, { kind: "err", msg: e.message });
+    }
+  }
   if (url.pathname === "/save-criteria") {
     await handleSaveCriteria(form);
     return redirect(res, { kind: "ok", msg: "Criteria saved." });
