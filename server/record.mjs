@@ -18,9 +18,13 @@
 //   node server/record.mjs dismissal-patterns          -> why roles get rejected, so scouts stop repeating them
 //   node server/record.mjs list-keys                    -> dedupe keys, skip flags, seen_req_ids, repost_of
 //   node server/record.mjs list-proposals [--since d] [--limit n] [--status s] -> digest rows with exact job_url
+//   node server/record.mjs add-spend '<json>'          -> record what a run cost
+//   node server/record.mjs list-spend [--month YYYY-MM] [--limit n] -> month total + recent runs
 //   node server/record.mjs get-watermark <channel>      -> last swept timestamp for gmail|whatsapp|linkedin
 //   node server/record.mjs set-watermark <channel> <iso> [note]
-//   node server/record.mjs list-boards [access|needs-browser] -> the registry; needs-browser = blocked+browser
+//   node server/record.mjs list-boards [access|needs-browser] [--include-dismissed] -> the registry
+//   node server/record.mjs dismiss-board '<company>' [reason] -> stop surfacing a board
+//   node server/record.mjs restore-board '<company>'          -> undo that
 //   node server/record.mjs get-board <company>          -> one company's board + how to read it
 //   node server/record.mjs upsert-board '<json>'        -> record what you learned about a board
 //
@@ -749,6 +753,69 @@ async function listKeys() {
   return { applications: appRows, proposals: propRows, seen_req_ids };
 }
 
+// ---- spend ----
+//
+// What a run COST was never recorded anywhere: the log printed the budget LIMIT ("budget $10") and
+// then nothing, so there was no way to answer "what is this costing me" or to enforce a ceiling
+// across runs. `claude -p --output-format json` returns total_cost_usd, and job-run.sh now writes it
+// here.
+//
+// A plain Markdown table, like every other log in this project, so it is readable and editable by
+// hand and needs no new machinery.
+const SPEND_FILE = path.join(DATA, "spend.md");
+const SPEND_TEMPLATE =
+  "# Spend\n\n" +
+  "One row per run. `cost_usd` comes from `claude -p --output-format json` (`total_cost_usd`).\n" +
+  "History starts the day capture was added — earlier runs were never measured.\n\n" +
+  "| date | started | cost_usd | outcome | detail |\n" +
+  "|------|---------|----------|---------|--------|\n";
+
+async function addSpend(input) {
+  const obj = typeof input === "string" ? JSON.parse(input) : input;
+  await ensureTable(SPEND_FILE, SPEND_TEMPLATE);
+  const started = obj.started || new Date().toISOString();
+  const cost = Number(obj.cost_usd || 0);
+  await appendTableRow(SPEND_FILE, {
+    date: String(started).slice(0, 10),
+    started,
+    // Fixed 4dp: a run can legitimately cost fractions of a cent, and floating point noise in a
+    // table nobody can read helps nobody.
+    cost_usd: cost.toFixed(4),
+    outcome: sanitizeCell(obj.outcome || ""),
+    detail: sanitizeCell(obj.detail || ""),
+  });
+  return { action: "recorded", cost_usd: Number(cost.toFixed(4)) };
+}
+
+// Totals the caller needs to decide whether to run at all, plus recent history for the dashboard.
+//   node server/record.mjs list-spend [--month YYYY-MM] [--limit N]
+async function listSpend({ month = null, limit = 10 } = {}) {
+  let rows = [];
+  try {
+    rows = (await readTable(SPEND_FILE)).rows;
+  } catch {
+    /* no ledger yet — that is a valid, empty answer */
+  }
+  const m = month || new Date().toISOString().slice(0, 7);
+  const inMonth = rows.filter((r) => String(r.date || "").startsWith(m));
+  const sum = (list) => list.reduce((a, r) => a + (Number(r.cost_usd) || 0), 0);
+  const recent = rows.slice(-Math.max(1, limit)).reverse();
+  return {
+    month: m,
+    month_total_usd: Number(sum(inMonth).toFixed(4)),
+    month_runs: inMonth.length,
+    all_time_usd: Number(sum(rows).toFixed(4)),
+    runs_recorded: rows.length,
+    recent: recent.map((r) => ({
+      date: r.date,
+      started: r.started,
+      cost_usd: Number(r.cost_usd) || 0,
+      outcome: r.outcome || "",
+      detail: r.detail || "",
+    })),
+  };
+}
+
 // ---- watermarks ----
 // "What had I already seen last time?" for each channel, in one place. chat-tracker had its own
 // data/.chat-watermark.md while inbox-tracker inferred its window by eyeballing the newest date
@@ -819,7 +886,9 @@ async function setWatermark(channel, timestamp, note) {
 //             Transient: it becomes json/html/blocked/none within seconds. If a row is still
 //             `pending` minutes later, discovery died — treat it as unknown and investigate.
 const BOARDS_FILE = path.join(DATA, "boards.md");
-const BOARD_HEADERS = ["company", "market", "ats", "endpoint", "access", "volatile", "last_verified", "notes"];
+// `dismissed` holds the date a board was written off, or "" for a live one. A date rather than a
+// flag because "when did we give up on this" is the thing you actually want to know later.
+const BOARD_HEADERS = ["company", "market", "ats", "endpoint", "access", "volatile", "last_verified", "notes", "dismissed"];
 const BOARD_ACCESS = new Set(["json", "html", "browser", "blocked", "none", "manual", "pending"]);
 const BOARDS_TEMPLATE =
   "# ATS / careers-board registry\n\n" +
@@ -838,7 +907,26 @@ function boardKey(company) {
     .trim();
 }
 
+// The registry predates the `dismissed` column, so its header row has to be upgraded in place the
+// first time we touch it. Rows are left alone: the column is last, so an 8-cell row reads as
+// dismissed:"" — a live board, which is the correct default.
+async function migrateBoardHeader() {
+  let text;
+  try {
+    text = await fs.readFile(BOARDS_FILE, "utf8");
+  } catch {
+    return; // no file yet; the template already has the column
+  }
+  const lines = text.split("\n");
+  const h = lines.findIndex((l) => /^\s*\|\s*company\s*\|/.test(l));
+  if (h < 0 || /\|\s*dismissed\s*\|/.test(lines[h])) return;
+  lines[h] = `| ${BOARD_HEADERS.join(" | ")} |`;
+  lines[h + 1] = `|${BOARD_HEADERS.map(() => "---").join("|")}|`;
+  await writeFileAtomic(BOARDS_FILE, lines.join("\n"));
+}
+
 async function readBoards() {
+  await migrateBoardHeader();
   await ensureTable(BOARDS_FILE, BOARDS_TEMPLATE);
   const { rows } = await readTable(BOARDS_FILE);
   return rows;
@@ -853,8 +941,11 @@ async function getBoard(company) {
   return { found: true, ...hit };
 }
 
-async function listBoards(access) {
-  const rows = await readBoards();
+async function listBoards(access, { includeDismissed = false } = {}) {
+  const all = await readBoards();
+  // Dismissed boards are invisible to scouts by default. They stay in the file so the decision is
+  // recoverable and auditable, but they must not reappear as work.
+  const rows = includeDismissed ? all : all.filter((r) => !String(r.dismissed || "").trim());
   // `needs-browser` is the queue that matters operationally: boards that exist but refuse scripted
   // access (blocked) or are JS-rendered (browser). They are NOT dead ends — they are work waiting
   // for a Chrome-enabled run. See AGENT-RULES §12.
@@ -880,6 +971,23 @@ async function listBoards(access) {
   };
 }
 
+// node server/record.mjs dismiss-board '<company>' [reason]   -> stop surfacing it
+// node server/record.mjs restore-board '<company>'             -> bring it back
+async function setBoardDismissed(company, dismissed, reason = "") {
+  if (!company) throw new Error("needs a company name");
+  const rows = await readBoards();
+  const key = boardKey(canonicalCompany(company));
+  const row = rows.find((r) => boardKey(canonicalCompany(r.company)) === key);
+  if (!row) throw new Error(`no board row for ${JSON.stringify(company)}`);
+  const note = reason ? `${today()} ${dismissed ? "dismissed" : "restored"}: ${reason}` : "";
+  await upsertBoard({
+    company: row.company,
+    dismissed: dismissed ? today() : "",
+    notes: note ? `${row.notes ? row.notes + " · " : ""}${note}` : row.notes,
+  });
+  return { action: dismissed ? "dismissed" : "restored", company: row.company };
+}
+
 async function upsertBoard(obj) {
   if (!obj?.company) throw new Error("upsert-board needs at least {company, access}");
   if (obj.access && !BOARD_ACCESS.has(obj.access)) {
@@ -901,6 +1009,9 @@ async function upsertBoard(obj) {
     volatile: obj.volatile ?? prev.volatile ?? "no",
     last_verified: obj.last_verified ?? today(),
     notes: obj.notes ?? prev.notes ?? "",
+    // Sticky on purpose: a scout re-probing this company must never undismiss it -- that is the
+    // whole point of removing it. Only an explicit dismissed:"" (Restore) clears it.
+    dismissed: obj.dismissed ?? prev.dismissed ?? "",
   };
   const text = await fs.readFile(BOARDS_FILE, "utf8");
   const lines = text.split("\n");
@@ -1008,17 +1119,37 @@ async function dispatch(cmd, rest) {
       });
       break;
     }
+    case "add-spend":
+      result = await addSpend(rest[0]);
+      break;
+    case "list-spend": {
+      const f = (n, d = null) => {
+        const i = rest.indexOf(n);
+        return i >= 0 && rest[i + 1] ? rest[i + 1] : d;
+      };
+      result = await listSpend({ month: f("--month"), limit: Number(f("--limit", 10)) || 10 });
+      break;
+    }
     case "get-watermark":
       result = await getWatermark(rest[0]);
       break;
     case "set-watermark":
       result = await setWatermark(rest[0], rest[1], rest.slice(2).join(" "));
       break;
+    case "dismiss-board":
+      result = await setBoardDismissed(rest[0], true, rest[1] || "");
+      break;
+    case "restore-board":
+      result = await setBoardDismissed(rest[0], false, rest[1] || "");
+      break;
     case "get-board":
       result = await getBoard(rest.join(" ").trim());
       break;
     case "list-boards":
-      result = await listBoards(rest[0]);
+      result = await listBoards(
+        rest.find((a) => !a.startsWith("--")),
+        { includeDismissed: rest.includes("--include-dismissed") }
+      );
       break;
     case "upsert-board":
       result = await upsertBoard(parseArg(rest[0]));

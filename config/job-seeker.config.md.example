@@ -11,23 +11,15 @@ approval_channels: whatsapp, chat
 # Your paired WhatsApp owner JID (approvals are sent here). Leave blank to auto-detect the owner.
 whatsapp_owner_jid:
 
-# Apply agent browser engine: chrome (Claude-in-Chrome, drives your logged-in Chrome) or playwright.
-apply_engine: chrome
 # Where the apply agent PAUSES for your approval before continuing.
 # Comma list of checkpoints: each_section, file_upload, unknown_question, submit
 apply_stop_before: unknown_question, submit
-# Drive your already-logged-in Chrome profile (so you stay signed in on job sites).
-apply_use_chrome_profile: true
 
 # Message tracking via your logged-in Chrome (chat-tracker, read-only, interactive/local).
 # Reads your PERSONAL WhatsApp Web and LinkedIn messages — not the paired Claude WhatsApp channel.
 whatsapp_web_enabled: true
-# LinkedIn messages: read via Chrome by chat-tracker (read-mostly per ToS).
+# LinkedIn messages: read via Chrome by chat-tracker (read-only per ToS).
 linkedin_enabled: true
-linkedin_mode: read-only
-
-# Local scheduler cadence (cron expression used by the launchd/cron entrypoint).
-schedule_job_run: 0 8 * * *
 
 # Chats that must NEVER be logged (comma list, matched as a case-insensitive prefix on the chat
 # name). Group communities, family threads, anything out of scope for a job search. Empty = log
@@ -38,6 +30,14 @@ ignored_chats:
 # a rebrand, an agency trading name. Comma list of `from=Canonical` pairs; the left side is matched
 # case- and punctuation-insensitively. Example: acquiredco=Parent Company
 company_aliases:
+
+# Spend controls. Costs come from the run itself (claude --output-format json) and are logged to
+# data/spend.md, which the dashboard reads.
+# Per-run cap, passed to claude as --max-budget-usd. A run that hits it stops and says so.
+max_spend_per_run_usd: 5
+# Optional ceiling for the calendar month. Blank = no ceiling. When month-to-date already exceeds
+# this, the scheduled run DOES NOT START and says so loudly — it is never a silent skip.
+max_spend_per_month_usd:
 
 ---
 

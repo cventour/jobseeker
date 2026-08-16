@@ -27,7 +27,9 @@ STATUS="$LOG_DIR/.job-run.status.json"
 
 # Tunables (override via the environment, e.g. in the launchd plist).
 TIMEOUT_SECS="${JOBRUN_TIMEOUT_SECS:-2700}"   # 45 min
-MAX_BUDGET_USD="${JOBRUN_MAX_BUDGET_USD:-5}"
+# Per-run cap. Config is the source of truth so the dashboard can change it; the env var stays as
+# an override for one-off manual runs.
+MAX_BUDGET_USD="${JOBRUN_MAX_BUDGET_USD:-}"
 ATTEMPTS="${JOBRUN_ATTEMPTS:-2}"              # initial try + 1 retry
 RETRY_SLEEP="${JOBRUN_RETRY_SLEEP:-60}"
 # Memory guard. Defaults leave plenty of room for a healthy run (the session itself sits around
@@ -116,6 +118,8 @@ run_with_timeout() {
 # ones with a dead parent. That does mean an interactive session open at 08:00 loses WhatsApp for
 # the rest of its life; the scheduled digest is the higher priority, and the session gets it back on
 # restart. Set JOBRUN_REAP_WHATSAPP=0 to disable.
+
+
 reap_whatsapp_mcp() {
   [ "${JOBRUN_REAP_WHATSAPP:-1}" = "1" ] || { echo "whatsapp reaping disabled"; return 0; }
   local pids
@@ -137,7 +141,52 @@ reap_whatsapp_mcp() {
   echo "whatsapp MCP: link released; claude will spawn a fresh instance on start"
 }
 
+# launchd gives a minimal PATH; resolve node once rather than at each call site.
+NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
+COST_FILE="$(mktemp)"
+trap 'rm -f "$COST_FILE"' EXIT
+
+# ---- spend caps -------------------------------------------------------------------------------
+# Read from config/job-seeker.config.md so the dashboard owns them. Falls back to a sane per-run cap
+# and NO monthly ceiling, because a ceiling nobody set must never block a run.
+read_cfg() {
+  "$NODE_BIN" -e '
+    const fs=require("fs");
+    try{
+      const t=fs.readFileSync("config/job-seeker.config.md","utf8");
+      const m=new RegExp("^"+process.argv[1]+":[ \\t]*(.*)$","m").exec(t);
+      process.stdout.write(m && m[1] ? m[1].trim() : "");
+    }catch{ process.stdout.write(""); }
+  ' "$1" 2>/dev/null
+}
+[ -n "$MAX_BUDGET_USD" ] || MAX_BUDGET_USD="$(read_cfg max_spend_per_run_usd)"
+[ -n "$MAX_BUDGET_USD" ] || MAX_BUDGET_USD=5
+MONTH_CAP="$(read_cfg max_spend_per_month_usd)"
+
+# Stamped before the ceiling gate, because a refused run still writes a status file and that file
+# needs a start time like any other.
 STARTED="$(iso_now)"
+
+# ---- monthly ceiling -------------------------------------------------------------------------
+# Checked BEFORE any work starts, because the point is to not spend the money. A blocked run is
+# the one thing here that must never be quiet: it writes its own state, notifies, and says exactly
+# how to lift it. A silent skip would look identical to a run that simply found nothing.
+if [ -n "$MONTH_CAP" ]; then
+  SPENT="$("$NODE_BIN" "$REPO/server/record.mjs" list-spend 2>/dev/null \
+    | "$NODE_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+        try{process.stdout.write(String(JSON.parse(s).month_total_usd||0))}catch{process.stdout.write("0")}})' )"
+  OVER="$("$NODE_BIN" -e 'process.stdout.write(Number(process.argv[1])>=Number(process.argv[2])?"1":"0")' "$SPENT" "$MONTH_CAP")"
+  if [ "$OVER" = "1" ]; then
+    echo "MONTHLY SPEND CEILING REACHED: \$$SPENT of \$$MONTH_CAP this month — not starting."
+    echo "Raise max_spend_per_month_usd in the dashboard (Settings) or in config/job-seeker.config.md."
+    write_status "skipped-budget" 0 "month-to-date \$$SPENT reached the \$$MONTH_CAP ceiling; run not started"
+    notify "JobSeeker did not run" "Monthly spend ceiling reached (\$$SPENT of \$$MONTH_CAP). Raise it in Settings."
+    "$NODE_BIN" "$REPO/server/record.mjs" log run-skipped "monthly spend ceiling reached: \$$SPENT of \$$MONTH_CAP" >/dev/null 2>&1
+    exit 0
+  fi
+  echo "spend this month: \$$SPENT of \$$MONTH_CAP ceiling"
+fi
+
 write_status "running" 0 "in progress"
 
 {
@@ -177,9 +226,32 @@ write_status "running" 0 "in progress"
     # applies or sends on its own.
     # Tells /job-run this is the scheduled run rather than a manual one, so the run-start row in
     # the activity log says which.
-    JOBRUN_SOURCE=scheduled \
-      run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" --max-budget-usd "$MAX_BUDGET_USD"
-    rc=$?
+      # --output-format json so the run's ACTUAL cost can be recorded. Previously the log printed
+      # the budget LIMIT and never the spend, so "what is this costing me" had no answer and a
+      # ceiling across runs was impossible. The JSON carries `result` (the narrative) alongside
+      # `total_cost_usd`, so the readable log survives -- extracted back out below.
+      RESP="$(mktemp)"
+      JOBRUN_SOURCE=scheduled \
+        run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
+          --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP" 2>&1
+      rc=$?
+
+      # Put the narrative back in the log, so this costs nothing in readability. If the response is
+      # not JSON (a crash, a watchdog kill) print it raw rather than losing it.
+      "$NODE_BIN" -e '
+        const fs = require("fs");
+        const raw = fs.readFileSync(process.argv[1], "utf8");
+        try {
+          const d = JSON.parse(raw);
+          if (d.result) process.stdout.write(d.result + "\n");
+          if (typeof d.total_cost_usd === "number") {
+            fs.writeFileSync(process.argv[2], String(d.total_cost_usd));
+            process.stdout.write("\n---- cost $" + d.total_cost_usd.toFixed(4) +
+              "  " + (d.num_turns ?? "?") + " turns ----\n");
+          }
+        } catch { process.stdout.write(raw); }
+      ' "$RESP" "$COST_FILE" 2>/dev/null || cat "$RESP"
+      rm -f "$RESP"
     if [ $rc -eq 0 ]; then
       echo "---- attempt $attempt succeeded ----"
       break
@@ -192,6 +264,18 @@ write_status "running" 0 "in progress"
     fi
     [ "$attempt" -lt "$ATTEMPTS" ] && { echo "retrying in ${RETRY_SLEEP}s..."; sleep "$RETRY_SLEEP"; }
   done
+
+    # Record what it cost, whatever the outcome. A failed or timed-out run still spends money, and
+    # a ledger that only counts successes would understate the month and let the ceiling be
+    # overshot silently.
+    if [ -s "$COST_FILE" ]; then
+      COST="$(cat "$COST_FILE")"
+      "$NODE_BIN" "$REPO/server/record.mjs" add-spend "{\"started\":\"$STARTED\",\"cost_usd\":$COST,\"outcome\":\"$([ $rc -eq 0 ] && echo ok || echo failed)\",\"detail\":\"attempt $attempt of $ATTEMPTS\"}" >/dev/null 2>&1 \
+        && echo "spend recorded: \$$COST"
+    else
+      echo "spend NOT recorded — no cost returned (crash, timeout, or non-JSON response)"
+    fi
+
 
   # A run that dies mid-write leaves the advisory lock behind; it self-heals after 60s (see
   # server/lock.mjs) but clearing it here means the dashboard is responsive immediately.

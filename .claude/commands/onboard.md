@@ -68,7 +68,11 @@ weight_cv: 0.25
 
 **`config/job-seeker.config.md`** — `cat` it first, then rewrite it updating only these keys and
 preserving the rest: `approval_channels`, `whatsapp_owner_jid`, `apply_stop_before`,
-`schedule_job_run` (convert my time to a cron expr, e.g. 08:00 → `0 8 * * *`), `linkedin_enabled`.
+`linkedin_enabled`.
+
+**Do NOT write a `schedule_job_run` key.** It used to exist and nothing read it — the real
+schedule lives in the launchd plist. Set the time with `scripts/set-schedule.sh HH:MM`, or point me
+at the dashboard's Setup page, which does the same thing.
 
 **`templates/answers.md`** (overwrite; this file is gitignored):
 ```

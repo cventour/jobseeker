@@ -105,12 +105,18 @@ export async function writeRecord(dir, id, data, body = "", order = null) {
 
 // ---------- Table logs ----------
 
+// sanitizeCell() escapes a literal pipe as \| on the way in, so the reader has to honour that on the
+// way out. It did not: it split on every |, so any cell containing a pipe silently shifted the rest
+// of the row one column to the right. Real damage, found in the wild -- seven board rows had notes
+// with pipes in them, and communications.md and activity.md were misaligned the same way. Reading
+// and writing must agree about the escape or the table is quietly lossy.
 const splitRow = (line) =>
   line
     .replace(/^\s*\|/, "")
-    .replace(/\|\s*$/, "")
-    .split("|")
-    .map((c) => c.trim());
+    .replace(/(?<!\\)\|\s*$/, "")
+    // Split on pipes that are NOT preceded by a backslash, then unescape.
+    .split(/(?<!\\)\|/)
+    .map((c) => c.replace(/\\\|/g, "|").trim());
 
 // Parse the first Markdown table found. Returns { headers, rows } where each row is an
 // object keyed by header. Separator row (---|---) is skipped.
@@ -163,10 +169,13 @@ export async function appendTableRow(file, rowObj, where = "bottom") {
 }
 
 // Table cells can't contain raw pipes or newlines — escape/flatten defensively.
+// Idempotent on purpose. Several callers in record.mjs sanitize a field and then hand it to
+// appendTableRow, which sanitizes every cell again -- so a pipe was being escaped twice (\| then
+// \\|) and read back with a stray backslash. Only escape a pipe that is not already escaped.
 export function sanitizeCell(v) {
   return String(v ?? "")
     .replace(/\r?\n/g, " ")
-    .replace(/\|/g, "\\|")
+    .replace(/(?<!\\)\|/g, "\\|")
     .trim();
 }
 

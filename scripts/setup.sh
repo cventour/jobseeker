@@ -148,21 +148,12 @@ else
   say ""
   case "$SCHED_ANSWER" in
     y)
-      PLIST="$HOME/Library/LaunchAgents/$SCHED_LABEL.plist"
-      chmod +x "$REPO/scripts/job-run.sh"
-      # '#' as the sed delimiter: repo paths contain '/' and may contain other regex-ish characters.
-      sed -e "s#__REPO__#$REPO#g" -e "s#__PATH__#$PATH#g" \
-        "$REPO/scripts/$SCHED_LABEL.plist.example" > "$PLIST"
-      if plutil -lint "$PLIST" >/dev/null 2>&1; then
-        launchctl bootout "gui/$(id -u)/$SCHED_LABEL" 2>/dev/null
-        if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
-          done_ "08:00 daily run scheduled ($SCHED_LABEL)"; SCHED_INSTALLED=1
-        else
-          fail "plist written but launchctl bootstrap failed — see docs/SCHEDULER.md"
-        fi
+      # Delegate: scripts/set-schedule.sh owns plist authoring, linting and launchctl, so setup
+      # and the dashboard cannot drift into two different behaviours.
+      if bash "$REPO/scripts/set-schedule.sh" 08:00 >/dev/null 2>&1; then
+        done_ "08:00 daily run scheduled ($SCHED_LABEL)"; SCHED_INSTALLED=1
       else
-        fail "generated plist is malformed — not loaded. See docs/SCHEDULER.md"
-        rm -f "$PLIST"
+        fail "could not schedule the daily run — see docs/SCHEDULER.md"
       fi
       ;;
     *) skip "08:00 scheduler — declined (run npm run setup again to add it later)" ;;

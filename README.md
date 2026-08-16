@@ -179,7 +179,10 @@ And two things you run in the terminal:
 
 ```bash
 npm run dashboard    # the web view, at http://localhost:4319
+                     #   Settings > Setup configures everything: targeting, spend caps,
+                     #   the daily run time, and a live check of what is working
 npm run audit        # a plain-text health check of your whole pipeline
+npm run schedule -- 09:00   # move the daily run (--show / --remove)
 ```
 
 ## Documentation
