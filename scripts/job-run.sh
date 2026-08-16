@@ -137,6 +137,11 @@ reap_whatsapp_mcp() {
   echo "whatsapp MCP: link released; claude will spawn a fresh instance on start"
 }
 
+# launchd gives a minimal PATH; resolve node once rather than at each call site.
+NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
+COST_FILE="$(mktemp)"
+trap 'rm -f "$COST_FILE"' EXIT
+
 STARTED="$(iso_now)"
 write_status "running" 0 "in progress"
 
@@ -177,9 +182,32 @@ write_status "running" 0 "in progress"
     # applies or sends on its own.
     # Tells /job-run this is the scheduled run rather than a manual one, so the run-start row in
     # the activity log says which.
-    JOBRUN_SOURCE=scheduled \
-      run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" --max-budget-usd "$MAX_BUDGET_USD"
-    rc=$?
+      # --output-format json so the run's ACTUAL cost can be recorded. Previously the log printed
+      # the budget LIMIT and never the spend, so "what is this costing me" had no answer and a
+      # ceiling across runs was impossible. The JSON carries `result` (the narrative) alongside
+      # `total_cost_usd`, so the readable log survives -- extracted back out below.
+      RESP="$(mktemp)"
+      JOBRUN_SOURCE=scheduled \
+        run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
+          --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP" 2>&1
+      rc=$?
+
+      # Put the narrative back in the log, so this costs nothing in readability. If the response is
+      # not JSON (a crash, a watchdog kill) print it raw rather than losing it.
+      "$NODE_BIN" -e '
+        const fs = require("fs");
+        const raw = fs.readFileSync(process.argv[1], "utf8");
+        try {
+          const d = JSON.parse(raw);
+          if (d.result) process.stdout.write(d.result + "\n");
+          if (typeof d.total_cost_usd === "number") {
+            fs.writeFileSync(process.argv[2], String(d.total_cost_usd));
+            process.stdout.write("\n---- cost $" + d.total_cost_usd.toFixed(4) +
+              "  " + (d.num_turns ?? "?") + " turns ----\n");
+          }
+        } catch { process.stdout.write(raw); }
+      ' "$RESP" "$COST_FILE" 2>/dev/null || cat "$RESP"
+      rm -f "$RESP"
     if [ $rc -eq 0 ]; then
       echo "---- attempt $attempt succeeded ----"
       break
@@ -192,6 +220,18 @@ write_status "running" 0 "in progress"
     fi
     [ "$attempt" -lt "$ATTEMPTS" ] && { echo "retrying in ${RETRY_SLEEP}s..."; sleep "$RETRY_SLEEP"; }
   done
+
+    # Record what it cost, whatever the outcome. A failed or timed-out run still spends money, and
+    # a ledger that only counts successes would understate the month and let the ceiling be
+    # overshot silently.
+    if [ -s "$COST_FILE" ]; then
+      COST="$(cat "$COST_FILE")"
+      "$NODE_BIN" "$REPO/server/record.mjs" add-spend "{\"started\":\"$STARTED\",\"cost_usd\":$COST,\"outcome\":\"$([ $rc -eq 0 ] && echo ok || echo failed)\",\"detail\":\"attempt $attempt of $ATTEMPTS\"}" >/dev/null 2>&1 \
+        && echo "spend recorded: \$$COST"
+    else
+      echo "spend NOT recorded — no cost returned (crash, timeout, or non-JSON response)"
+    fi
+
 
   # A run that dies mid-write leaves the advisory lock behind; it self-heals after 60s (see
   # server/lock.mjs) but clearing it here means the dashboard is responsive immediately.

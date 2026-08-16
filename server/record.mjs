@@ -18,6 +18,8 @@
 //   node server/record.mjs dismissal-patterns          -> why roles get rejected, so scouts stop repeating them
 //   node server/record.mjs list-keys                    -> dedupe keys, skip flags, seen_req_ids, repost_of
 //   node server/record.mjs list-proposals [--since d] [--limit n] [--status s] -> digest rows with exact job_url
+//   node server/record.mjs add-spend '<json>'          -> record what a run cost
+//   node server/record.mjs list-spend [--month YYYY-MM] [--limit n] -> month total + recent runs
 //   node server/record.mjs get-watermark <channel>      -> last swept timestamp for gmail|whatsapp|linkedin
 //   node server/record.mjs set-watermark <channel> <iso> [note]
 //   node server/record.mjs list-boards [access|needs-browser] -> the registry; needs-browser = blocked+browser
@@ -749,6 +751,69 @@ async function listKeys() {
   return { applications: appRows, proposals: propRows, seen_req_ids };
 }
 
+// ---- spend ----
+//
+// What a run COST was never recorded anywhere: the log printed the budget LIMIT ("budget $10") and
+// then nothing, so there was no way to answer "what is this costing me" or to enforce a ceiling
+// across runs. `claude -p --output-format json` returns total_cost_usd, and job-run.sh now writes it
+// here.
+//
+// A plain Markdown table, like every other log in this project, so it is readable and editable by
+// hand and needs no new machinery.
+const SPEND_FILE = path.join(DATA, "spend.md");
+const SPEND_TEMPLATE =
+  "# Spend\n\n" +
+  "One row per run. `cost_usd` comes from `claude -p --output-format json` (`total_cost_usd`).\n" +
+  "History starts the day capture was added — earlier runs were never measured.\n\n" +
+  "| date | started | cost_usd | outcome | detail |\n" +
+  "|------|---------|----------|---------|--------|\n";
+
+async function addSpend(input) {
+  const obj = typeof input === "string" ? JSON.parse(input) : input;
+  await ensureTable(SPEND_FILE, SPEND_TEMPLATE);
+  const started = obj.started || new Date().toISOString();
+  const cost = Number(obj.cost_usd || 0);
+  await appendTableRow(SPEND_FILE, {
+    date: String(started).slice(0, 10),
+    started,
+    // Fixed 4dp: a run can legitimately cost fractions of a cent, and floating point noise in a
+    // table nobody can read helps nobody.
+    cost_usd: cost.toFixed(4),
+    outcome: sanitizeCell(obj.outcome || ""),
+    detail: sanitizeCell(obj.detail || ""),
+  });
+  return { action: "recorded", cost_usd: Number(cost.toFixed(4)) };
+}
+
+// Totals the caller needs to decide whether to run at all, plus recent history for the dashboard.
+//   node server/record.mjs list-spend [--month YYYY-MM] [--limit N]
+async function listSpend({ month = null, limit = 10 } = {}) {
+  let rows = [];
+  try {
+    rows = (await readTable(SPEND_FILE)).rows;
+  } catch {
+    /* no ledger yet — that is a valid, empty answer */
+  }
+  const m = month || new Date().toISOString().slice(0, 7);
+  const inMonth = rows.filter((r) => String(r.date || "").startsWith(m));
+  const sum = (list) => list.reduce((a, r) => a + (Number(r.cost_usd) || 0), 0);
+  const recent = rows.slice(-Math.max(1, limit)).reverse();
+  return {
+    month: m,
+    month_total_usd: Number(sum(inMonth).toFixed(4)),
+    month_runs: inMonth.length,
+    all_time_usd: Number(sum(rows).toFixed(4)),
+    runs_recorded: rows.length,
+    recent: recent.map((r) => ({
+      date: r.date,
+      started: r.started,
+      cost_usd: Number(r.cost_usd) || 0,
+      outcome: r.outcome || "",
+      detail: r.detail || "",
+    })),
+  };
+}
+
 // ---- watermarks ----
 // "What had I already seen last time?" for each channel, in one place. chat-tracker had its own
 // data/.chat-watermark.md while inbox-tracker inferred its window by eyeballing the newest date
@@ -1006,6 +1071,17 @@ async function dispatch(cmd, rest) {
         limit: Number(flag("--limit", 0)) || 0,
         status: flag("--status", "proposed"),
       });
+      break;
+    }
+    case "add-spend":
+      result = await addSpend(rest[0]);
+      break;
+    case "list-spend": {
+      const f = (n, d = null) => {
+        const i = rest.indexOf(n);
+        return i >= 0 && rest[i + 1] ? rest[i + 1] : d;
+      };
+      result = await listSpend({ month: f("--month"), limit: Number(f("--limit", 10)) || 10 });
       break;
     }
     case "get-watermark":
