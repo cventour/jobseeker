@@ -667,7 +667,10 @@ function addCompanyFormHTML(market) {
 // they are highlighted at the top with an ✏️ to paste it, and everything already working collapses
 // out of the way underneath.
 function boardsHTML(all) {
-  const rows = all.boards?.rows ?? [];
+  // Dismissed boards are gone from the user's view as well as the scouts'. They remain in
+  // data/boards.md with the date they were written off, so the decision is recoverable.
+  const rows = (all.boards?.rows ?? []).filter((r) => !String(r.dismissed || "").trim());
+  const dismissedCount = (all.boards?.rows ?? []).length - rows.length;
   // careers_url from the market lists makes a useful prefill — it is the prioritization-agent's
   // best guess at the company's careers page, which is often right even when it is not machine-readable.
   const hint = new Map();
@@ -711,7 +714,16 @@ function boardsHTML(all) {
             ? `<span class="bpending">searching greenhouse / lever / ashby / smartrecruiters + careers pages…</span>`
             : `<span class="bmissing">website not found</span>`
       }${r.notes ? `<div class="muted" style="font-size:11px;margin-top:3px">${esc(String(r.notes).slice(0, 150))}</div>` : ""}</td>
-      <td style="text-align:right"><button class="bedit" onclick="bToggle('${id}')" title="Paste the careers website for ${esc(r.company)}">✏️</button></td>
+      <td style="text-align:right"><span class="bacts">
+        <a class="bsearch" href="https://duckduckgo.com/?q=${encodeURIComponent(r.company + " careers")}" target="_blank" rel="noopener"
+           title="Search for ${esc(r.company)}'s own site — we do not store company websites, so this is a search rather than a guess">🔎</a>
+        <button class="bedit" onclick="bToggle('${id}')" title="Paste the careers website for ${esc(r.company)}">✏️</button>
+        <form method="POST" action="/dismiss-board" class="inline" onsubmit="return confirm('Remove ${esc(r.company).replace(/'/g, "\\'")} from the registry? It will stop appearing here and scouts will skip it. You can restore it from data/boards.md.')">
+          <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="boards">
+          <input type="hidden" name="company" value="${esc(r.company)}">
+          <button type="submit" class="btrash" aria-label="Remove ${esc(r.company)}" title="No careers page exists — remove it for good"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6.5 1a.5.5 0 0 0-.5.5V2H3.5a.5.5 0 0 0 0 1H4v9.5A1.5 1.5 0 0 0 5.5 14h5a1.5 1.5 0 0 0 1.5-1.5V3h.5a.5.5 0 0 0 0-1H10v-.5a.5.5 0 0 0-.5-.5h-3ZM5 3h6v9.5a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5V3Zm1.5 1.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Z"/></svg></button>
+        </form>
+      </span></td>
     </tr>
     <tr id="${id}" class="hide bform"><td colspan="4">
       <form method="POST" action="/set-board">
@@ -734,6 +746,26 @@ function boardsHTML(all) {
   // a script — that is browser work an agent can still do, not something the user has to paste. Only
   // `none` / no-endpoint genuinely needs a human. Splitting them stops us asking for URLs we can get
   // ourselves (AGENT-RULES §12).
+  // `access: none` means discovery probed greenhouse, lever, ashby and smartrecruiters and found
+  // nothing. For a small or young company that is usually the truth -- there is no careers page --
+  // rather than a lookup worth retrying. Offering to clear them in one go is the difference between
+  // a list you act on and a list you learn to ignore.
+  const noBoard = rows.filter((r) => r.access === "none");
+  const batchHTML = noBoard.length
+    ? `<div class="alert warn">
+         <b>${noBoard.length} companies have no careers page.</b> Discovery checked Greenhouse, Lever,
+         Ashby and SmartRecruiters for each and found nothing — for small or young companies that is
+         usually the truth rather than a lookup worth retrying.
+         <form method="POST" action="/dismiss-board" class="inline" style="margin-left:8px"
+               onsubmit="return confirm('Remove all ${noBoard.length} companies with no careers page? Scouts will skip them from now on. They stay in data/boards.md and can be restored.')">
+           <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="boards">
+           <input type="hidden" name="scope" value="none">
+           <button type="submit" class="btn-small">Remove all ${noBoard.length}</button>
+         </form>
+       </div>`
+    : "";
+
+
   const isBrowserWork = (r) => r.access === "blocked" || r.access === "browser";
   const needsHuman = [
     ...needs.filter((r) => !isBrowserWork(r)),
@@ -774,8 +806,11 @@ function boardsHTML(all) {
   return `<p class="muted" style="margin:0 0 10px">
     ${needsHuman.length} need${needsHuman.length === 1 ? "s" : ""} your input ·
     ${browserWork.length} queued for a browser pass · ${working.length} readable ·
-    ${notInvestigated} ${notInvestigated === 1 ? "company" : "companies"} in your market lists not investigated yet.
+    ${notInvestigated} ${notInvestigated === 1 ? "company" : "companies"} in your market lists not investigated yet.${
+      dismissedCount ? ` · <b>${dismissedCount} removed</b> — kept in <code>data/boards.md</code>, restore with <code>record.mjs restore-board "Company"</code>` : ""
+    }
   </p>
+  ${batchHTML}
   <h3 style="margin:0 0 6px;font-size:13px">⚠️ Website not found — paste it here</h3>
   ${attentionHTML}
   ${browserHTML}
@@ -1140,7 +1175,9 @@ function todayHTML(all, dueToday, appTok, appIds) {
   const agingProposals = all.proposals.filter(
     (p) => String(p.data.status) === "proposed" && p.data.found_date && p.data.found_date <= addDays(t, -7)
   );
-  const boardRows = all.boards?.rows ?? [];
+  // Dismissed boards are not outstanding work. Counting them would leave the banner unchanged after
+  // a removal, which teaches the user the button does nothing.
+  const boardRows = (all.boards?.rows ?? []).filter((r) => !String(r.dismissed || "").trim());
   const boardsNeeding = boardRows.filter(
     (r) => BOARD_UNREADABLE[r.access] || !String(r.endpoint || "").trim()
   ).length;
@@ -1403,7 +1440,8 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
 // but what actually changes daily. Same tab mechanics, its own small set of panes.
 function settingsPage(all, flash) {
   const boardRows = all.boards?.rows ?? [];
-  const needing = boardRows.filter((r) => BOARD_UNREADABLE[r.access] || !String(r.endpoint || "").trim()).length;
+  const liveBoards = boardRows.filter((r) => !String(r.dismissed || "").trim());
+  const needing = liveBoards.filter((r) => BOARD_UNREADABLE[r.access] || !String(r.endpoint || "").trim()).length;
   const vendorCount = (all.markets ?? []).reduce((n, m) => n + m.table.rows.length, 0);
   const TABS = [
     { id: "setup", label: "Setup", count: null },
@@ -1563,6 +1601,15 @@ td.nw,th.nw{white-space:nowrap}
 .ok-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(46,160,67,.16);color:#3fb950}
 .bad-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
 form.inline{display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0}
+/* The row actions sit on one line: search the company, paste a URL, or remove it for good. */
+.bacts{display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
+.bacts form{display:inline;margin:0}
+.bsearch{display:inline-block;text-decoration:none;padding:3px 6px;opacity:.7;font-size:14px}
+.bsearch:hover{opacity:1}
+/* Red, and only red — destructive actions should not look like the others. */
+.btrash{background:none;border:0;cursor:pointer;padding:3px 6px;line-height:0;
+  color:#f85149;opacity:.8;display:inline-flex;align-items:center}
+.btrash:hover{opacity:1;transform:scale(1.12)}
 .btn-small{padding:5px 11px;font-size:12.5px;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg);cursor:pointer}
 .btn-small:hover{border-color:var(--acc)}
 .alert.warn ol{margin:8px 0 4px 18px;padding:0}
@@ -2173,9 +2220,43 @@ async function handleDismissAdvance(form) {
   return { kind: "ok", msg: `${merged.company}: advance to ${stage} dismissed — it will not be raised again.` };
 }
 
-// Save a careers URL the user pasted for a company whose board the scouts could not find.
-// Stored with access = "manual": deliberately NOT claimed as verified, because we do not yet know
-// whether it is machine-readable. The next scout tries it first and reclassifies it.
+// One handler for both the row trash icon and the batch button, so they cannot diverge in what
+// "removed" means.
+//
+// Writes the table directly rather than shelling out to record.mjs. The POST path already holds the
+// data/ lock and record.mjs takes the same lock on startup, so calling it from in here deadlocks
+// until the timeout -- exactly what the note at the top of this file warns about.
+async function handleDismissBoard(form) {
+  const text = await fs.readFile(BOARDS_FILE, "utf8");
+  const lines = text.split("\n");
+  const headerIdx = lines.findIndex((l) => /^\s*\|/.test(l));
+  const { headers, rows } = await readTable(BOARDS_FILE);
+  const stamp = today();
+
+  const targets =
+    form.scope === "none"
+      ? rows.filter((r) => r.access === "none" && !String(r.dismissed || "").trim())
+      : rows.filter((r) => boardKey(r.company) === boardKey(String(form.company || "")));
+
+  if (!targets.length) throw new Error(form.scope === "none" ? "nothing to remove" : "no matching board row");
+
+  for (const r of targets) {
+    const i = rows.indexOf(r);
+    const merged = { ...r, dismissed: stamp };
+    lines[headerIdx + 2 + i] = `| ${headers.map((h) => sanitizeCell(merged[h] ?? "")).join(" | ")} |`;
+  }
+  await writeFileAtomic(BOARDS_FILE, lines.join("\n"));
+
+  const what =
+    form.scope === "none"
+      ? `${targets.length} compan${targets.length === 1 ? "y" : "ies"} with no careers page`
+      : targets[0].company;
+  await logActivity("board-dismissed", `Removed from the registry: ${what}`);
+  return form.scope === "none"
+    ? `Removed ${what}. Scouts will skip them from now on.`
+    : `${what} removed — scouts will skip it.`;
+}
+
 async function handleSetBoard(form) {
   const companyIn = String(form.company || "").trim();
   if (!companyIn) throw new Error("set-board needs a company");
@@ -2681,6 +2762,13 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/add-company") {
     const r = await handleAddCompany(form);
     return redirect(res, r.flash);
+  }
+  if (url.pathname === "/dismiss-board") {
+    try {
+      return redirect(res, { kind: "ok", msg: await handleDismissBoard(form) });
+    } catch (e) {
+      return redirect(res, { kind: "err", msg: e.message });
+    }
   }
   if (url.pathname === "/set-board") {
     const r = await handleSetBoard(form);

@@ -22,7 +22,9 @@
 //   node server/record.mjs list-spend [--month YYYY-MM] [--limit n] -> month total + recent runs
 //   node server/record.mjs get-watermark <channel>      -> last swept timestamp for gmail|whatsapp|linkedin
 //   node server/record.mjs set-watermark <channel> <iso> [note]
-//   node server/record.mjs list-boards [access|needs-browser] -> the registry; needs-browser = blocked+browser
+//   node server/record.mjs list-boards [access|needs-browser] [--include-dismissed] -> the registry
+//   node server/record.mjs dismiss-board '<company>' [reason] -> stop surfacing a board
+//   node server/record.mjs restore-board '<company>'          -> undo that
 //   node server/record.mjs get-board <company>          -> one company's board + how to read it
 //   node server/record.mjs upsert-board '<json>'        -> record what you learned about a board
 //
@@ -884,7 +886,9 @@ async function setWatermark(channel, timestamp, note) {
 //             Transient: it becomes json/html/blocked/none within seconds. If a row is still
 //             `pending` minutes later, discovery died — treat it as unknown and investigate.
 const BOARDS_FILE = path.join(DATA, "boards.md");
-const BOARD_HEADERS = ["company", "market", "ats", "endpoint", "access", "volatile", "last_verified", "notes"];
+// `dismissed` holds the date a board was written off, or "" for a live one. A date rather than a
+// flag because "when did we give up on this" is the thing you actually want to know later.
+const BOARD_HEADERS = ["company", "market", "ats", "endpoint", "access", "volatile", "last_verified", "notes", "dismissed"];
 const BOARD_ACCESS = new Set(["json", "html", "browser", "blocked", "none", "manual", "pending"]);
 const BOARDS_TEMPLATE =
   "# ATS / careers-board registry\n\n" +
@@ -903,7 +907,26 @@ function boardKey(company) {
     .trim();
 }
 
+// The registry predates the `dismissed` column, so its header row has to be upgraded in place the
+// first time we touch it. Rows are left alone: the column is last, so an 8-cell row reads as
+// dismissed:"" — a live board, which is the correct default.
+async function migrateBoardHeader() {
+  let text;
+  try {
+    text = await fs.readFile(BOARDS_FILE, "utf8");
+  } catch {
+    return; // no file yet; the template already has the column
+  }
+  const lines = text.split("\n");
+  const h = lines.findIndex((l) => /^\s*\|\s*company\s*\|/.test(l));
+  if (h < 0 || /\|\s*dismissed\s*\|/.test(lines[h])) return;
+  lines[h] = `| ${BOARD_HEADERS.join(" | ")} |`;
+  lines[h + 1] = `|${BOARD_HEADERS.map(() => "---").join("|")}|`;
+  await writeFileAtomic(BOARDS_FILE, lines.join("\n"));
+}
+
 async function readBoards() {
+  await migrateBoardHeader();
   await ensureTable(BOARDS_FILE, BOARDS_TEMPLATE);
   const { rows } = await readTable(BOARDS_FILE);
   return rows;
@@ -918,8 +941,11 @@ async function getBoard(company) {
   return { found: true, ...hit };
 }
 
-async function listBoards(access) {
-  const rows = await readBoards();
+async function listBoards(access, { includeDismissed = false } = {}) {
+  const all = await readBoards();
+  // Dismissed boards are invisible to scouts by default. They stay in the file so the decision is
+  // recoverable and auditable, but they must not reappear as work.
+  const rows = includeDismissed ? all : all.filter((r) => !String(r.dismissed || "").trim());
   // `needs-browser` is the queue that matters operationally: boards that exist but refuse scripted
   // access (blocked) or are JS-rendered (browser). They are NOT dead ends — they are work waiting
   // for a Chrome-enabled run. See AGENT-RULES §12.
@@ -945,6 +971,23 @@ async function listBoards(access) {
   };
 }
 
+// node server/record.mjs dismiss-board '<company>' [reason]   -> stop surfacing it
+// node server/record.mjs restore-board '<company>'             -> bring it back
+async function setBoardDismissed(company, dismissed, reason = "") {
+  if (!company) throw new Error("needs a company name");
+  const rows = await readBoards();
+  const key = boardKey(canonicalCompany(company));
+  const row = rows.find((r) => boardKey(canonicalCompany(r.company)) === key);
+  if (!row) throw new Error(`no board row for ${JSON.stringify(company)}`);
+  const note = reason ? `${today()} ${dismissed ? "dismissed" : "restored"}: ${reason}` : "";
+  await upsertBoard({
+    company: row.company,
+    dismissed: dismissed ? today() : "",
+    notes: note ? `${row.notes ? row.notes + " · " : ""}${note}` : row.notes,
+  });
+  return { action: dismissed ? "dismissed" : "restored", company: row.company };
+}
+
 async function upsertBoard(obj) {
   if (!obj?.company) throw new Error("upsert-board needs at least {company, access}");
   if (obj.access && !BOARD_ACCESS.has(obj.access)) {
@@ -966,6 +1009,9 @@ async function upsertBoard(obj) {
     volatile: obj.volatile ?? prev.volatile ?? "no",
     last_verified: obj.last_verified ?? today(),
     notes: obj.notes ?? prev.notes ?? "",
+    // Sticky on purpose: a scout re-probing this company must never undismiss it -- that is the
+    // whole point of removing it. Only an explicit dismissed:"" (Restore) clears it.
+    dismissed: obj.dismissed ?? prev.dismissed ?? "",
   };
   const text = await fs.readFile(BOARDS_FILE, "utf8");
   const lines = text.split("\n");
@@ -1090,11 +1136,20 @@ async function dispatch(cmd, rest) {
     case "set-watermark":
       result = await setWatermark(rest[0], rest[1], rest.slice(2).join(" "));
       break;
+    case "dismiss-board":
+      result = await setBoardDismissed(rest[0], true, rest[1] || "");
+      break;
+    case "restore-board":
+      result = await setBoardDismissed(rest[0], false, rest[1] || "");
+      break;
     case "get-board":
       result = await getBoard(rest.join(" ").trim());
       break;
     case "list-boards":
-      result = await listBoards(rest[0]);
+      result = await listBoards(
+        rest.find((a) => !a.startsWith("--")),
+        { includeDismissed: rest.includes("--include-dismissed") }
+      );
       break;
     case "upsert-board":
       result = await upsertBoard(parseArg(rest[0]));
