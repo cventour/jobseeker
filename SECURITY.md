@@ -49,6 +49,13 @@ Each of these is covered by a test — `npm run test:security` and `npm run test
 
 ## Known exposure, stated honestly
 
+**The dashboard can install launch agents and change the run schedule.** The Setup page runs a
+closed allowlist of named actions — install the browser agent, re-run the probe, set or remove the
+daily run — each mapped to a fixed script in this repository. It never executes a command supplied by
+the request, and arguments are validated at the boundary as well as inside the script. It is still a
+widening: a local process that can reach the dashboard can now change OS-level state, not only data.
+The CSRF rejection and loopback binding below are what bound that.
+
 **The dashboard has no authentication.** Loopback binding *is* the authentication. If you override
 `JOBSEEKER_DASHBOARD_HOST` to expose it on a network, anyone who can reach the port can read and
 modify your job search. The startup warning says so; do not ignore it.
