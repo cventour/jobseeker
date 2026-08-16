@@ -23,7 +23,14 @@ KD = 0.5                      # how much to darken the neutral field
 TINT = tuple(v / max(NAVY) for v in NAVY)   # (0.469, 0.5625, 1.0)
 
 # ---------- 1. retint ----------
-a = np.asarray(Image.open(SRC).convert("RGB")).astype(np.float32)
+# Read RGBA, not RGB. `.convert("RGB")` DISCARDS the alpha channel, which means every fully
+# transparent pixel contributes whatever RGB happens to be stored beneath it -- and those values are
+# undefined. Converting the master from PNG to lossless WebP rewrote them (legitimately: they are
+# invisible), which pushed the chroma bounding box below out to the image edge and produced a
+# clipped, off-centre app icon. Masking by alpha makes the crop depend only on pixels that render.
+_src = Image.open(SRC).convert("RGBA")
+alpha = np.asarray(_src.getchannel("A"))
+a = np.asarray(_src.convert("RGB")).astype(np.float32)
 m = a.min(axis=2)
 chroma = a - m[..., None]
 base = (m * KD)[..., None] * np.array(TINT, dtype=np.float32)
@@ -32,7 +39,11 @@ tinted = Image.fromarray(out, "RGB")
 
 # ---------- 2. crop so the symbol fills ~72% of the tile ----------
 cmax = chroma.max(axis=2)
+# A transparent pixel carries no signal, whatever colour is stored under it.
+cmax = np.where(alpha > 8, cmax, 0)
 ys, xs = np.where(cmax > 140)
+if len(xs) == 0:
+    raise SystemExit("make-icons: no visible chroma found in the master — check SRC")
 cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
 side = max(xs.max() - xs.min(), ys.max() - ys.min()) / 0.72
 left, top = round(cx - side / 2), round(cy - side / 2)
