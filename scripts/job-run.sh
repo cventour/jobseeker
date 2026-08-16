@@ -27,7 +27,9 @@ STATUS="$LOG_DIR/.job-run.status.json"
 
 # Tunables (override via the environment, e.g. in the launchd plist).
 TIMEOUT_SECS="${JOBRUN_TIMEOUT_SECS:-2700}"   # 45 min
-MAX_BUDGET_USD="${JOBRUN_MAX_BUDGET_USD:-5}"
+# Per-run cap. Config is the source of truth so the dashboard can change it; the env var stays as
+# an override for one-off manual runs.
+MAX_BUDGET_USD="${JOBRUN_MAX_BUDGET_USD:-}"
 ATTEMPTS="${JOBRUN_ATTEMPTS:-2}"              # initial try + 1 retry
 RETRY_SLEEP="${JOBRUN_RETRY_SLEEP:-60}"
 # Memory guard. Defaults leave plenty of room for a healthy run (the session itself sits around
@@ -116,6 +118,8 @@ run_with_timeout() {
 # ones with a dead parent. That does mean an interactive session open at 08:00 loses WhatsApp for
 # the rest of its life; the scheduled digest is the higher priority, and the session gets it back on
 # restart. Set JOBRUN_REAP_WHATSAPP=0 to disable.
+
+
 reap_whatsapp_mcp() {
   [ "${JOBRUN_REAP_WHATSAPP:-1}" = "1" ] || { echo "whatsapp reaping disabled"; return 0; }
   local pids
@@ -142,7 +146,47 @@ NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
 COST_FILE="$(mktemp)"
 trap 'rm -f "$COST_FILE"' EXIT
 
+# ---- spend caps -------------------------------------------------------------------------------
+# Read from config/job-seeker.config.md so the dashboard owns them. Falls back to a sane per-run cap
+# and NO monthly ceiling, because a ceiling nobody set must never block a run.
+read_cfg() {
+  "$NODE_BIN" -e '
+    const fs=require("fs");
+    try{
+      const t=fs.readFileSync("config/job-seeker.config.md","utf8");
+      const m=new RegExp("^"+process.argv[1]+":[ \\t]*(.*)$","m").exec(t);
+      process.stdout.write(m && m[1] ? m[1].trim() : "");
+    }catch{ process.stdout.write(""); }
+  ' "$1" 2>/dev/null
+}
+[ -n "$MAX_BUDGET_USD" ] || MAX_BUDGET_USD="$(read_cfg max_spend_per_run_usd)"
+[ -n "$MAX_BUDGET_USD" ] || MAX_BUDGET_USD=5
+MONTH_CAP="$(read_cfg max_spend_per_month_usd)"
+
+# Stamped before the ceiling gate, because a refused run still writes a status file and that file
+# needs a start time like any other.
 STARTED="$(iso_now)"
+
+# ---- monthly ceiling -------------------------------------------------------------------------
+# Checked BEFORE any work starts, because the point is to not spend the money. A blocked run is
+# the one thing here that must never be quiet: it writes its own state, notifies, and says exactly
+# how to lift it. A silent skip would look identical to a run that simply found nothing.
+if [ -n "$MONTH_CAP" ]; then
+  SPENT="$("$NODE_BIN" "$REPO/server/record.mjs" list-spend 2>/dev/null \
+    | "$NODE_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+        try{process.stdout.write(String(JSON.parse(s).month_total_usd||0))}catch{process.stdout.write("0")}})' )"
+  OVER="$("$NODE_BIN" -e 'process.stdout.write(Number(process.argv[1])>=Number(process.argv[2])?"1":"0")' "$SPENT" "$MONTH_CAP")"
+  if [ "$OVER" = "1" ]; then
+    echo "MONTHLY SPEND CEILING REACHED: \$$SPENT of \$$MONTH_CAP this month — not starting."
+    echo "Raise max_spend_per_month_usd in the dashboard (Settings) or in config/job-seeker.config.md."
+    write_status "skipped-budget" 0 "month-to-date \$$SPENT reached the \$$MONTH_CAP ceiling; run not started"
+    notify "JobSeeker did not run" "Monthly spend ceiling reached (\$$SPENT of \$$MONTH_CAP). Raise it in Settings."
+    "$NODE_BIN" "$REPO/server/record.mjs" log run-skipped "monthly spend ceiling reached: \$$SPENT of \$$MONTH_CAP" >/dev/null 2>&1
+    exit 0
+  fi
+  echo "spend this month: \$$SPENT of \$$MONTH_CAP ceiling"
+fi
+
 write_status "running" 0 "in progress"
 
 {
