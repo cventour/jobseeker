@@ -40,6 +40,7 @@
     "test:sweep": "node scripts/test-chat-sweep.mjs",
     "test:security": "node scripts/test-security.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
-    "setup": "bash scripts/setup.sh"
+    "setup": "bash scripts/setup.sh",
+    "schedule": "bash scripts/set-schedule.sh"
   }
 }

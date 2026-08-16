@@ -105,6 +105,19 @@ If the probe reports `prompt-pending`, that is exactly this situation. Full deta
 *not* required (no Screen Recording, Accessibility or Full Disk Access), is in
 [`PERMISSIONS.md`](PERMISSIONS.md).
 
+## Changing the time
+
+```bash
+scripts/set-schedule.sh 09:15     # move the daily run
+scripts/set-schedule.sh --show    # what is actually configured, read back from the plist
+scripts/set-schedule.sh --remove  # unschedule
+```
+
+The dashboard's Setup page calls the same script. **The plist is the only source of truth for the
+schedule.** There was once a `schedule_job_run` key in the config file that nothing read — setting it
+changed nothing and warned about nothing. It has been removed rather than wired up, so there is one
+place to look.
+
 ## Option A — launchd (recommended on macOS)
 
 > **`npm run setup` can do all of this for you**, including substituting the paths and clearing the
@@ -141,7 +154,7 @@ If the probe reports `prompt-pending`, that is exactly this situation. Full deta
 ## Option B — cron
 ```bash
 crontab -e
-# add (runs 08:00 daily); match the schedule_job_run in config/job-seeker.config.md:
+# add (runs 08:00 daily):
 0 8 * * * /bin/bash /ABSOLUTE/PATH/TO/JobSeeker/scripts/job-run.sh
 ```
 
