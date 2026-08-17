@@ -157,10 +157,14 @@ export async function listTabs() {
     "  set wi to 0",
     "  repeat with w in windows",
     "    set wi to wi + 1",
+    // Which tab is in the foreground. Chrome's Memory Saver discards long-idle background tabs,
+    // and a discarded tab has no renderer, so injected JavaScript never returns — it hangs until
+    // the Apple Event times out. The active tab is the one that is always live.
+    "    set ai to active tab index of w",
     "    set ti to 0",
     "    repeat with t in tabs of w",
     "      set ti to ti + 1",
-    '      set out to out & wi & "\\t" & ti & "\\t" & (URL of t) & "\\t" & (title of t) & "\\n"',
+    '      set out to out & wi & "\\t" & ti & "\\t" & ai & "\\t" & (URL of t) & "\\t" & (title of t) & "\\n"',
     "    end repeat",
     "  end repeat",
     "end tell",
@@ -171,10 +175,11 @@ export async function listTabs() {
   return r.out
     .split("\n")
     .map((l) => l.split("\t"))
-    .filter((p) => p.length >= 3 && p[2])
-    .map(([w, t, url, title]) => ({
+    .filter((p) => p.length >= 4 && p[3])
+    .map(([w, t, a, url, title]) => ({
       window: Number(w),
       tab: Number(t),
+      active: Number(t) === Number(a),
       url,
       title: title || "",
       // Unread badges ride in the title ("(11) WhatsApp") and need NO extra permission, so this is
@@ -189,6 +194,28 @@ export async function listTabs() {
 export const findTab = (tabs, host) => tabs.find((t) => t.url.includes(host)) || null;
 
 /**
+ * Tabs that could run injected JavaScript, MOST LIKELY FIRST.
+ *
+ * Two filters, and the ordering is the important half:
+ *
+ *  - chrome://, about: and the New Tab page refuse injected JS whatever the permission says, so
+ *    probing one proves nothing either way.
+ *  - Chrome's Memory Saver discards long-idle background tabs. A discarded tab has no renderer, so
+ *    the Apple Event never returns and only fails when it times out. Measured on a real 36-tab
+ *    browser: exactly ONE tab answered — the foreground one. Active tabs are always live, so they
+ *    go first; anything else is a coin flip that costs a full timeout to lose.
+ *
+ * Exported so the capability probe and assertCanReadContent share ONE rule. They had two, and after
+ * the first was fixed the copy in browser-probe.mjs kept its hardcoded `tab 1 of window 1` — which
+ * is how a browser that could read pages perfectly well got reported to the user as unreadable, and
+ * silently skipped the board sweep for a whole run.
+ */
+export const scriptableTabs = (tabs) =>
+  (tabs || [])
+    .filter((t) => /^https?:/i.test(String(t.url || "")))
+    .sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)));
+
+/**
  * Run an extraction snippet in a tab and return its value.
  * The snippet MUST be read-only. Return a JSON string for anything structured.
  */
@@ -199,6 +226,17 @@ export async function evalInTab(tab, js) {
     if (/Allow JavaScript from Apple Events|turned off/i.test(r.err)) {
       throw new Error(
         "Chrome is blocking scripted reads: enable View > Developer > Allow JavaScript from Apple Events (one-time, no restart)."
+      );
+    }
+    // -1712 on a specific tab is almost never a permission problem — permission failures are
+    // instant and browser-wide. It is Chrome's Memory Saver having discarded a long-idle background
+    // tab: no renderer, so the event hangs until it times out. Naming it stops the digest reporting
+    // "Chrome is broken" when the truth is "that tab was asleep".
+    if (/-1712|timed out/i.test(r.err)) {
+      throw new Error(
+        `tab ${tab.tab} of window ${tab.window} did not respond (Apple Event timed out). ` +
+          "Chrome most likely discarded this background tab to save memory; only foreground tabs are " +
+          "guaranteed to be live."
       );
     }
     throw new Error(`evalInTab failed: ${r.err}`);
@@ -223,7 +261,7 @@ export async function evalJson(tab, js) {
  * permission is unknown, not denied, and the real read will report the truth either way.
  */
 export async function assertCanReadContent(tabs) {
-  const candidates = (tabs || []).filter((t) => /^https?:/i.test(String(t.url || "")));
+  const candidates = scriptableTabs(tabs);
   if (!candidates.length) {
     // No scriptable tab open is not a permission failure — callers that open their own tab can
     // carry on, so say what is actually true rather than claiming reads are blocked.

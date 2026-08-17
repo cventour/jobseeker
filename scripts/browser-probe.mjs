@@ -21,7 +21,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { execFile } from "child_process";
-import { ensureChrome } from "./browser.mjs";
+import { ensureChrome, scriptableTabs } from "./browser.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -75,6 +75,16 @@ async function probeCdp(port) {
 // Unread counts ride along in the tab title ("(11) WhatsApp"), which AppleScript can read with NO
 // extra permission — worth capturing even when we cannot read the messages themselves, because
 // "11 unread and we could not read them" is a far more useful thing to report than silence.
+// Host only — a probe detail that ends up in the digest must not carry query strings, which on a
+// careers or mail tab can hold search terms and ids that are none of this file's business.
+const hostOf = (u) => {
+  try {
+    return new URL(u).host.replace(/^www\./, "");
+  } catch {
+    return "unknown host";
+  }
+};
+
 function unreadFromTitle(title) {
   const m = /^\((\d+)\)/.exec(String(title || "").trim());
   return m ? Number(m[1]) : null;
@@ -107,12 +117,19 @@ async function main() {
   let appleEvents = "unknown";
   let appleEventsError = "";
   if (chromeRunning) {
+    // Carries the 1-based window/tab indices, because addressing anything other than the first tab
+    // needs them — and the first tab is precisely what must not be assumed (see the JS probe below).
     const script =
       'set out to "" \n' +
       'tell application id "com.google.Chrome"\n' +
+      "  set wi to 0\n" +
       "  repeat with w in windows\n" +
+      "    set wi to wi + 1\n" +
+      "    set ai to active tab index of w\n" +
+      "    set ti to 0\n" +
       "    repeat with t in tabs of w\n" +
-      '      set out to out & (URL of t) & "\\t" & (title of t) & "\\n"\n' +
+      "      set ti to ti + 1\n" +
+      '      set out to out & wi & "\\t" & ti & "\\t" & ai & "\\t" & (URL of t) & "\\t" & (title of t) & "\\n"\n' +
       "    end repeat\n" +
       "  end repeat\n" +
       "end tell\n" +
@@ -129,8 +146,14 @@ async function main() {
       tabs = r.out
         .split("\n")
         .map((l) => l.split("\t"))
-        .filter(([u]) => u)
-        .map(([url, title]) => ({ url, title: title || "" }));
+        .filter((p) => p.length >= 4 && p[3])
+        .map(([w, t, a, url, title]) => ({
+          window: Number(w),
+          tab: Number(t),
+          active: Number(t) === Number(a),
+          url,
+          title: title || "",
+        }));
     } else {
       // Three distinct failures that must not be collapsed into one:
       //   -1743  the user actively denied Automation, or it was revoked.
@@ -154,17 +177,59 @@ async function main() {
   const whatsappTab = findTab("web.whatsapp.com");
   const linkedinTab = findTab("linkedin.com");
 
-  // Can we read PAGE CONTENT via Apple Events? Only meaningful if a tab exists to test against.
-  // The error text is explicit and stable, so we detect the specific "turned off" case rather than
-  // treating every failure as "off".
+  // Can we read PAGE CONTENT via Apple Events?
+  //
+  // The question is whether the MECHANISM works, so ANY tab that answers proves it. Probing a
+  // single hardcoded `tab 1 of window 1` answered a different and useless question — "is whatever
+  // happens to be leftmost responsive right now" — and got it wrong in both directions:
+  //   * a chrome:// or New Tab page refuses injected JS regardless of permission;
+  //   * a heavy SPA leaves the Apple Event pending until it times out. On 2026-08-17 tab 1 was a
+  //     careers portal that took the full timeout, so the run reported "cannot read pages", the
+  //     digest told the user WhatsApp and LinkedIn were unreadable, and job-run.sh skipped the
+  //     board sweep entirely — while reading actually worked fine on every other tab.
+  // So: walk several scriptable tabs with a short timeout each, and stop at the first success.
+  // A denial or a disabled setting is instant and applies to every tab, so it still surfaces.
+  const JS_PROBE_TABS = 5;
+  const JS_PROBE_TIMEOUT_MS = 8000; // a trivial `1` on a healthy tab answers in milliseconds
   let jsFromAppleEvents = "unknown";
-  if (appleEvents === "ok" && tabs.length) {
-    const r = await osa(
-      'tell application id "com.google.Chrome" to execute (tab 1 of window 1) javascript "1"'
-    );
-    if (r.ok) jsFromAppleEvents = "on";
-    else if (/Allow JavaScript from Apple Events|turned off/i.test(r.err)) jsFromAppleEvents = "off";
-    else jsFromAppleEvents = "error";
+  let jsProbeDetail = "";
+  const candidates = scriptableTabs(tabs);
+  if (appleEvents === "ok" && !tabs.length) {
+    jsProbeDetail = "no tabs open";
+  } else if (appleEvents === "ok" && !candidates.length) {
+    // Not a permission failure: there is simply nothing injectable open (a cold Chrome sitting on
+    // the New Tab Page). Saying "cannot read" here would be a guess dressed as a measurement.
+    jsFromAppleEvents = "unknown";
+    jsProbeDetail = `no http(s) tab among ${tabs.length} open — permission untested, not denied`;
+  } else if (appleEvents === "ok") {
+    const tried = [];
+    for (const t of candidates.slice(0, JS_PROBE_TABS)) {
+      const r = await osa(
+        `tell application id "com.google.Chrome" to execute (tab ${t.tab} of window ${t.window}) javascript "1"`,
+        { timeoutMs: JS_PROBE_TIMEOUT_MS }
+      );
+      if (r.ok) {
+        jsFromAppleEvents = "on";
+        jsProbeDetail = `succeeded on ${hostOf(t.url)}${tried.length ? ` after ${tried.length} unresponsive tab(s)` : ""}`;
+        break;
+      }
+      // Conclusive for the whole browser — no point asking four more tabs.
+      if (/Allow JavaScript from Apple Events|turned off/i.test(r.err)) {
+        jsFromAppleEvents = "off";
+        jsProbeDetail = "Chrome reports the Apple Events JavaScript setting is off";
+        break;
+      }
+      if (/-1743|not authori/i.test(r.err)) {
+        jsFromAppleEvents = "denied";
+        jsProbeDetail = "Automation permission denied";
+        break;
+      }
+      tried.push(`${hostOf(t.url)} (${/-1712|timed out/i.test(r.err) ? "timed out" : "error"})`);
+    }
+    if (jsFromAppleEvents === "unknown") {
+      jsFromAppleEvents = "error";
+      jsProbeDetail = `tried ${tried.length} tab(s), none responded: ${tried.join(", ")}`.slice(0, 300);
+    }
   }
 
   // The capability layer — what callers should actually branch on.
@@ -206,8 +271,19 @@ async function main() {
         `Chrome is ${chromeRunning ? "running" : "not running"} with ${tabs.length} tab(s) visible.`
     );
   }
+  if (jsFromAppleEvents === "denied") {
+    blockers.push(
+      "Chrome refused to run the page script: Automation permission denied — System Settings > " +
+        "Privacy & Security > Automation, tick Google Chrome"
+    );
+  }
   if (jsFromAppleEvents === "error") {
-    blockers.push("Chrome accepted the Apple Event but the page script failed — the tab may still be loading.");
+    // Name what was actually tried. The old wording guessed ("the tab may still be loading"), which
+    // was both wrong and unactionable: the real cause was one wedged tab being the only one asked.
+    blockers.push(
+      `Chrome accepted the Apple Event but no tab ran the page script — ${jsProbeDetail}. ` +
+        "Permission looks granted; this is usually a busy or wedged tab, so it often clears by itself."
+    );
   }
   if (!canReadPages && !blockers.length) {
     blockers.push(
@@ -227,6 +303,9 @@ async function main() {
     apple_events_error: appleEventsError || null,
     chrome_launch_reason: launchReason || null,
     js_from_apple_events: jsFromAppleEvents,
+    // Which tabs were asked and what they said — so a future "cannot read" is diagnosable from the
+    // status file alone, instead of needing the failure reproduced by hand.
+    js_probe_detail: jsProbeDetail || null,
     capabilities,
     blockers,
     tabs_open: tabs.length,
