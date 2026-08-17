@@ -16,7 +16,9 @@ SRC = os.path.join(ROOT, "assets", "brand", "jobseeker-master.webp")
 PUB = os.path.join(ROOT, "public")
 # app/ was removed with the legacy Next.js layer; icons now live only in public/,
 # which server/dashboard.mjs serves through an explicit allowlist.
+SITE = os.path.join(ROOT, "site", "img")   # the published website's own copies
 os.makedirs(PUB, exist_ok=True)
+os.makedirs(SITE, exist_ok=True)
 
 NAVY = (15, 18, 32)          # --bg of the dashboard dark theme
 KD = 0.5                      # how much to darken the neutral field
@@ -31,6 +33,16 @@ TINT = tuple(v / max(NAVY) for v in NAVY)   # (0.469, 0.5625, 1.0)
 _src = Image.open(SRC).convert("RGBA")
 alpha = np.asarray(_src.getchannel("A"))
 a = np.asarray(_src.convert("RGB")).astype(np.float32)
+# ...and ZERO that RGB wherever it is invisible, before anything reads it.
+#
+# Masking only the chroma used to FIND the crop box (below) was half the fix: the crop is taken from
+# `tinted`, which still carried the undefined colour stored beneath transparent pixels. Both cuts
+# extend past the artwork by design — 72% and 88% of the tile — so they reached straight into that
+# garbage and rendered it as a hard green rectangle beside the mark. Worse, it is Pillow-version
+# dependent: what a given build hands back for an invisible pixel is not defined, so the same script
+# and the same master produced a clean icon on one machine and a broken one on another. Zeroing it
+# here makes the output depend only on pixels that render.
+a *= (alpha > 8)[..., None]
 m = a.min(axis=2)
 chroma = a - m[..., None]
 base = (m * KD)[..., None] * np.array(TINT, dtype=np.float32)
@@ -116,7 +128,15 @@ mk.paste(inner, ((512 - inner.size[0]) // 2,) * 2)
 
 # iOS masks its own corners and flattens alpha -> must be square + opaque.
 # Transparent mark for README and docs — no rounded tile, so it sits on any background.
-save(Image.open(SRC).convert("RGBA").resize((256, 256), Image.LANCZOS), f"{PUB}/logo-mark.png")
+mark = Image.open(SRC).convert("RGBA").resize((256, 256), Image.LANCZOS)
+save(mark, f"{PUB}/logo-mark.png")
+
+# The WEBSITE gets the same mark, generated rather than copied. site/img/mark*.png were
+# hand-placed once and then never regenerated, so when the alpha bug was fixed in public/ the
+# published site kept serving the old clipped artwork — the fix landed everywhere except the one
+# place a visitor actually looks. Emitting them here is what stops that happening again.
+save(mark, f"{SITE}/mark.png")
+save(mark, f"{SITE}/mark-ink.png")
 
 save(flat(180), f"{PUB}/apple-touch-icon.png")  # served by the standalone dashboard
 

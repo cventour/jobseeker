@@ -6,7 +6,7 @@
 // Code slash commands — this server never runs the agents.
 
 import http from "http";
-import { promises as fs } from "fs";
+import { promises as fs, default as fsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { spawn, execFile } from "child_process";
@@ -52,20 +52,40 @@ const ASSETS = new Map([
   ["/logo.png", ["logo.png", "image/png"]],
 ]);
 
+// Cache buster derived from the icon files themselves. These are served with max-age=86400, which
+// is right for a file that almost never changes and wrong on the day it does: a regenerated logo
+// stayed invisible for 24 hours behind a normal reload, so a fixed icon looked like a fix that had
+// not been applied. Stamping mtime+size into the URL means regenerating the set changes the URL,
+// and the long cache stays safe. Computed once at startup — these cannot change under a running
+// server without someone re-running the generator, and they would restart it to see the result.
+const ASSET_V = (() => {
+  let h = 0;
+  for (const [, [file]] of ASSETS) {
+    try {
+      const s = fsSync.statSync(path.join(PUBLIC, file));
+      h = (h * 33 + s.size + Math.floor(s.mtimeMs)) >>> 0;
+    } catch {
+      /* a missing icon is not worth failing startup over */
+    }
+  }
+  return h.toString(36);
+})();
+const v = (p) => `${p}?v=${ASSET_V}`;
+
 // The logo lockup: the mark is the only image — "Job Seeker" stays live HTML text so it
 // recolours with the theme, stays selectable, and costs nothing to render.
 const BRAND = (title) => `<div class="brand">
   <picture>
-    <source srcset="/logo.webp" type="image/webp">
-    <img class="mark" src="/logo.png" width="32" height="32" alt="" decoding="async">
+    <source srcset="${v("/logo.webp")}" type="image/webp">
+    <img class="mark" src="${v("/logo.png")}" width="32" height="32" alt="" decoding="async">
   </picture>
   <h1>${title}</h1>
 </div>`;
 
-const HEAD_ICONS = `<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+const HEAD_ICONS = `<link rel="icon" href="${v("/favicon.ico")}" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="${v("/favicon-32.png")}">
+<link rel="icon" type="image/png" sizes="16x16" href="${v("/favicon-16.png")}">
+<link rel="apple-touch-icon" href="${v("/apple-touch-icon.png")}">
 <meta name="theme-color" content="#0f1220">`;
 
 // The ATS/careers-board registry (see server/record.mjs and AGENT-RULES §12). Mirrored here rather
