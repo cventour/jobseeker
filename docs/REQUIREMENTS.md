@@ -96,6 +96,18 @@ search, and tells you the few things that need you today.**
   distinguish "refused" from "consent dialog unanswered" and name the fix for each. The system must
   need no Screen Recording, no Accessibility and no Full Disk Access — see
   [`PERMISSIONS.md`](PERMISSIONS.md).
+- **FR-7.7** The tabs the system must read — WhatsApp Web and LinkedIn — must be **exempt from
+  Chrome's Memory Saver**. Chrome discards long-idle background tabs, and a discarded tab has no
+  renderer, so injected JavaScript never returns; it only fails when the Apple Event times out.
+  Measured on a real 36-tab browser, **1 tab in 12 answered** — the foreground one. This is a
+  browser setting, not something code can work around: waking a tab means activating it, and a
+  discarded LinkedIn messaging tab reloads on activation, auto-selects the first conversation and
+  marks it read, which FR-7.2 and NFR-6 forbid. Setup steps are in
+  [`PERMISSIONS.md`](PERMISSIONS.md#3-chrome-memory-saver).
+- **FR-7.8** Where any single tab may be unresponsive, capability checks must try **several tabs,
+  foreground first**, and never conclude from one. A probe pinned to `tab 1 of window 1` reported a
+  fully working browser as unreadable, which disabled the board sweep for an entire run and left the
+  digest telling the user their messages could not be read.
 
 ### FR-8 — Interface
 - **FR-8.1** A local dashboard for viewing and light editing, organised as tabs with configuration
@@ -173,7 +185,17 @@ These are recorded because each was reached by measurement, and re-deriving them
   does not grant it to the scheduler; the scheduled grant must be cleared separately by running the
   LaunchAgent once while present. Documented in [`PERMISSIONS.md`](PERMISSIONS.md).
 - **LinkedIn's messaging view auto-selects the first conversation**, marking it read. Sweeping
-  LinkedIn is therefore opt-in.
+  LinkedIn is therefore opt-in. This is also why a discarded LinkedIn tab cannot simply be woken:
+  activation reloads it, and the reload marks a thread read.
+- **Chrome's Memory Saver discards idle background tabs, and a discarded tab cannot be scripted.**
+  Measured on a live 36-tab browser: 1 tab in 12 answered, and it was the foreground one. A failed
+  read therefore looks exactly like a missing permission — same timeout, same error code — so the
+  probe must report which tabs it tried, not just that it failed. The fix is a Chrome setting
+  (FR-7.7), not code.
+- **Quitting Chrome between runs is not an option, and would not help anyway.** Restored tabs load
+  lazily, so a fresh browser has *fewer* live tabs than a warm one; and killing Chrome risks the
+  profile store holding the WhatsApp Web linked-device session, which FR-7.2 forbids putting at
+  risk. Considered and rejected on 2026-08-17.
 - **Email cannot be used for digest delivery** — the Gmail connector can create drafts but has no
   send capability, so an "emailed digest" would sit unsent.
 
@@ -196,3 +218,6 @@ These are recorded because each was reached by measurement, and re-deriving them
 5. A repost of an already-applied role is flagged, not re-proposed.
 6. WhatsApp remains linked throughout: no QR code is ever shown.
 7. The digest never contradicts itself about which capabilities were available.
+8. A browser that **can** read pages is never reported as unable to. Specifically: with one wedged or
+   discarded tab open, `npm run browser:probe` still returns `read_page_content: true`, and the
+   board sweep still runs.

@@ -8,11 +8,21 @@ than trusting it**. Everything below is the reference for when something needs f
 npm run setup
 ```
 
-The one step it cannot do for you is a Chrome setting:
+The steps it cannot do for you are two Chrome settings. Both are one-time.
+
+**Let JobSeeker read page content:**
 
 1. Open Chrome
 2. Menu bar ▸ View ▸ Developer
 3. Click "Allow JavaScript from Apple Events"
+
+**Stop Chrome putting your WhatsApp and LinkedIn tabs to sleep** (section 3 — without this, reading
+works when you are at the machine and fails overnight):
+
+1. Open Chrome ▸ Settings ▸ **Performance**
+2. Under **Memory Saver**, click **Add** next to "Always keep these sites active"
+3. Enter `web.whatsapp.com`, click **Add**
+4. Repeat for `linkedin.com`
 
 Check the current state at any time:
 
@@ -135,6 +145,45 @@ by hand.
 
 ---
 
+## 3. Chrome Memory Saver
+
+**Keep the WhatsApp and LinkedIn tabs active.**
+
+Not a permission, but it belongs here: without it the permissions above are granted and reading
+still fails.
+
+Chrome discards long-idle **background** tabs to reclaim memory. A discarded tab has no renderer, so
+injected JavaScript never returns — the Apple Event just hangs until it times out, which looks
+identical to a broken permission. Measured on a real 36-tab browser: **1 tab in 12 answered**, and it
+was the foreground one.
+
+Add the two sites JobSeeker has to read:
+
+1. Open **Chrome ▸ Settings** (or paste `chrome://settings/performance`).
+2. Click **Performance**.
+3. Under **Memory Saver**, click **Add** next to *Always keep these sites active*.
+4. Enter `web.whatsapp.com` and click **Add**.
+5. Click **Add** again, enter `linkedin.com`, and click **Add**.
+
+Then confirm it took effect — leave both tabs in the background for a few minutes and run:
+
+```bash
+npm run browser:probe
+```
+
+`js_from_apple_events` should be `on`, and `js_probe_detail` names the tab that answered.
+
+**Why this is not solved in code.** Waking a discarded tab means activating it, and activation
+reloads it. A LinkedIn messaging reload auto-selects the first conversation and **marks it read** —
+silently clearing one of your unread badges, which is exactly the harm the list-only sweep is built
+to avoid. A browser setting costs nothing and carries no such risk.
+
+**Do not "fix" this by quitting Chrome before each run.** Restored tabs load lazily, so a fresh
+browser has *fewer* live tabs, not more — and killing Chrome risks corrupting the profile store that
+holds your WhatsApp Web linked-device session, which would put you back at a QR code.
+
+---
+
 ## What JobSeeker does NOT need
 
 Worth stating, because these are the permissions people assume an automation like this wants:
@@ -159,6 +208,8 @@ failure.
 | `apple_events: "denied"` | Automation was refused or revoked | System Settings ▸ Privacy & Security ▸ Automation — tick Google Chrome and System Events |
 | `apple_events: "prompt-pending"` | An Apple Event timed out, almost always an unanswered consent dialog | Run `launchctl start com.jobseeker.jobrun` once while present and click Allow |
 | `js_from_apple_events: "off"` | Chrome is blocking scripted reads | Chrome ▸ View ▸ Developer ▸ Allow JavaScript from Apple Events |
+| `js_from_apple_events: "error"` | Chrome accepted the event but no tab ran the script. Read `js_probe_detail` — "timed out" on every tab means they were discarded, **not** that permission is missing | Exempt the sites from Memory Saver (section 3), or just click the tab to wake it |
+| A channel reads fine interactively but never at 08:00 | Its tab sat idle overnight and was discarded | Section 3 |
 | `chrome_running: false` with a blocker | Chrome is closed and could not be started | Check `JOBSEEKER_CHROME_AUTOLAUNCH` is not set to `0` |
 | `read_page_content: true` | Everything is working | — |
 

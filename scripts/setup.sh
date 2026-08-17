@@ -203,6 +203,19 @@ chrome_toggle_steps() {
   say ""
 }
 
+# Chrome discards long-idle background tabs to reclaim memory, and a discarded tab has no renderer,
+# so a scripted read of it never returns. It fails with the SAME timeout a missing permission gives,
+# which is why this is worth stating explicitly rather than leaving to a generic error. It bites
+# hardest unattended: at 08:00 the WhatsApp and LinkedIn tabs have been idle all night.
+memory_saver_steps() {
+  say ""
+  say "    1. Open Chrome ▸ Settings ▸ Performance"
+  say "    2. Under \"Memory Saver\", click Add beside \"Always keep these sites active\""
+  say "    3. Enter web.whatsapp.com and click Add"
+  say "    4. Click Add again, enter linkedin.com, click Add"
+  say ""
+}
+
 if [ "$DRY" = 1 ]; then
   skip "would trigger the macOS Automation prompt and verify browser access"
 else
@@ -243,11 +256,33 @@ else
         chrome_toggle_steps
       done
     fi
+    # Every tab timed out rather than refusing: permission is granted, the tabs were just asleep.
+    # Different problem, different fix — offering the Apple Events toggle here would send someone to
+    # tick a box that is already ticked.
+    if [ "$BROWSER_OK" != 1 ] && browser_blockers | grep -qi "no tab ran the page script"; then
+      say ""
+      say "  ${BOLD}Chrome put its tabs to sleep.${OFF} Permission is fine — a sleeping tab has nothing"
+      say "  running to answer. Either click a tab to wake it, or stop Chrome sleeping these two:"
+      memory_saver_steps
+      if [ "$INTERACTIVE" = 1 ]; then
+        printf "  Press Enter when done, or S to skip… "
+        read -r ans </dev/tty || ans="s"
+        case "$ans" in [sS]*) : ;; *) probe; browser_can_read && BROWSER_OK=1 ;; esac
+      fi
+    fi
   fi
 
   if [ "$BROWSER_OK" = 1 ]; then
     TABS="$(node -e 'try{process.stdout.write(String(require("./data/.browser-status.json").tabs_open))}catch{process.stdout.write("?")}' 2>/dev/null)"
     ok "browser verified — read-pages via apple-events, $TABS tabs"
+    # Reading works NOW, at the keyboard, with the tabs awake. The unattended run is the one that
+    # struggles, so recommend this while things look healthy rather than after a silent 08:00.
+    say ""
+    say "  ${BOLD}One more Chrome setting, so the 08:00 run works too:${OFF}"
+    memory_saver_steps
+    say "  Chrome puts idle background tabs to sleep, and a sleeping tab cannot be read. That is why"
+    say "  a channel can read fine now and read nothing overnight. Keeping these two awake fixes it."
+    say ""
   else
     fail "browser cannot read page content yet"
     browser_blockers | sed 's/^/          /'

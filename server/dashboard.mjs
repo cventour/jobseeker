@@ -1177,6 +1177,26 @@ function setupHTML(st, criteria) {
         "<li>Tick <b>Google Chrome</b> under Claude</li></ol>",
     ]);
   }
+  // Shown only when a tab actually failed to answer. Chrome discards long-idle background tabs, and
+  // a discarded tab has no renderer — so the read fails with the same timeout a missing permission
+  // gives, and the user is told their messages cannot be read while everything is in fact granted.
+  // Reading the channels at 08:00 means their tabs have been idle all night, which is exactly the
+  // case Memory Saver reclaims. Code cannot fix it: waking a tab means activating it, and a
+  // discarded LinkedIn messaging tab reloads on activation and marks the first thread read.
+  if (b?.js_from_apple_events === "error") {
+    manual.push([
+      "Chrome Memory Saver",
+      "<ol><li>Open Chrome ▸ Settings ▸ <b>Performance</b></li>" +
+        "<li>Under <b>Memory Saver</b>, click <b>Add</b> beside &quot;Always keep these sites active&quot;</li>" +
+        "<li>Enter <code>web.whatsapp.com</code>, click <b>Add</b></li>" +
+        "<li>Repeat for <code>linkedin.com</code></li></ol>" +
+        "<p class='muted'>Chrome put a tab to sleep to save memory, and a sleeping tab cannot be read — " +
+        "the permissions themselves are fine. This is why a channel can read correctly while you are at " +
+        "the machine and fail overnight." +
+        (b?.js_probe_detail ? ` Last probe: ${esc(b.js_probe_detail)}.` : "") +
+        "</p>",
+    ]);
+  }
   const chanRow = (label, days, how) =>
     `<tr><td class="nw"><b>${esc(label)}</b></td><td class="nw">${
       days === null ? `<span class="bad-pill">never read</span>` : days > 2
