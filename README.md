@@ -121,9 +121,26 @@ That folder is excluded from version control, so it cannot be published by accid
 [Node 20+](https://nodejs.org), and [Claude Code](https://claude.com/claude-code). Gmail and Google
 Calendar work through Claude Code's own connectors — nothing to install for those.
 
-**Optional:** Claude Code's WhatsApp channel plugin, if you want the daily digest and approval
-prompts to reach your phone. Without it, everything still runs — the digest lands in the dashboard
-instead, and the run says so rather than failing quietly.
+**Optional — WhatsApp delivery.** By default the digest and approval prompts sit in the dashboard.
+To have them reach your phone instead, install
+[whatsapp-claude-channel](https://github.com/Rich627/whatsapp-claude-plugin), a third-party Claude
+Code plugin (not maintained by this project — a linked-device messaging bridge with its own access
+control):
+
+```bash
+claude plugin marketplace add Rich627/whatsapp-claude-plugin
+claude plugin install whatsapp-claude-channel@whatsapp-claude-plugin
+```
+
+Then, inside Claude Code, pair it to your own WhatsApp:
+
+```text
+/whatsapp-claude-channel:setup
+```
+
+`/onboard` (below) then asks for your number and saves it as `whatsapp_owner_jid` in
+`config/job-seeker.config.md`. Skip all of this and JobSeeker still works exactly the same — the
+digest is written to `data/.last-digest.md` and shown in the dashboard either way.
 
 ```bash
 git clone <this repo> && cd JobSeeker
