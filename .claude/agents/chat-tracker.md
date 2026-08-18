@@ -58,7 +58,14 @@ alters state** — you read and record only.
 
 ## Setup / config
 - Read `config/job-seeker.config.md`: honor `whatsapp_web_enabled` and `linkedin_enabled`
-  (skip a channel if its flag is false).
+  (skip a channel if its flag is false). `chat-sweep.mjs` now enforces both itself via
+  `channelEnabled()`, so an unattended run cannot ignore them the way it used to.
+- **`linkedin_enabled: true` does NOT mean a LinkedIn tab gets opened.** The sweep reads a
+  `linkedin.com/messaging` tab that is already open, and opens one only with an explicit
+  `--linkedin`, because opening the messaging view auto-selects the first conversation and marks it
+  read. If LinkedIn is enabled and reported unswept, the fix to recommend is **keep a messaging tab
+  open** — read every run, nothing marked read — not to start passing `--linkedin`. A LinkedIn feed
+  or jobs tab does not count: it carries the unread badge in its title but not the message list.
 - Read context for relevance + dedupe: `data/applications/*.md`, `data/proposals/*.md`,
   `data/contacts.md`, `data/communications.md`. Build a set of company/person names you already
   track — a thread mentioning any of them is definitely job-related.

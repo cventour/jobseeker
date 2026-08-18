@@ -25,12 +25,16 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { withBrowser, assertCanReadContent } from "./browser.mjs";
 import { readTable, readRecordDir } from "../server/md.mjs";
-import { ignoredChats } from "../server/config.mjs";
+import { ignoredChats, channelEnabled } from "../server/config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
 const DRY = process.argv.includes("--dry-run");
+// Open a LinkedIn messaging tab if none is present. Separate from `linkedin_enabled`, and kept
+// explicit, because OPENING the messaging view auto-selects the first conversation and marks it
+// read on the real account. Reading a tab the user already has open costs nothing; opening one
+// spends an unread badge, so that stays a deliberate act rather than a config default.
 const DO_LINKEDIN = process.argv.includes("--linkedin");
 // Override the watermark window. Two real uses: backfilling after a gap (the sweep was broken for a
 // week, so "since last run" would miss everything in between), and testing the selection without
@@ -316,6 +320,14 @@ async function main() {
     }
     sinceFor[ch] = SINCE_ARG || ts || new Date(Date.now() - 7 * 864e5).toISOString();
   }
+  // Honour the switches the user actually set. These are surfaced in the dashboard and written to
+  // config/job-seeker.config.md; until now nothing read them, so turning LinkedIn ON did nothing
+  // and turning WhatsApp OFF would equally have done nothing.
+  const enabled = {
+    whatsapp: await channelEnabled("whatsapp_web"),
+    linkedin: await channelEnabled("linkedin"),
+  };
+
   const results = await withBrowser(async (ctx) => {
     // A cold Chrome at 08:00 sits on the New Tab Page with nothing scriptable open — and this sweep
     // opens its own WhatsApp tab anyway, so that is not a reason to abandon the run. A real
@@ -329,7 +341,9 @@ async function main() {
     const liTab = ctx.findTab("linkedin.com/messaging");
 
     const out = [];
-    if (waTab) {
+    if (!enabled.whatsapp) {
+      out.push({ source: "WhatsApp", swept: false, reason: "disabled in config (whatsapp_web_enabled)", chats: [] });
+    } else if (waTab) {
       // Reuse the user's own tab and never close it: WhatsApp Web is single-session, so a second
       // tab shows "WhatsApp is open in another window" and steals the session from them.
       out.push(await sweepChannel({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab: waTab }));
@@ -345,7 +359,9 @@ async function main() {
       );
     }
 
-    if (liTab) {
+    if (!enabled.linkedin) {
+      out.push({ source: "LinkedIn", swept: false, reason: "disabled in config (linkedin_enabled)", chats: [] });
+    } else if (liTab) {
       out.push(await sweepChannel({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab: liTab }));
     } else if (DO_LINKEDIN) {
       const res = await ctx.withOwnedTab("https://www.linkedin.com/messaging/", async (tab) => {
@@ -354,10 +370,20 @@ async function main() {
       });
       out.push(res);
     } else {
+      // Say what to DO about it. The old wording named a `--linkedin` flag no scheduled run passes,
+      // so the digest read as a settled policy ("LinkedIn was not read") rather than a fixable gap.
+      // Keeping a messaging tab open is the option with no cost: it is read every run and nothing
+      // is ever marked read, whereas opening one spends an unread badge.
+      const other = ctx.tabs.filter((t) => /linkedin\.com/i.test(t.url) && !/\/messaging/i.test(t.url)).length;
       out.push({
         source: "LinkedIn",
         swept: false,
-        reason: "no messaging tab open; pass --linkedin to open one (note: LinkedIn auto-opens the first thread, marking it read)",
+        reason:
+          `enabled, but no linkedin.com/messaging tab was open` +
+          (other ? ` (${other} other LinkedIn tab(s) were, which do not carry the message list)` : "") +
+          ". Keep a messaging tab open — it is then read every run, and nothing is ever marked read. " +
+          "Opening one automatically is `--linkedin`, deliberately not the default because LinkedIn " +
+          "auto-selects the first conversation and marks it read.",
         chats: [],
       });
     }

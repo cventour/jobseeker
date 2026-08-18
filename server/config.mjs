@@ -62,3 +62,21 @@ export async function companyAliases() {
   }
   return out;
 }
+
+/**
+ * Is a channel switched on? Config: `whatsapp_web_enabled: true`, `linkedin_enabled: true`.
+ *
+ * Defaults to TRUE for an absent key, because these are opt-OUT switches: a fresh clone with no
+ * config file should behave the way the documentation describes, not silently read nothing.
+ *
+ * This exists because `linkedin_enabled` was a setting the dashboard offered, the config file
+ * recorded, and NOTHING read — the sweep gated on a `--linkedin` argv flag no scheduled run ever
+ * passes. The user switched LinkedIn on, the switch did nothing, and the digest reported the
+ * channel as deliberately skipped. Same shape as the old `schedule_job_run` trap: written by one
+ * component, read by none.
+ */
+export async function channelEnabled(name) {
+  const raw = (await loadConfig())[`${name}_enabled`];
+  if (raw === undefined || raw === null || String(raw).trim() === "") return true;
+  return !/^(false|no|off|0)$/i.test(String(raw).trim());
+}
