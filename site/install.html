@@ -3,7 +3,14 @@
 <title>Install — JobSeeker</title>
 <meta name="description" content="Two commands to install JobSeeker on macOS.">
 <link rel="icon" href="img/mark.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://myjobseeker.ai/install.html">
+<meta property="og:title" content="Install JobSeeker">
+<meta property="og:description" content="Two commands to install JobSeeker on macOS. No dependencies.">
+<meta property="og:image" content="https://myjobseeker.ai/img/og.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="style.css">
+<script>document.documentElement.className+=" js-reveal"</script>
 </head><body>
 <header class="nav">
   <a class="wordmark" href="index.html"><img src="img/mark-ink.png" alt=""><span>JOBSEEKER</span></a>
@@ -24,32 +31,215 @@
 
   <section>
     <p class="eyebrow">You need</p>
-    <ul class="problems">
-      <li>A Mac. JobSeeker drives macOS and is not portable to Windows or Linux.</li>
-      <li><a href="https://google.com/chrome">Google Chrome</a>, logged in to the accounts you want read.</li>
-      <li><a href="https://nodejs.org">Node 20 or newer</a>.</li>
-      <li><a href="https://claude.com/claude-code">Claude Code</a> — the agents run inside it.</li>
+    <ul class="balloons">
+      <li data-reveal>
+        <b>A Mac</b>
+        <span>JobSeeker drives macOS directly. It does not run on Windows or Linux.</span>
+      </li>
+      <li data-reveal>
+        <b><a href="https://claude.com/claude-code">Claude Code</a></b>
+        <span>Where the agents live, and where you talk to them.</span>
+      </li>
+      <li data-reveal>
+        <b><a href="https://google.com/chrome">Google Chrome</a></b>
+        <span>Logged in to the accounts you want read, so nothing ever asks for a password.</span>
+      </li>
+      <li data-reveal>
+        <b><a href="https://nodejs.org">Node 20 or newer</a></b>
+        <span>Runs the dashboard. There is nothing else to install.</span>
+      </li>
     </ul>
   </section>
 
   <section>
+    <p class="eyebrow">Apps the agent will connect to</p>
+    <h2>A few tools you already use.</h2>
+    <p class="sub">You will need to connect Claude to a handful of things already on your Mac — your
+      email, your browser, WhatsApp. That is what lets the work happen automatically while you are
+      not around, instead of only when you are sitting there asking for it. Each one unlocks a
+      different part of the system, so skipping one costs you that part and nothing else. Onboarding
+      checks every one of them and the dashboard tells you which are live.</p>
+    <ul class="problems staggered">
+      <li data-reveal><mark><b>Gmail and Google Calendar.</b></mark> Without these, nothing reads your email, and your
+        applications will only ever be as current as what you type in yourself.</li>
+      <li data-reveal><mark><b>Chrome, connected to Claude.</b></mark> This is what reads WhatsApp and LinkedIn, and what
+        fills in an application inside your own logged-in session — so you are never asked to hand
+        over a password. Chrome also needs one setting ticked by hand, under <b>View ▸ Developer ▸
+        Allow JavaScript from Apple Events</b>, and macOS will ask you once to permit automation.
+        Without it, email and job-hunting still work; WhatsApp, LinkedIn and assisted applications
+        do not.</li>
+      <li data-reveal><mark><b>WhatsApp.</b></mark> How the morning digest reaches your phone, and how you approve or reject
+        something while away from your desk. This is the one piece you install yourself — the next
+        section covers it. Without it everything still runs; you just read the results on the
+        dashboard instead.</li>
+      <li data-reveal><mark><b>Your CV.</b> </mark>Read once, at setup. Every relevance score and every prefilled application
+        answer comes from it, so this is the one thing that makes the results yours rather than
+        generic.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">First, check if you have Node</p>
+    <h2>You probably have it. Check before installing anything.</h2>
+    <p class="sub"><b>There is no separate npm to install.</b> npm comes bundled with Node — install
+      one and you have both. macOS does not ship with either, so if you have never done web or
+      JavaScript work on this Mac, you likely need Node once.</p>
+    <p class="sub">Paste this and see what comes back:</p>
+    <pre data-copy><code>node -v</code></pre>
+    <p class="sub">A version number of <code>v20</code> or higher means you are set — skip ahead. If
+      instead you see <i>command not found</i>, install Node. The simplest route is
+      <a href="https://nodejs.org">the installer from nodejs.org</a>: download the LTS build, open it,
+      click through, done. If you already use <a href="https://brew.sh">Homebrew</a>, this is quicker:</p>
+    <pre data-copy><code>brew install node</code></pre>
+    <p class="sub">Either way, confirm both arrived before moving on:</p>
+    <pre data-copy><code>node -v && npm -v</code></pre>
+  </section>
+
+  <section>
     <p class="eyebrow">Install</p>
-    <pre><code>git clone https://github.com/cventour/jobseeker
+    <pre data-copy><code>git clone https://github.com/cventour/jobseeker
 cd jobseeker
 npm run setup</code></pre>
-    <p class="sub">There is nothing to <code>npm install</code>. The whole system runs on Node
-      built-ins and shell, so there are no dependencies to audit and nothing to rot.</p>
+    <p class="sub">Note there is no <code>npm install</code> step, and that is not an omission — the
+      whole system runs on Node's own built-ins and on shell, so there are no third-party packages to
+      download, audit or keep up to date. <code>npm</code> is used here only as the way to run
+      commands, not to fetch anything.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">If you want to connect your WhatsApp</p>
+    <h2>The one piece you install yourself.</h2>
+    <p class="sub">Email, calendar and the browser are connections Claude already offers. WhatsApp is
+      different: it needs a small server of its own — an <b>MCP server</b> — running alongside Claude
+      Code, and it comes from a separate open-source plugin. Without it
+      installed and paired there is no morning digest.</p>
+
+    <div class="tier">
+      <p class="tag">Only if you want the digest on your phone</p>
+      <p class="tier-h">Install the plugin, then link your phone.</p>
+      <p class="sub">Two commands in your terminal. The first registers where the plugin comes from,
+        the second installs it:</p>
+      <pre data-copy><code>claude plugin marketplace add Rich627/whatsapp-claude-plugin
+claude plugin install whatsapp-claude-channel@whatsapp-claude-plugin</code></pre>
+      <p class="sub">Start Claude Code and it loads by itself. Then give it the number you want it to
+        act as — country code and number, no plus sign:</p>
+      <pre data-copy><code>&gt; /whatsapp-claude-channel:configure 971551234567</code></pre>
+      <p class="sub">A pairing code appears in your terminal.</p>
+      <p class="sub">On your phone, open <b>WhatsApp ▸ Settings ▸ Linked Devices ▸ Link a Device</b>,
+        choose <b>Link with phone number instead</b>, and type the code in.</p>
+      <p class="sub">That is the same mechanism WhatsApp Web uses, so there is no Business API, no
+        Meta developer account and no API keys involved — it is your own WhatsApp, with one more
+        linked device on it.</p>
+    </div>
+
+    <p class="eyebrow">Worth knowing before you do</p>
+    <ul class="problems">
+      <li><b><mark>It only sends.</mark></b> This server delivers your digest and sends messages you
+        have already approved. It does not read your conversations — that is the browser's job, and a
+        separate decision. So installing it does not give anything access to your chat history.</li>
+      <li><b><mark>Messages come from your own number.</mark></b> Anyone receiving one sees it as
+        coming from you, because it is. If you would rather keep a separate identity for it, pair a
+        different number.</li>
+      <li><b><mark>One session holds the link at a time.</mark></b> WhatsApp allows the server a
+        single device link, so two Claude sessions cannot share it. If you have a scheduled run,it reclaims the
+        link to whatsapp when it starts — otherwise a session you left open days ago would quietly hold it and the
+        scheduled digest would go nowhere.</li>
+      <li><b><mark>It is someone else's plugin.</mark></b> JobSeeker does not ship or maintain it. It
+        is worth reading before you install it, as with anything that connects to your accounts:
+        <a href="https://github.com/Rich627/whatsapp-claude-plugin">Rich627/whatsapp-claude-plugin</a>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">How to prepare your Mac</p>
+    <h2>Setting up permissions for the agents to do work for you.</h2>
+    <p class="sub">Setup handles this for you — it triggers each prompt at the right moment and then
+      checks the result rather than assuming it worked. This section is here so you know what you are
+      agreeing to, and so you can skip the parts you do not need.</p>
+    <p class="sub">The whole of it comes down to one macOS permission: <b>Automation ▸ Google
+      Chrome</b>, which is what lets JobSeeker read a page you already have open. How many times you
+      grant it depends entirely on how you intend to run things.</p>
+
+    <div class="tier">
+      <p class="tag">Everyone</p>
+      <p class="tier-h">Nothing to change.</p>
+      <p class="sub">Reading your email and calendar, researching companies, finding roles and scoring
+        them against your CV all happen through Claude's own connections. None of it touches a macOS
+        privacy setting. If that is all you want, you are already done.</p>
+    </div>
+
+    <div class="tier">
+      <p class="tag">Only for WhatsApp, LinkedIn and assisted applications</p>
+      <p class="tier-h">Let Claude read a page in your browser.</p>
+      <p class="sub">These are the only features that need your real browser, because they depend on
+        you already being logged in. The first time it happens macOS asks whether Claude may control
+        Google Chrome — click <b>Allow</b>. You can trigger that prompt deliberately, while you are
+        sitting there, rather than being surprised by it later:</p>
+      <pre data-copy><code>npm run browser:probe</code></pre>
+      <p class="sub">Chrome then needs one box ticked by hand, which no script can do for it:
+        <b>Chrome menu bar ▸ View ▸ Developer ▸ Allow JavaScript from Apple Events</b>. Without it,
+        JobSeeker can see that you have eleven unread on WhatsApp Web but cannot read them. It is a
+        Chrome preference rather than a macOS one, so it will not appear in System Settings. There is
+        deliberately no script for it: automating that menu would need blanket Accessibility access,
+        which is a far larger permission than one checkbox is worth.</p>
+      <p class="sub">Expect this prompt to come back occasionally. macOS attaches the permission to
+        the exact program that asked, and Claude Code is version-pinned — so a new version is, as far
+        as macOS is concerned, a new program asking. Clicking Allow is permanent for that version.
+        You are at the keyboard when it appears, so it costs you a click.</p>
+    </div>
+
+    <div class="tier">
+      <p class="tag">When you want it to run on schedule, as a routine</p>
+      <p class="tier-h">The scheduled run asks separately.</p>
+      <p class="sub">This is the part worth understanding, because it is the one that fails quietly.
+        macOS ties permission to whichever program does the asking. When you run things yourself that
+        is Claude. When the daily run fires by itself it is <code>bash</code>, which macOS treats as a
+        completely different requester — so <b>approving one does not approve the other</b>. That is
+        exactly how a set-up that works perfectly while you watch it does nothing at 08:00, with
+        nobody there to click the dialog it is waiting on.</p>
+      <p class="sub">So you clear that second prompt once, on purpose, while you are present:</p>
+      <pre data-copy><code>launchctl kickstart -k gui/$(id -u)/com.jobseeker.browser</code></pre>
+      <p class="sub">Click <b>Allow</b> and the scheduled run is covered for good — unlike the
+        interactive one, this grant survives updates and reboots, because it is attached to a system
+        binary whose identity never changes.</p>
+      <p class="sub"><b>If you would rather not grant it at all, do not schedule anything.</b> Run the
+        morning routine by hand when it suits you and this whole tier is unnecessary. Setup skips it
+        entirely when you decline the scheduler. To choose a time later, or to change your mind:</p>
+      <pre data-copy><code>npm run schedule -- 09:00</code></pre>
+      <p class="sub">And to stop it running on a schedule again:</p>
+      <pre data-copy><code>npm run schedule -- --remove</code></pre>
+    </div>
+
+    <p class="eyebrow">What it never asks for</p>
+    <p class="sub">These are the permissions people expect an automation like this to want. It works
+      without every one of them, by design.</p>
+    <ul class="problems">
+      <li><b><mark>Accessibility.</mark></b> Nothing here clicks, types or submits on your behalf
+        without you watching. There are no synthetic keystrokes to grant.</li>
+      <li><b><mark>Screen Recording.</mark></b> Nothing is ever screenshotted. Page text is read
+        directly, not captured off your display.</li>
+      <li><b><mark>Full Disk Access.</mark></b> Only this project's own folder is read and written.</li>
+      <li><b><mark>A Chrome debugging port.</mark></b> Deliberately avoided — leaving one open would
+        let any program on your Mac drive your browser as you, which is a much bigger door than this
+        needs.</li>
+    </ul>
+    <p class="sub">To check what is actually working at any point, or after changing something:</p>
+    <pre data-copy><code>npm run browser:probe</code></pre>
+    <p class="sub">It reports each capability separately rather than one vague failure, so you can see
+      whether the problem is the macOS grant, the Chrome checkbox, or Chrome simply not being open.
+      The full reference lives in
+      <a href="https://github.com/cventour/jobseeker/blob/main/docs/PERMISSIONS.md">PERMISSIONS.md</a>.</p>
   </section>
 
   <section>
     <p class="eyebrow">Then</p>
-    <pre><code>claude
+    <pre data-copy><code>claude
 &gt; /onboard</code></pre>
     <p class="sub">Or open the dashboard and use <b>Settings ▸ Setup</b>, which does the same thing in
       a form — targeting, spend caps, the daily run time, and a live check of what is working.</p>
     <p class="sub">Onboarding asks what you are looking for — markets, roles, locations, seniority —
       reads your CV, and saves your answers. After that, one command each morning:</p>
-    <pre><code>&gt; /job-run</code></pre>
+    <pre data-copy><code>&gt; /job-run</code></pre>
     <div class="cta">
       <a class="btn" href="https://github.com/cventour/jobseeker">Open the repository</a>
       <a class="btn ghost" href="privacy.html">What it never does</a>
@@ -60,4 +250,6 @@ npm run setup</code></pre>
   <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
   <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
 </footer>
+<script src="copy.js"></script>
+<script src="reveal.js"></script>
 </body></html>

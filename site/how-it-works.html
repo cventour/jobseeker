@@ -1,9 +1,16 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>How it works — JobSeeker</title>
-<meta name="description" content="Plain Markdown files, no dependencies, and why it refuses to open a browser debugging port.">
+<meta name="description" content="You talk to one assistant. Behind it, a small team of specialists reads your email and chats, finds roles, drafts follow-ups, and keeps score — and asks you before it does anything you cannot take back.">
 <link rel="icon" href="img/mark.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://myjobseeker.ai/how-it-works.html">
+<meta property="og:title" content="How JobSeeker works">
+<meta property="og:description" content="One assistant, a small team of specialists behind it. What each one does, when they run, and what you need to set up.">
+<meta property="og:image" content="https://myjobseeker.ai/img/og.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="style.css">
+<script>document.documentElement.className+=" js-reveal"</script>
 </head><body>
 <header class="nav">
   <a class="wordmark" href="index.html"><img src="img/mark-ink.png" alt=""><span>JOBSEEKER</span></a>
@@ -17,58 +24,114 @@
 <main>
   <section class="hero">
     <p class="eyebrow">How it works</p>
-    <h1>Plain files,<br><mark>and no magic.</mark></h1>
-    <p class="lede">JobSeeker is a set of Claude Code agents, a single-file dashboard, and a folder of
-      Markdown. There is no database, no service, and no dependencies at all.</p>
+    <h1>One assistant.<br><mark>A small team behind it.</mark></h1>
+    <p class="lede">You never have to think about any of this. You talk to one assistant, in plain
+      English, and it works out who should handle what.</p>
+    <p class="sub">Behind that single conversation there are eight specialists, each with one job and
+      no ability to wander outside it. The one that reads your email cannot send anything. The one
+      that finds jobs cannot apply to them. That separation is the whole safety story, and it is why
+      you can let this run every morning without watching it.</p>
   </section>
 
   <section>
-    <p class="eyebrow">Design principles</p>
-    <h2>Fail loudly, never silently.</h2>
-    <p class="sub">The dominant failure of an automation like this is quiet success — a run that
-      reports <code>ok</code> having read nothing. It happened here: nine mornings in a row completed
-      cleanly while reading no messages at all. So coverage is recorded as data rather than prose, and
-      a sweep that extracts zero conversations is treated as a <b>failure</b> — a broken selector —
-      never as an empty inbox.</p>
-    <h2>Measure capability, never assume it.</h2>
-    <p class="sub">Nothing is allowed to conclude "there is no browser" from context. A probe writes a
-      machine-readable verdict and everything downstream reads that, because the inference
-      "interactive means the browser works" turned out to be false in both directions.</p>
-    <h2>Approval-gated by construction.</h2>
-    <p class="sub">The unattended pipeline has no ability to submit or send. Those paths are separate,
-      interactive, and require an approval record — not a prompt instruction that could be argued
-      away.</p>
-  </section>
-
-  <section>
-    <p class="eyebrow">The browser</p>
-    <h2>Why it will not open a debugging port.</h2>
-    <p class="sub">Reading WhatsApp Web needs a real, logged-in browser. The obvious route is Chrome's
-      DevTools Protocol, and it is the wrong one: Chrome refuses a debugging port on your default
-      profile, so getting one means launching a <em>different</em> profile — which means WhatsApp
-      shows a QR code and your linked device is gone. An open port would also let any local process
-      drive your browser as you.</p>
-    <p class="sub">So JobSeeker drives the browser you already have open, through macOS Apple Events.
-      No restart, no port, no profile games. If Chrome is closed it is started exactly as macOS starts
-      it at login — with no flags, because flags are what would land you on the wrong profile.</p>
-  </section>
-
-  <section>
-    <p class="eyebrow">Tests</p>
-    <h2>Each one guards a bug that actually happened.</h2>
-    <ul class="problems">
-      <li><b>Concurrency</b> — parallel writers losing rows. Measured at 2 of 24 surviving before the
-        lock existed, with no error raised anywhere.</li>
-      <li><b>Sweep</b> — a drifted selector faking a successful read and advancing a watermark.</li>
-      <li><b>Security</b> — path traversal through a record id, and the dashboard binding beyond
-        loopback.</li>
+    <p class="eyebrow">Talking to it</p>
+    <h2>Just ask.</h2>
+    <p class="sub">There is no syntax to learn. You say what you want and the right specialist picks
+      it up:</p>
+    <ul class="says">
+      <li data-reveal>jobseeker, any news today?</li>
+      <li data-reveal>jobseeker, find me product roles in Dubai.</li>
+      <li data-reveal>what have I got due this week?</li>
+      <li data-reveal>draft a follow-up to the recruiter at Aegis.</li>
+      <li data-reveal>close the things I have already done.</li>
     </ul>
-    <p class="sub">Full detail lives in the repository:
-      <a href="https://github.com/cventour/jobseeker/blob/main/docs/ARCHITECTURE.md">ARCHITECTURE.md</a>.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">The team</p>
+    <h2>Eight specialists, one job each.</h2>
+    <ul class="problems">
+      <li><b><mark>The inbox watcher.</mark></b> Reads your email and calendar and notices the things that matter
+        — a recruiter replying, an application moving a stage, an interview invite — and writes them
+        down so you do not have to. It can read your mail. It cannot send any.</li>
+      <li><b><mark>The chat watcher.</mark></b> Checks WhatsApp and LinkedIn for job-related messages. It reads
+        the message list from the outside without opening your conversations, because opening one
+        marks it read and destroys your own sense of what you still owe a reply to.</li>
+      <li><b><mark>The researcher.</mark></b> Works out which companies are worth your time in a market you care
+        about — cybersecurity, fintech, whatever you tell it — and keeps a ranked list, scored
+        against what you are actually looking for.</li>
+      <li><b><mark>The scout.</mark></b> Goes and finds real, live openings at those companies, and scores each
+        one against your CV so you get a number instead of a hunch. It never applies to anything.</li>
+      <li><b><mark>The form filler.</mark></b> When you decide to apply, it fills the application form in your own
+        browser using your CV and your saved answers, then stops and shows you everything. Nothing is
+        submitted until you say so.</li>
+      <li><b><mark>The drafter.</mark></b> Writes your follow-up messages — email, LinkedIn or WhatsApp — in your
+        voice, and hands them to you to approve. It will not send a message you have not read.</li>
+      <li><b><mark>The bookkeeper.</mark></b> Notices when you have already done something and closes it. A
+        referral offered on WhatsApp and fulfilled by email three days later is the same task, and
+        this is the one that joins them up so it stops nagging you.</li>
+      <li><b><mark>The second pair of eyes.</mark></b> Reviews everything at the end of a run and flags what is
+        off — the same job listed twice, a conflict, something quietly overdue. It only ever looks
+        and reports.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">The dashboard</p>
+    <h2>And a place to see all of it.</h2>
+    <p class="sub">Most days the message on your phone is enough. When you do want the detail, it is
+      all here — every job application and where it stands, the roles found for you and how well each one
+      matches, your email and whatsapp conversations,  what is due, and a log of everything the agents have done.</p>
+    <figure class="demo" data-demo>
+      <div class="demo-bar"><i></i><i></i><i></i><span class="demo-url">localhost:4319</span></div>
+      <div class="demo-view">
+        <img src="img/today.png" alt="The Today screen: approvals waiting and follow-ups due">
+        <img src="img/applications.png" alt="The Applications screen: each application and its stage" aria-hidden="true">
+        <img src="img/jobs.png" alt="The Jobs screen: found roles scored against your CV" aria-hidden="true">
+        <img src="img/activity.png" alt="The Activity log: everything the agents have done" aria-hidden="true">
+        <span class="demo-cursor" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 2.5l14.2 8.2-6.3 1.1 3.3 6.7-2.6 1.3-3.3-6.7L5 17.8z" fill="#fff" stroke="#111" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+      </div>
+      <figcaption>Sample data — every name, company and date above is invented.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <p class="eyebrow">When it runs</p>
+    <h2>Every morning, or whenever you ask.</h2>
+    <p class="sub"><b>On a schedule.</b> Pick a time and it runs by itself on your Mac — checks your
+      channels, refreshes the research, looks for new roles, tidies up what is finished, and sends
+      you a digest on WhatsApp. You wake up to a short message telling you what is new and what you
+      owe someone today.</p>
+    <p class="sub"><b>Or by hand.</b> Anything you can schedule, you can also just ask for. Run the
+      whole  routine on demand, or ask for one piece of it — check my inbox, find me roles,
+      draft this follow-up.</p>
+    <p class="sub"><b>One honest caveat.</b> The scheduled run cannot read WhatsApp and LinkedIn on
+      its own, because reading those needs your real browser, open and logged in, so you need to give 
+      permission to the agent to perform these tasks on a browser - instructions are provided - Everything else
+      works unattended. When you are at your Mac, ask Claude to check your chats and it catches up in a
+      minute.</p>
+    <p class="sub">A scheduled run never applies to a job and never sends a message. If something
+      needs a decision, it waits in a queue for you rather than guessing. There is more on that in
+      <a href="privacy.html">what it never does</a>.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Then what</p>
+    <h2>Set it up once.</h2>
+    <p class="sub">JobSeeker has no account and no service of its own — it borrows the connections you
+      already have. But you will need a Claude subscription. Do not worry though, you can set spending 
+      limits so the agents will not overconsume your quota. Setting it up is mostly a matter of granting it permission to look at things you
+      are already logged in to, and it takes a few minutes.</p>
+    <div class="cta">
+      <a class="btn" href="install.html">What you need, and how to install it</a>
+      <a class="btn ghost" href="https://github.com/cventour/jobseeker">See the code</a>
+    </div>
   </section>
 </main>
 <footer>
   <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
   <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
 </footer>
+<script src="reveal.js"></script>
+<script src="demo.js"></script>
 </body></html>

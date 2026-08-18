@@ -18,7 +18,7 @@
   <a href="LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-111?style=flat-square"></a>
   <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-D6F84C?style=flat-square&labelColor=111">
   <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-111?style=flat-square">
-  <a href="https://cventour.github.io/jobseeker/"><img alt="Website" src="https://img.shields.io/badge/website-jobseeker-111?style=flat-square"></a>
+  <a href="https://myjobseeker.ai"><img alt="Website" src="https://img.shields.io/badge/website-myjobseeker.ai-111?style=flat-square"></a>
 </p>
 
 ---

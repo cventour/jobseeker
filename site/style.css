@@ -34,12 +34,25 @@ section:last-child{border-bottom:0}
 h1{font-size:clamp(27px,6.4vw,78px);line-height:1.08;font-weight:700;margin:0 0 34px;
   letter-spacing:-.02em;overflow-wrap:break-word}
 h1 mark{background:var(--accent);color:var(--onAccent);padding:.06em .22em;display:inline-block}
+
+/* Highlighter over each specialist's name. A flat rectangle at body size reads as a UI chip -- a
+   status, something clickable. The angled gradient fades the two ends out instead, which is what a
+   felt-tip actually leaves behind, so it reads as someone marking up their own page. Inline (not
+   inline-block) so a name breaking across two lines gets a stroke on each. */
+.problems mark{background:linear-gradient(101deg,
+  rgba(214,248,76,0) 0.2%, var(--accent) 1.4%, var(--accent) 98.6%, rgba(214,248,76,0) 99.8%);
+  color:var(--onAccent);padding:.1em .16em;border-radius:.12em;
+  -webkit-box-decoration-break:clone;box-decoration-break:clone}
 h2{font-size:clamp(20px,3.2vw,34px);font-weight:700;margin:0 0 30px;letter-spacing:-.01em;
   overflow-wrap:break-word}
 .lede{font-size:clamp(18px,2vw,21px);max-width:60ch;margin:0 0 20px}
 .sub{color:var(--muted);max-width:62ch;margin:0 0 20px}
 
 .eyebrow{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin:0 0 22px}
+/* An eyebrow is normally the first thing in a section, so it carries no top margin. Used a second
+   time mid-section -- to split one list into labelled groups -- it needs to sit clearly closer to
+   the list it introduces than to the one it follows. */
+.problems + .eyebrow,.sub + .eyebrow{margin-top:46px}
 
 .cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:38px}
 .btn{display:inline-block;padding:15px 26px;background:var(--accent);color:var(--onAccent);
@@ -49,6 +62,110 @@ h2{font-size:clamp(20px,3.2vw,34px);font-weight:700;margin:0 0 30px;letter-spaci
 .problems{list-style:none;padding:0;margin:0;display:grid;gap:0;max-width:74ch}
 .problems li{padding:17px 0;border-top:1px solid var(--rule);font-size:17px}
 .problems li:last-child{border-bottom:1px solid var(--rule)}
+
+/* A list already ends on a rule, so a paragraph following it needs its own breathing room --
+   without this the closing thought reads as a sixth row of the list. */
+.problems + .sub,.faults + .sub{margin-top:30px}
+
+/* The bio sits in the same measure as the rest of the prose rather than in its own column: a
+   second column here would be the only two-column block on the site, and would read as a sidebar
+   -- i.e. as optional -- which is the opposite of what a credibility section is for. */
+.built{max-width:62ch}
+.byline{font-family:ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace;
+  font-size:14px;color:var(--muted);margin:26px 0 0;
+  padding-top:18px;border-top:1px solid var(--rule);overflow-wrap:anywhere}
+.byline a{color:var(--ink);text-decoration:none;border-bottom:2px solid var(--accent)}
+
+/* Conditional set-up steps. The point of the block is the tag: someone who will never schedule a run
+   should be able to see, without reading the prose, that a whole tier does not apply to them. So the
+   tag is the loudest thing in it, and the left rule ties the tier's paragraphs and commands together
+   as one unit rather than letting them dissolve into the surrounding page. */
+.tier{border-left:3px solid var(--rule);padding:4px 0 4px 26px;margin:0 0 40px}
+.tier:last-of-type{margin-bottom:44px}
+.tag{display:inline-block;background:var(--accent);color:var(--onAccent);
+  font:700 11.5px/1 ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace;
+  letter-spacing:.11em;text-transform:uppercase;padding:7px 11px;margin:0 0 16px}
+.tier-h{font-family:ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace;
+  font-size:19px;font-weight:700;letter-spacing:-.01em;margin:0 0 14px}
+.tier .sub{max-width:66ch}
+.tier pre{margin:0 0 20px}
+@media (max-width:600px){
+  .tier{padding-left:16px;margin-bottom:32px}
+  .tier-h{font-size:17px}
+}
+
+/* Things you say to it, drawn as sent messages. These are the one place on the site where the
+   reader is meant to hear a voice rather than read a spec, and a bordered row list flattened them
+   into exactly the specification tone they were trying to escape. The bubble shape does the
+   explaining, so the quotation marks could come out of the copy. They sit on the left edge, in the
+   same column as every other block on the page, so the eye picks them up on its normal way down. */
+/* Each bubble is only as wide as its sentence, so the ragged right edge is what makes the stack
+   read as separate messages rather than as a paragraph. */
+.says{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;align-items:flex-start;
+  gap:14px}
+.says li{position:relative;background:var(--panel);color:var(--panelInk);
+  padding:15px 21px;border-radius:20px 20px 20px 5px;max-width:min(48ch,100%);
+  font-size:16.5px;line-height:1.5;box-shadow:0 8px 20px -16px rgba(17,17,17,.55)}
+/* The tail. A pure triangle would need a second colour to fake the corner; a rotated square tucked
+   under the rounded corner inherits the bubble's own background and stays correct if it changes. */
+.says li::after{content:"";position:absolute;left:-4px;bottom:0;width:14px;height:14px;
+  background:var(--panel);border-bottom-left-radius:3px;
+  clip-path:polygon(100% 0,100% 100%,0 100%)}
+.says li:last-child{margin-bottom:4px}
+.says li:nth-child(2).revealed{transition-delay:.10s}
+.says li:nth-child(3).revealed{transition-delay:.20s}
+.says li:nth-child(4).revealed{transition-delay:.30s}
+.says li:nth-child(5).revealed{transition-delay:.40s}
+@media (max-width:600px){
+  .says li{font-size:15.5px;padding:13px 17px;max-width:100%}
+}
+
+/* Floating requirement cards. The rest of the site is hairlines and right angles, so these are the
+   one soft shape on it -- which is the point: they are the only place a reader is counting things
+   they must go and get, and they should feel light rather than like a checklist. */
+.balloons{list-style:none;padding:0;margin:0;display:grid;gap:20px;
+  grid-template-columns:repeat(auto-fit,minmax(226px,1fr))}
+.balloons li{background:#fff;border:1px solid var(--rule);border-radius:16px;padding:24px 22px;
+  box-shadow:0 10px 24px -18px rgba(17,17,17,.5);
+  animation:float 7s ease-in-out infinite alternate;
+  transition:transform .35s ease,box-shadow .35s ease,border-color .35s ease}
+.balloons b{display:block;font-family:ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace;
+  font-size:15px;font-weight:700;letter-spacing:-.01em;margin-bottom:9px}
+.balloons b a{text-decoration:none;border-bottom:2px solid var(--accent)}
+.balloons span{display:block;color:var(--muted);font-size:15px;line-height:1.55}
+
+/* Each card drifts on its own clock. Identical timing reads as one rigid block sliding up and down,
+   which looks like a rendering fault rather than like anything floating. */
+.balloons li:nth-child(2){animation-duration:8.5s;animation-delay:-2s}
+.balloons li:nth-child(3){animation-duration:6.4s;animation-delay:-4s}
+.balloons li:nth-child(4){animation-duration:9.2s;animation-delay:-1s}
+@keyframes float{from{transform:translateY(0)}to{transform:translateY(-9px)}}
+
+.balloons li:hover{transform:translateY(-13px);border-color:var(--ink);
+  box-shadow:0 18px 34px -20px rgba(17,17,17,.62);animation-play-state:paused}
+
+/* Revealed on scroll rather than on load: this section sits well below the fold, and an entrance
+   that already finished before it was ever seen is just a flash of nothing. */
+/* Scoped to .js-reveal, a class set by a script in the head. Hiding unconditionally would leave the
+   cards permanently invisible for anyone whose JavaScript failed to load. */
+.js-reveal [data-reveal]{opacity:0;transform:translateY(22px)}
+[data-reveal].revealed{opacity:1;transform:translateY(0);
+  transition:opacity .55s ease,transform .55s cubic-bezier(.2,.7,.3,1)}
+.balloons li:nth-child(2).revealed{transition-delay:.09s}
+.balloons li:nth-child(3).revealed{transition-delay:.18s}
+.balloons li:nth-child(4).revealed{transition-delay:.27s}
+/* The float would fight the entrance transform, so it only starts once the card has landed. */
+.balloons li{animation-play-state:paused}
+.balloons li.revealed{animation-play-state:running}
+
+/* Motion here is decoration, and for some readers it is a symptom trigger. Honour the OS setting:
+   no drift, no travel -- but still fade in, so nothing depends on JavaScript having run. */
+@media (prefers-reduced-motion:reduce){
+  .balloons li{animation:none}
+  .balloons li:hover{transform:none;animation:none}
+  .js-reveal [data-reveal]{transform:none}
+  [data-reveal].revealed{transform:none;transition:opacity .3s ease}
+}
 
 figure{margin:0;border:1px solid var(--rule)}
 
@@ -62,6 +179,33 @@ figure{margin:0;border:1px solid var(--rule)}
 
 pre{background:var(--code);border:1px solid var(--rule);padding:22px;overflow-x:auto;
   font-size:14.5px;margin:0 0 26px;max-width:100%}
+
+/* Copy button. The wrapper, not the pre, is the positioning context: a scrolling pre would carry
+   an absolutely-positioned child out of view with it. Extra right padding on the pre keeps a long
+   command from sliding under the button. */
+.copy-wrap{position:relative}
+.copy-wrap pre{padding-right:110px}
+.copy-btn{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;gap:7px;
+  padding:7px 11px;background:var(--bg);color:var(--muted);border:1px solid var(--rule);
+  font:600 12px/1 ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace;
+  cursor:pointer;letter-spacing:.04em}
+.copy-btn:hover{color:var(--ink);border-color:var(--ink)}
+.copy-btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+/* Confirmation is the one place the accent earns a second appearance: it has to be unmissable in
+   peripheral vision, because the eye is already back on the terminal by the time it fires. */
+.copy-btn.copied{background:var(--accent);color:var(--onAccent);border-color:var(--accent)}
+.copy-btn svg{flex:0 0 auto}
+
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+@media (max-width:520px){
+  /* The label costs more than it explains on a narrow screen -- the icon and the flash of accent
+     carry the meaning, and a full-width command matters more. */
+  .copy-wrap pre{padding-right:22px;padding-top:46px}
+  .copy-btn .copy-label{display:none}
+  .copy-btn{padding:8px 10px}
+}
 
 footer{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
   padding:34px max(24px,calc((100% - 1180px)/2));border-top:1px solid var(--rule);
@@ -83,4 +227,211 @@ footer a{color:var(--muted)}
   .hero{padding-top:44px}
   .lede{font-size:17.5px}
   pre{font-size:13px;padding:16px}
+}
+
+/* A plain list revealed in sequence. Same mechanism as the requirement cards, without their shape:
+   these are prose rows, so they should arrive as a list settling rather than as objects landing. */
+.staggered li:nth-child(2).revealed{transition-delay:.08s}
+.staggered li:nth-child(3).revealed{transition-delay:.16s}
+.staggered li:nth-child(4).revealed{transition-delay:.24s}
+.staggered li:nth-child(5).revealed{transition-delay:.32s}
+
+/* ---- Dashboard demo ------------------------------------------------------------------------- */
+/* A window frame around real screenshots. The chrome is deliberately minimal -- three dots and a
+   URL -- because the point is "this is a local page on your own machine", and localhost:4319 says
+   that faster than a sentence would. */
+/* The frame itself is transparent so the caption below it sits on paper, not on the window --
+   muted grey on near-black was effectively unreadable. Only the bar and the viewport are dark. */
+.demo{margin:0}
+.demo-bar{display:flex;align-items:center;gap:8px;padding:11px 14px;background:var(--panel);
+  border:1px solid var(--panelRule);border-bottom:0}
+.demo-bar i{width:10px;height:10px;border-radius:50%;background:#3a3a37;display:block}
+.demo-url{margin-left:10px;color:#8d8d86;
+  font:12.5px/1 ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace}
+
+/* Pinned to the aspect of the shortest screenshot. The taller ones overflow and are clipped, which
+   is what makes a scroll look like a scroll rather than like an image sliding around in a box. */
+.demo-view{position:relative;overflow:hidden;aspect-ratio:2800/1421;background:#0f1220;
+  border:1px solid var(--panelRule);border-top:0}
+.demo-view img{position:absolute;inset:0 0 auto 0;width:100%;opacity:0;
+  transition:opacity .28s ease,transform 2.4s cubic-bezier(.33,.1,.25,1)}
+/* A short fade on purpose. Two different dashboard layouts held at half opacity for half a
+   second reads as a rendering glitch; a quick swap reads as a click landing. */
+.demo-view img.on{opacity:1}
+
+.demo-cursor{position:absolute;width:22px;height:22px;margin:-2px 0 0 -2px;pointer-events:none;
+  transition:left .95s cubic-bezier(.4,.02,.2,1),top .95s cubic-bezier(.4,.02,.2,1);
+  filter:drop-shadow(0 2px 3px rgba(0,0,0,.55))}
+.demo-cursor svg{width:100%;height:100%;display:block}
+/* The click: a ring that expands and fades from under the pointer. Without something like it the
+   tab simply changes and the cursor reads as decoration that happened to be nearby. */
+.demo-cursor::after{content:"";position:absolute;left:1px;top:1px;width:12px;height:12px;
+  border:2px solid var(--accent);border-radius:50%;opacity:0;transform:scale(.3)}
+.demo-cursor.click::after{animation:tap .42s ease-out}
+@keyframes tap{
+  0%{opacity:.95;transform:scale(.3)}
+  100%{opacity:0;transform:scale(3.4)}
+}
+.demo figcaption{color:var(--muted);font-size:13.5px;padding:13px 2px 0}
+
+/* Before the script runs, the first screenshot must already be visible -- otherwise a failed script
+   leaves an empty black box where the product shot should be. */
+.demo:not(.ready) .demo-view img:first-child{opacity:1}
+.demo:not(.ready) .demo-cursor{display:none}
+
+@media (prefers-reduced-motion:reduce){
+  .demo-view img{transition:none}
+  .demo-cursor{display:none}
+}
+@media (max-width:600px){
+  .demo-bar{padding:8px 11px}
+  .demo-url{font-size:11px}
+  .demo-cursor{width:16px;height:16px}
+}
+
+/* ---- Homepage: the five failures, and the five things built --------------------------------- */
+/* Colour arrives here and nowhere else on the site, for a reason. These two lists are the argument
+   the whole page makes -- this went wrong, so I built this -- and they were the two blocks a reader
+   was most likely to skim as undifferentiated rows of text. The hues are lifted from the dashboard's
+   own palette rather than invented, so the site and the app look like the same piece of work.
+   Everything else stays lime-and-ink. */
+:root{
+  --fault:#b4472e;                                    /* one warm hue: every failure is the same kind of pain */
+  --c1:#0e8a7a; --c2:#2563eb; --c3:#6d4aff; --c4:#c9820a; --c5:#111111;
+}
+
+.faults{list-style:none;padding:0;margin:0;display:grid;gap:12px;max-width:80ch}
+.faults li{position:relative;display:grid;grid-template-columns:auto 1fr;gap:4px 16px;
+  align-items:baseline;padding:18px 20px 18px 22px;background:rgba(180,71,46,.045);
+  border:1px solid rgba(180,71,46,.16);border-radius:12px;
+  transition:transform .3s ease,background .3s ease,border-color .3s ease}
+/* The bar draws itself down the edge after the card lands, so the eye is pulled through the list in
+   order instead of being handed five finished cards at once. */
+.faults li::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:var(--fault);border-radius:12px 0 0 12px;
+  transform:scaleY(0);transform-origin:top;transition:transform .5s cubic-bezier(.2,.7,.3,1) .18s}
+.faults li.revealed::before{transform:scaleY(1)}
+.faults .n{font:700 12px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--fault);
+  opacity:.75;letter-spacing:.08em}
+.faults .t{font:700 12px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--fault);
+  text-transform:uppercase;letter-spacing:.12em}
+.faults p{grid-column:2;margin:0;font-size:17px}
+.faults li:hover{transform:translateX(5px);background:rgba(180,71,46,.085);
+  border-color:rgba(180,71,46,.32)}
+/* Failures slide in from the left; the built things rise. Two different entrances because they are
+   two different halves of the argument, and the change of direction marks the turn. */
+.js-reveal .faults li[data-reveal]{transform:translateX(-22px)}
+.faults li.revealed{transform:translateX(0)}
+.faults li:nth-child(2).revealed{transition-delay:.07s}
+.faults li:nth-child(3).revealed{transition-delay:.14s}
+.faults li:nth-child(4).revealed{transition-delay:.21s}
+.faults li:nth-child(5).revealed{transition-delay:.28s}
+.faults li:nth-child(2).revealed::before{transition-delay:.25s}
+.faults li:nth-child(3).revealed::before{transition-delay:.32s}
+.faults li:nth-child(4).revealed::before{transition-delay:.39s}
+.faults li:nth-child(5).revealed::before{transition-delay:.46s}
+
+.channels{list-style:none;padding:0;margin:0;display:grid;gap:18px;
+  grid-template-columns:repeat(auto-fit,minmax(258px,1fr))}
+.channels li{--c:var(--c1);position:relative;overflow:hidden;background:#fff;
+  border:1px solid var(--rule);border-radius:14px;padding:24px 22px 22px;
+  box-shadow:0 10px 26px -22px rgba(17,17,17,.6);
+  transition:transform .32s ease,box-shadow .32s ease,border-color .32s ease}
+/* A rule in the card's own colour, drawn across the top on arrival. */
+.channels li::after{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--c);
+  transform:scaleX(0);transform-origin:left;transition:transform .55s cubic-bezier(.2,.7,.3,1) .2s}
+.channels li.revealed::after{transform:scaleX(1)}
+.channels li:nth-child(2){--c:var(--c2)}
+.channels li:nth-child(3){--c:var(--c3)}
+.channels li:nth-child(4){--c:var(--c4)}
+.channels li:nth-child(5){--c:var(--c5)}
+.channels .ic{display:block;width:13px;height:13px;border-radius:50%;background:var(--c);
+  margin:0 0 15px;box-shadow:0 0 0 5px color-mix(in srgb,var(--c) 16%,transparent)}
+.channels li.revealed .ic{animation:ping .9s ease-out .45s}
+@keyframes ping{
+  0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--c) 42%,transparent)}
+  70%{box-shadow:0 0 0 13px color-mix(in srgb,var(--c) 0%,transparent)}
+  100%{box-shadow:0 0 0 5px color-mix(in srgb,var(--c) 16%,transparent)}
+}
+.channels b{display:block;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  font-size:15.5px;line-height:1.35;margin-bottom:10px;color:var(--c)}
+.channels .d{display:block;color:var(--muted);font-size:15px;line-height:1.55}
+/* The last card is the promise rather than a capability, so it is the one that gets the brand
+   colour -- ink card, lime rule -- and stops the row reading as five equal features. */
+.channels li.stop{background:var(--panel);border-color:var(--panel);--c:var(--accent)}
+.channels li.stop b{color:var(--accent)}
+.channels li.stop .d{color:#b9b8b0}
+.channels li:hover{transform:translateY(-6px);border-color:var(--c);
+  box-shadow:0 18px 34px -24px color-mix(in srgb,var(--c) 70%,rgba(17,17,17,.5))}
+.channels li:nth-child(2).revealed{transition-delay:.08s}
+.channels li:nth-child(3).revealed{transition-delay:.16s}
+.channels li:nth-child(4).revealed{transition-delay:.24s}
+.channels li:nth-child(5).revealed{transition-delay:.32s}
+
+@media (prefers-reduced-motion:reduce){
+  .faults li::before,.channels li::after{transform:none;transition:none}
+  .js-reveal .faults li[data-reveal]{transform:none}
+  .channels li.revealed .ic{animation:none}
+  .faults li:hover,.channels li:hover{transform:none}
+}
+@media (max-width:600px){
+  .faults li{padding:15px 16px;gap:3px 12px}
+  .faults p{font-size:16px}
+  .channels li{padding:20px 18px 18px}
+}
+
+/* Five cards in an auto-fit grid land as 4 + 1 on a wide screen, and a lone orphan on the second
+   row reads as a mistake. Three across makes the second row 1 + a double-width promise card, which
+   looks chosen -- and gives the one card that is a guarantee rather than a feature more room. */
+@media (min-width:900px){
+  .channels{grid-template-columns:repeat(3,1fr)}
+  .channels li.stop{grid-column:span 2;display:flex;flex-direction:column;justify-content:center}
+  .channels li.stop .d{max-width:52ch}
+}
+
+/* ---- Privacy: permissions ------------------------------------------------------------------- */
+/* The highlighter draws itself here rather than being there on arrival. On a page whose whole job
+   is to be believed, a stroke that sweeps across the permission name as you reach it does what a
+   person does when reading a contract -- it marks the words that matter, one at a time. */
+.perms{list-style:none;padding:0;margin:0;display:grid;gap:14px;max-width:78ch}
+.perms li{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:6px 18px;
+  padding:18px 20px;border:1px solid var(--rule);border-radius:12px;background:#fff;
+  transition:transform .3s ease,border-color .3s ease,box-shadow .3s ease}
+.perms p{grid-column:1/-1;margin:0;font-size:17px}
+.perms li:hover{transform:translateY(-3px);border-color:var(--ink);
+  box-shadow:0 14px 28px -24px rgba(17,17,17,.8)}
+
+/* The chip carries the granted-versus-refused distinction, which leaves the highlighter free to do
+   one job only: mark the name of the permission. */
+.chip{display:inline-block;
+  font:700 11px/1 ui-monospace,"SF Mono",Menlo,"Cascadia Mono",Consolas,monospace;
+  letter-spacing:.12em;text-transform:uppercase;padding:6px 10px;border-radius:999px;
+  background:var(--ink);color:#fff}
+.chip.no{background:transparent;color:var(--muted);border:1px solid var(--rule)}
+.perms li.asks{border-color:rgba(17,17,17,.55)}
+
+/* Painted with background-size so the stroke grows from the left edge of the first word. A width
+   transition on the element itself would reflow the sentence as it ran. */
+.perms mark{background-image:linear-gradient(101deg,
+  rgba(214,248,76,0) 0.2%, var(--accent) 1.4%, var(--accent) 98.6%, rgba(214,248,76,0) 99.8%);
+  background-repeat:no-repeat;background-position:left center;background-size:0% 100%;
+  color:var(--onAccent);padding:.1em .16em;border-radius:.12em;
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;
+  transition:background-size .62s cubic-bezier(.25,.8,.3,1) .22s}
+.perms li.revealed mark{background-size:100% 100%}
+.perms li:nth-child(2).revealed{transition-delay:.09s}
+.perms li:nth-child(3).revealed{transition-delay:.18s}
+.perms li:nth-child(4).revealed{transition-delay:.27s}
+.perms li:nth-child(2).revealed mark{transition-delay:.31s}
+.perms li:nth-child(3).revealed mark{transition-delay:.40s}
+.perms li:nth-child(4).revealed mark{transition-delay:.49s}
+
+@media (prefers-reduced-motion:reduce){
+  /* The mark still has to be a mark -- it just arrives already drawn. */
+  .perms mark{background-size:100% 100%;transition:none}
+  .perms li:hover{transform:none}
+}
+@media (max-width:600px){
+  .perms li{padding:15px 16px;gap:5px 12px}
+  .perms p{font-size:16px}
 }

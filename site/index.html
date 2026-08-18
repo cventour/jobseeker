@@ -1,9 +1,16 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>JobSeeker — your job search, remembered</title>
-<meta name="description" content="A local-first job-search assistant. Reads your email, chats and calendar, and each morning tells you the few things that need you. Never applies or sends without your approval.">
+<title>JobSeeker — I lost track of my own job search, so I built this</title>
+<meta name="description" content="After a layoff I was job hunting across five channels at once and kept dropping things. JobSeeker is the set of Claude Code agents and the local dashboard I built to fix it. It never applies or sends without my approval.">
 <link rel="icon" href="img/mark.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://myjobseeker.ai/">
+<meta property="og:title" content="I lost track of my own job search, so I built this">
+<meta property="og:description" content="Five channels, one memory. A local-first job-search assistant that finds roles, scores them against your CV, and messages you each morning with the few things that need you.">
+<meta property="og:image" content="https://myjobseeker.ai/img/og.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="style.css">
+<script>document.documentElement.className+=" js-reveal"</script>
 </head><body>
 <header class="nav">
   <a class="wordmark" href="index.html"><img src="img/mark-ink.png" alt=""><span>JOBSEEKER</span></a>
@@ -17,13 +24,13 @@
 
 <main>
   <section class="hero">
-    <h1>Your job search,<br><mark>remembered.</mark></h1>
-    <p class="lede">A job search falls apart in the gaps between apps. Applications live in ATS
-      portals, recruiters reply by email, referrals arrive over WhatsApp, interviews land in a
-      calendar. Nothing joins them up.</p>
-    <p class="sub">JobSeeker reads the channels you already use, keeps one honest picture of where
-      everything stands, and each morning tells you the few things that actually need you. It runs
-      entirely on your own machine.</p>
+    <h1>I got laid off.<br>Then I lost track of<br><mark>my own job search.</mark></h1>
+    <p class="lede">I was looking in five places at once — job boards, my own network of people over email, LinkedIn
+      messages, WhatsApp, and people who knew people. Every one of those channels worked. None of
+      them talked to each other.</p>
+    <p class="sub">So I built the thing I actually needed: a set of Claude Code agents and a 
+      dashboard that hold one honest picture of the whole search, and tell me each morning the few
+      things that genuinely need me today. It runs  on my own machine, uses Claude and I decided to open source it for anyone who needs an assistant for their job search.</p>
     <div class="cta">
       <a class="btn" href="https://github.com/cventour/jobseeker">Get it on GitHub</a>
       <a class="btn ghost" href="how-it-works.html">How it works</a>
@@ -31,45 +38,115 @@
   </section>
 
   <section>
-    <p class="eyebrow">The problem</p>
-    <ul class="problems">
-      <li>An application goes quiet and you notice three weeks later.</li>
-      <li>Someone offers a referral in a chat. The CV never gets sent.</li>
-      <li>You apply to the same job twice, because it was reposted with a new reference number.</li>
-      <li>You find a great role, then lose it in a list of forty.</li>
-      <li>You agree a follow-up in one app and complete it in another, so it stays open forever.</li>
+    <p class="eyebrow">Where it kept going wrong</p>
+    <ul class="faults">
+      <li data-reveal><span class="n">01</span><span class="t">Went quiet</span>
+        <p>An application went quiet and I noticed three weeks later.</p></li>
+      <li data-reveal><span class="n">02</span><span class="t">Never sent</span>
+        <p>Someone offered me a referral in a chat. I never sent the CV.</p></li>
+      <li data-reveal><span class="n">03</span><span class="t">Applied twice</span>
+        <p>I applied to the same job twice, because it was reposted with a new reference number.</p></li>
+      <li data-reveal><span class="n">04</span><span class="t">Lost in the pile</span>
+        <p>I found a role worth wanting, then lost it in a list of forty.</p></li>
+      <li data-reveal><span class="n">05</span><span class="t">Never closed</span>
+        <p>I agreed a follow-up in one app and did it in another, so it stayed open forever.</p></li>
+    </ul>
+    <p class="sub">None of these are failures of effort but failures of
+      memory and a job search process that spans multiple apps.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">What I built</p>
+    <h2>Five channels, one memory.</h2>
+    <ul class="channels">
+      <li data-reveal><span class="ic" aria-hidden="true"></span>
+        <b>It finds the work</b>
+        <span class="d">New openings, and new companies worth targeting, in the markets I actually
+          care about.</span></li>
+      <li data-reveal><span class="ic" aria-hidden="true"></span>
+        <b>It scores every role against my CV</b>
+        <span class="d">Relevance becomes a number instead of a hunch, so I stop spending an hour on
+          a role that was never going to fit.</span></li>
+      <li data-reveal><span class="ic" aria-hidden="true"></span>
+        <b>It watches every channel</b>
+        <span class="d">Email, calendar, WhatsApp and LinkedIn, joined into a single picture of where
+          each conversation actually stands.</span></li>
+      <li data-reveal><span class="ic" aria-hidden="true"></span>
+        <b>It messages me every morning</b>
+        <span class="d">A WhatsApp digest: what is new, and what I owe someone today.</span></li>
+      <li data-reveal class="stop"><span class="ic" aria-hidden="true"></span>
+        <b>Then it stops</b>
+        <span class="d">It never applies to anything and never sends a message on its own. That part
+          stays mine. </span>
+        <span class="d">At least for now :) </span></li>
     </ul>
   </section>
 
   <section>
-    <p class="eyebrow">Every morning</p>
-    <h2>The only screen most days need.</h2>
-    <figure><img src="img/today.png" alt="The Today screen"></figure>
+    <p class="eyebrow">Every morning, 07:12</p>
+    <h2>A daily digest on your phone.</h2>
+    <p class="sub">Most days I never need to open anything. A summary arrives on WhatsApp and it is enough.</p>
+<pre><code>Update of 4 Aug 2026  Completed at 07:12
+Started 07:04 · 8m · ok
+
+Highlights
+- Meridian Trust offer needs an answer by Thursday.
+- Aegis Networks silent 5 days after the screen.
+- Helios Data: no ATS movement since 25 Jul.
+
+New Job Postings
+Northwind Security - Principal PM, Detection
+https://example.com/jobs/nw-2291
+Aegis Networks - Director of Product, Cloud Security
+https://example.com/jobs/ag-1187
+
+Follow ups for Today
+- Aegis Networks - chase the recruiter after the screen
+- Omar Haddad - send the CV for the referral
+- Northwind Security - prep the architecture panel (Tue)</code></pre>
+    <p class="sub">Illustrative — the companies above are from a sample dataset, not from anyone's real search.</p>
   </section>
 
-  <section class="panel">
-    <p class="eyebrow">What it never does</p>
-    <ul class="never">
-      <li><b>Never applies to a job</b> without you approving that exact application.</li>
-      <li><b>Never sends a message</b> without you approving that exact message.</li>
-      <li><b>Never opens your chat threads</b> — opening marks them read and destroys your own signal.</li>
-      <li><b>Never logs private conversations</b> — only threads with a job-search signal are recorded.</li>
-      <li><b>Never sends your data anywhere.</b> Everything stays in files on your machine.</li>
-    </ul>
+  <section>
+    <p class="eyebrow">When you want the detail</p>
+    <h2>The only screen most days need.</h2>
+    <figure><img src="img/today.png" alt="The Today screen of the JobSeeker dashboard"></figure>
+  </section>
+
+  <section>
+    <p class="eyebrow">Who built this</p>
+    <h2>Christos Ventouris</h2>
+    <div class="built">
+      <p class="sub">I have spent more than 20 years in security — I've been in the sales cycle, I ran a 24×7 SOC, responded to nation-state
+        intrusions, and spent the last stretch as a product manager building agentic detection and
+        response. I am used to designing systems that act on someone's behalf, which is exactly why
+        this one asks before it does anything irreversible.</p>
+      <p class="sub">I wrote JobSeeker for my own search, during my own search. Every rule in it
+        exists because something went wrong first. It is open source under Apache-2.0 — if it is
+        useful to you, take it.</p>
+      <p class="byline">
+        <a href="https://www.linkedin.com/in/cventour">linkedin.com/in/cventour</a> ·
+        <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
+      </p>
+    </div>
   </section>
 
   <section>
     <p class="eyebrow">Getting started</p>
     <h2>Two commands.</h2>
-    <pre><code>git clone https://github.com/cventour/jobseeker
+    <pre data-copy><code>git clone https://github.com/cventour/jobseeker
 cd jobseeker &amp;&amp; npm run setup</code></pre>
     <p class="sub">No dependencies to install — the whole system runs on Node built-ins and shell.
       Setup checks what you have, installs what it can, and verifies each permission actually worked.</p>
-  </section>
+    <p class="sub">Check the install page for more details.</p>
+ 
+    </section>
 </main>
 
 <footer>
   <span>Apache-2.0</span><span>·</span><span>macOS</span><span>·</span>
   <a href="https://github.com/cventour/jobseeker">github.com/cventour/jobseeker</a>
 </footer>
+<script src="copy.js"></script>
+<script src="reveal.js"></script>
 </body></html>

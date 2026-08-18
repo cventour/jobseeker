@@ -5,7 +5,7 @@
   "description": "A local-first job-search assistant. Reads your email, chats and calendar, finds roles worth your time, and each morning surfaces the few things that need you. Never applies or sends without your approval.",
   "license": "Apache-2.0",
   "author": "Christos Ventouris",
-  "homepage": "https://cventour.github.io/jobseeker/",
+  "homepage": "https://myjobseeker.ai",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cventour/jobseeker.git"
@@ -42,6 +42,7 @@
     "test:security": "node scripts/test-security.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
     "setup": "bash scripts/setup.sh",
-    "schedule": "bash scripts/set-schedule.sh"
+    "schedule": "bash scripts/set-schedule.sh",
+    "serve:site": "node scripts/serve-site.mjs"
   }
 }
