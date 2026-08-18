@@ -18,7 +18,7 @@
   <a href="LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-111?style=flat-square"></a>
   <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-D6F84C?style=flat-square&labelColor=111">
   <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-111?style=flat-square">
-  <a href="https://cventour.github.io/jobseeker/"><img alt="Website" src="https://img.shields.io/badge/website-jobseeker-111?style=flat-square"></a>
+  <a href="https://myjobseeker.ai"><img alt="Website" src="https://img.shields.io/badge/website-myjobseeker.ai-111?style=flat-square"></a>
 </p>
 
 ---
@@ -47,28 +47,28 @@ decision, application and message to you.
 **Today** — the only screen most mornings need: what is due, what is waiting on a click, what is
 overdue.
 
-![Today tab](site/img/today.png)
+![Today tab](docs/img/today.png)
 
 **Jobs** — roles found and scored against your CV, best match first. Reposts of jobs you have already
 applied to are flagged rather than silently re-offered.
 
-![Jobs tab](site/img/jobs.png)
+![Jobs tab](docs/img/jobs.png)
 
 **Applications** — every application and lead, with its stage, its next action, and when it last
 moved.
 
-![Applications tab](site/img/applications.png)
+![Applications tab](docs/img/applications.png)
 
 **Activity** — an append-only log of everything the system did, with run boundaries marked, so you
 can always reconstruct what happened and when.
 
-![Activity tab](site/img/activity.png)
+![Activity tab](docs/img/activity.png)
 
 **Settings** — scoring weights, and one **Companies** page listing every company you are targeting:
 why it is on the list, and where its jobs are read from. Grouped by market, collapsible, sortable,
 and searchable across names, markets and notes.
 
-![Settings — careers boards](site/img/settings-boards.png)
+![Settings — careers boards](docs/img/settings-boards.png)
 
 > Every screenshot above uses a fictional sample dataset, not real data.
 > See it yourself: `JOBSEEKER_DATA_DIR=data/.example npm run dashboard`
