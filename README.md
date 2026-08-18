@@ -118,7 +118,12 @@ That folder is excluded from version control, so it cannot be published by accid
 ## Getting started
 
 **You need:** a Mac, [Google Chrome](https://google.com/chrome),
-[Node 20+](https://nodejs.org), and [Claude Code](https://claude.com/claude-code).
+[Node 20+](https://nodejs.org), and [Claude Code](https://claude.com/claude-code). Gmail and Google
+Calendar work through Claude Code's own connectors — nothing to install for those.
+
+**Optional:** Claude Code's WhatsApp channel plugin, if you want the daily digest and approval
+prompts to reach your phone. Without it, everything still runs — the digest lands in the dashboard
+instead, and the run says so rather than failing quietly.
 
 ```bash
 git clone <this repo> && cd JobSeeker
@@ -127,8 +132,8 @@ npm run setup
 
 `npm run setup` does the whole machine side for you. It checks what you have, installs what it can,
 walks you through the one or two things macOS insists you click yourself, and then **verifies that
-each one actually worked** rather than assuming. There is nothing to `npm install` — JobSeeker has no
-dependencies at all.
+each one actually worked** rather than assuming. There is nothing to `npm install` — JobSeeker itself
+has zero package dependencies; everything above is Claude Code or the OS, not an npm package.
 
 Then open Claude Code inside the folder and introduce yourself:
 
