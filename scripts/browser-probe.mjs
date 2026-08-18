@@ -176,6 +176,8 @@ async function main() {
   const findTab = (host) => tabs.find((t) => t.url.includes(host)) || null;
   const whatsappTab = findTab("web.whatsapp.com");
   const linkedinTab = findTab("linkedin.com");
+  // The message list lives ONLY here. Any other LinkedIn page carries the badge but no threads.
+  const linkedinMsgTab = findTab("linkedin.com/messaging");
 
   // Can we read PAGE CONTENT via Apple Events?
   //
@@ -312,9 +314,21 @@ async function main() {
     whatsapp: whatsappTab
       ? { tab_open: true, unread: unreadFromTitle(whatsappTab.title) }
       : { tab_open: false, unread: null },
+    // LinkedIn needs care that WhatsApp does not. WhatsApp Web's title badge counts unread CHATS;
+    // LinkedIn's counts everything site-wide — notifications, invitations and messages together —
+    // and it appears on every LinkedIn page, so it was being scraped off a *jobs* tab and reported
+    // as "14 unread LinkedIn messages". Measured the same day: the message list held 10
+    // conversations and none unread. That number was never about messages, and FR-6.4 forbids
+    // exactly this kind of conflation. So `unread` is now reported ONLY from a messaging tab, and
+    // the site-wide figure is named as what it is.
     linkedin: linkedinTab
-      ? { tab_open: true, unread: unreadFromTitle(linkedinTab.title) }
-      : { tab_open: false, unread: null },
+      ? {
+          tab_open: true,
+          messaging_tab_open: Boolean(linkedinMsgTab),
+          unread: linkedinMsgTab ? unreadFromTitle(linkedinMsgTab.title) : null,
+          site_badge: unreadFromTitle(linkedinTab.title),
+        }
+      : { tab_open: false, messaging_tab_open: false, unread: null, site_badge: null },
   };
 
   await fs.mkdir(DATA, { recursive: true });
@@ -330,7 +344,13 @@ async function main() {
       } · tabs=${tabs.length}\n` +
         `whatsapp tab=${status.whatsapp.tab_open}${
           status.whatsapp.unread != null ? ` (${status.whatsapp.unread} unread)` : ""
-        } · linkedin tab=${status.linkedin.tab_open}\n` +
+        } · linkedin messaging tab=${status.linkedin.messaging_tab_open}${
+          status.linkedin.unread != null ? ` (${status.linkedin.unread} unread)` : ""
+        }${
+          // Named, not silently reported as unread messages — it counts notifications and
+          // invitations too, and it shows on every LinkedIn page.
+          status.linkedin.site_badge != null ? ` · linkedin site badge=${status.linkedin.site_badge}` : ""
+        }\n` +
         (blockers.length ? blockers.map((b) => `  blocker: ${b}\n`).join("") : "") +
         `wrote ${path.relative(ROOT, STATUS_FILE)}\n`
     );

@@ -15,9 +15,11 @@
 // nothing". The list carries enough to flag a thread for attention, which is this sweep's job; the
 // user (or an interactive run) opens the ones that matter.
 //
-// LinkedIn is opt-in for the same reason: its desktop messaging view auto-selects the first
-// conversation, which marks that one read. Until that is verified harmless it stays behind a flag,
-// and by default LinkedIn is swept only if a messaging tab is ALREADY open.
+// LinkedIn needs one extra decision. Reading a messaging tab the user already has open is free, so
+// that always happens when `linkedin_enabled`. OPENING one is not free — the messaging view
+// auto-selects the first conversation, which marks it read — so it is gated separately behind
+// `linkedin_open_tab` (or `--linkedin` for a one-off). Note this only ever affects the FIRST
+// conversation; the sweep still never opens a thread itself.
 
 import { execFile } from "child_process";
 import { realpathSync } from "fs";
@@ -25,17 +27,24 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { withBrowser, assertCanReadContent } from "./browser.mjs";
 import { readTable, readRecordDir } from "../server/md.mjs";
-import { ignoredChats, channelEnabled } from "../server/config.mjs";
+import { ignoredChats, channelEnabled, configFlag } from "../server/config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
 const DRY = process.argv.includes("--dry-run");
-// Open a LinkedIn messaging tab if none is present. Separate from `linkedin_enabled`, and kept
-// explicit, because OPENING the messaging view auto-selects the first conversation and marks it
-// read on the real account. Reading a tab the user already has open costs nothing; opening one
-// spends an unread badge, so that stays a deliberate act rather than a config default.
-const DO_LINKEDIN = process.argv.includes("--linkedin");
+// Open a LinkedIn messaging tab if none is present.
+//
+// Kept SEPARATE from `linkedin_enabled` because it carries a cost that enabling a channel does not:
+// LinkedIn's messaging view auto-selects the first conversation, and viewing a conversation marks
+// it read. Measured 2026-08-18 on a live account it was not possible to confirm the loss — every
+// thread was already read, and the site badge is notifications rather than messages so it cannot
+// settle the question — but "unproven" is not "safe", and the cost falls on the user's real inbox.
+//
+// So it stays opt-in, at `linkedin_open_tab` in config. The zero-cost alternative, and what to
+// recommend first, is simply leaving a messaging tab open: it is then read every run and nothing is
+// ever marked read. `--linkedin` forces it for a one-off run.
+const OPEN_LINKEDIN_ARG = process.argv.includes("--linkedin");
 // Override the watermark window. Two real uses: backfilling after a gap (the sweep was broken for a
 // week, so "since last run" would miss everything in between), and testing the selection without
 // mutating stored state.
@@ -327,6 +336,7 @@ async function main() {
     whatsapp: await channelEnabled("whatsapp_web"),
     linkedin: await channelEnabled("linkedin"),
   };
+  const DO_LINKEDIN = OPEN_LINKEDIN_ARG || (await configFlag("linkedin_open_tab", false));
 
   const results = await withBrowser(async (ctx) => {
     // A cold Chrome at 08:00 sits on the New Tab Page with nothing scriptable open — and this sweep

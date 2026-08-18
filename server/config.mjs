@@ -76,7 +76,12 @@ export async function companyAliases() {
  * component, read by none.
  */
 export async function channelEnabled(name) {
-  const raw = (await loadConfig())[`${name}_enabled`];
-  if (raw === undefined || raw === null || String(raw).trim() === "") return true;
+  return configFlag(`${name}_enabled`, true);
+}
+
+/** A yes/no config value, with the default used when the key is absent or blank. */
+export async function configFlag(key, dflt) {
+  const raw = (await loadConfig())[key];
+  if (raw === undefined || raw === null || String(raw).trim() === "") return dflt;
   return !/^(false|no|off|0)$/i.test(String(raw).trim());
 }

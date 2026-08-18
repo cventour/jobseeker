@@ -20,6 +20,12 @@ apply_stop_before: unknown_question, submit
 whatsapp_web_enabled: true
 # LinkedIn messages: read via Chrome by chat-tracker (read-only per ToS).
 linkedin_enabled: true
+# Should a run OPEN a LinkedIn messaging tab when none is open? Separate from the switch above,
+# because it costs something: the messaging view auto-selects the first conversation, and viewing a
+# conversation marks it read — so an unattended run can quietly clear one of your unread badges.
+# Left off by default. The no-cost alternative is to keep a messaging tab open yourself: it is then
+# read every run and nothing is ever marked read.
+linkedin_open_tab: false
 
 # Chats that must NEVER be logged (comma list, matched as a case-insensitive prefix on the chat
 # name). Group communities, family threads, anything out of scope for a job search. Empty = log
