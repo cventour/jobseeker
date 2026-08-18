@@ -165,13 +165,31 @@ Add the two sites JobSeeker has to read:
 4. Enter `web.whatsapp.com` and click **Add**.
 5. Click **Add** again, enter `linkedin.com`, and click **Add**.
 
-Then confirm it took effect — leave both tabs in the background for a few minutes and run:
+Then confirm it took effect. Chrome records the allowlist in its own preferences, so this is
+checkable rather than a matter of trusting that the clicks landed:
 
 ```bash
-npm run browser:probe
+node -e 'const fs=require("fs"),os=require("os");
+const dir=os.homedir()+"/Library/Application Support/Google/Chrome";
+for (const p of fs.readdirSync(dir)) {
+  const f=dir+"/"+p+"/Preferences"; if (!fs.existsSync(f)) continue;
+  const ex=(JSON.parse(fs.readFileSync(f,"utf8")).performance_tuning||{}).tab_discarding||{};
+  const sites=Object.keys(ex.exceptions_with_time||ex.exceptions||{});
+  if (sites.length) console.log(p+":", sites.join(", "));
+}'
 ```
 
-`js_from_apple_events` should be `on`, and `js_probe_detail` names the tab that answered.
+Both `web.whatsapp.com` and `linkedin.com` should be listed. **Check every profile it prints** — the
+active profile is often not `Default` (it may be `Profile 3` or similar), and the setting only
+applies to the profile it was made in.
+
+`npm run browser:probe` is the functional check: `js_from_apple_events` should be `on`, and
+`js_probe_detail` names the tab that answered.
+
+**What this does and does not cover.** It protects tabs that are already open — in particular *your*
+WhatsApp Web tab, which the sweep must reuse rather than replace, because WhatsApp Web is
+single-session and a second tab steals it. Tabs the sweep opens for itself arrive awake anyway, so
+they were never the problem.
 
 **Why this is not solved in code.** Waking a discarded tab means activating it, and activation
 reloads it. A LinkedIn messaging reload auto-selects the first conversation and **marks it read** —
