@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "A local-first job-search assistant. Reads your email, chats and calendar, finds roles worth your time, and each morning surfaces the few things that need you. Never applies or sends without your approval.",
-  "license": "Apache-2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "author": "Christos Ventouris",
   "homepage": "https://myjobseeker.ai",
   "repository": {

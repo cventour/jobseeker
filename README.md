@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-111?style=flat-square"></a>
+  <a href="LICENSE"><img alt="Licence: PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/licence-PolyForm--Noncommercial--1.0.0-111?style=flat-square"></a>
   <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-D6F84C?style=flat-square&labelColor=111">
   <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-111?style=flat-square">
   <a href="https://myjobseeker.ai"><img alt="Website" src="https://img.shields.io/badge/website-myjobseeker.ai-111?style=flat-square"></a>
@@ -218,5 +218,7 @@ public issue — see [`SECURITY.md`](SECURITY.md).
 
 ## Licence
 
-[Apache-2.0](LICENSE). You may use, modify and distribute it, including commercially, provided you
-keep the notice and state your changes. It comes with no warranty.
+[PolyForm Noncommercial 1.0.0](LICENSE). You may use, modify and share it for noncommercial
+purposes — personal use, research, and use by nonprofits, schools and government bodies are all
+fine. Commercial use requires a separate licence from the author. It comes with no warranty. This is
+source-available, not open source: PolyForm licences are not OSI-approved, deliberately.

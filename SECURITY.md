@@ -71,8 +71,8 @@ written by other people. §0 is the mitigation; it is a rule followed by a model
 boundary, so it is a mitigation rather than a guarantee. Treat anything an agent reports from
 fetched content as a claim, not a fact.
 
-**This is a personal project.** It has not been independently audited. It is Apache-2.0 licensed and
-provided as-is, without warranty.
+**This is a personal project.** It has not been independently audited. It is licensed under
+[PolyForm Noncommercial 1.0.0](LICENSE) and provided as-is, without warranty.
 
 ## Supported versions
 
