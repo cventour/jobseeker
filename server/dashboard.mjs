@@ -2425,7 +2425,38 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
       if(!ex){ ex=document.createElement('input'); ex.type='hidden'; ex.name=n; f.appendChild(ex); }
       ex.value = n==='_tab' ? cur : PAGE;
     });
+    // Remember where you were reading. Every one of these actions is a POST -> 303 -> full reload,
+    // so dismissing the ninth follow-up threw you back to the top of the page and you had to scroll
+    // down and find your place again — for an action whose whole point is to work through a list.
+    // Same instinct as the _tab stamp above: an action should return you where you were, not to the
+    // beginning. sessionStorage rather than a URL param so it survives the redirect without putting
+    // scroll state in a shareable link.
+    try{ sessionStorage.setItem('js_scroll', JSON.stringify({p:location.pathname, y:window.scrollY})); }catch(err){}
   }, true);
+
+  // Restore it, once. Consumed immediately so an ordinary reload or a fresh visit still starts at
+  // the top — this only ever fires on the hop back from a POST.
+  try{
+    var saved=sessionStorage.getItem('js_scroll');
+    if(saved){
+      sessionStorage.removeItem('js_scroll');
+      var s=JSON.parse(saved);
+      // Only on the same page, and only if the row we removed has not made the document shorter
+      // than the offset we saved — clamped rather than skipped, so a short page lands at its end.
+      if(s && s.p===location.pathname && s.y>0){
+        // On 'load', not requestAnimationFrame. rAF fires after the first paint but before tables
+        // this size have finished laying out, so scrollHeight was still small and the clamp below
+        // collapsed the target to roughly zero — the restore ran and silently did nothing.
+        // 'load' waits for layout to settle, and the clamp is then measuring the real page.
+        var restore=function(){
+          var max=Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+          window.scrollTo(0, Math.min(s.y, max));
+        };
+        if(document.readyState==='complete') restore();
+        else window.addEventListener('load', restore);
+      }
+    }
+  }catch(err){}
 })();
 
 // Activity: filter by type family + free-text search. Same client-side pattern as tasks/proposals.
