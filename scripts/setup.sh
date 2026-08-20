@@ -118,33 +118,32 @@ else
   done_ "$CFG created from the example"
 fi
 
-if launchctl print "gui/$(id -u)/com.jobseeker.browser" >/dev/null 2>&1; then
-  ok "browser agent already installed (com.jobseeker.browser)"
-else
-  if [ "$DRY" = 1 ]; then skip "browser agent would be installed"
-  else
-    if bash "$REPO/scripts/install-browser-agent.sh" >/dev/null 2>&1; then
-      done_ "browser agent installed (com.jobseeker.browser)"
-    else
-      fail "could not install the browser agent — run: npm run browser:install-agent"
-      GAPS+=("browser agent not installed — run: npm run browser:install-agent")
-    fi
-  fi
-fi
-
-# The scheduler is opt-in: quietly scheduling a daily job that reads someone's mail and messages is a
-# surprising thing for a setup script to do.
+# ---- how do you want to run it? ---------------------------------------------------------------
+# Asked FIRST, because the answer decides how much of the rest is needed at all.
+#
+# Almost every difficult step in this setup exists only to make an UNATTENDED 08:00 run work: a
+# launchd job, a second LaunchAgent to hold a permanent Automation grant, a macOS consent dialog
+# that must be cleared for /bin/bash specifically, and a wake so the Mac is not in DarkWake when it
+# fires. Run it yourself and none of that applies — you need Claude Code, Chrome, and one Chrome
+# setting. Defaulting to the simple path turns a nine-step install into a three-step one, and
+# scheduling stays one command away once the thing has earned some trust.
 SCHED_LABEL="com.jobseeker.jobrun"
 SCHED_INSTALLED=0
 if launchctl print "gui/$(id -u)/$SCHED_LABEL" >/dev/null 2>&1; then
   ok "08:00 daily run already scheduled ($SCHED_LABEL)"; SCHED_INSTALLED=1
 elif [ "$DRY" = 1 ]; then
-  skip "would ask whether to schedule the 08:00 daily run"
+  skip "would ask whether to run manually or on a schedule"
 else
   say ""
-  say "  The daily run reads your email and messages at 08:00 and sends you a summary."
-  say "  It never applies to anything and never sends a message without your approval."
-  if ask "Schedule it? [y/N]" n; then SCHED_ANSWER=y; else SCHED_ANSWER=n; fi
+  say "  ${BOLD}How do you want to run it?${OFF}"
+  say ""
+  say "    Manually  — you run /job-run in Claude Code when you want it. Nothing runs on its own."
+  say "                Needs no background job and no System Settings changes."
+  say "    Scheduled — it runs itself at 08:00 and sends you a summary. Needs a few one-time"
+  say "                macOS permissions so it can work while you are away."
+  say ""
+  say "  It never applies to anything and never sends a message without your approval, either way."
+  if ask "Schedule it to run daily at 08:00? [y/N]" n; then SCHED_ANSWER=y; else SCHED_ANSWER=n; fi
   say ""
   case "$SCHED_ANSWER" in
     y)
@@ -156,8 +155,30 @@ else
         fail "could not schedule the daily run — see docs/SCHEDULER.md"
       fi
       ;;
-    *) skip "08:00 scheduler — declined (run npm run setup again to add it later)" ;;
+    *) skip "running manually — add the 08:00 run later with: npm run schedule -- 08:00" ;;
   esac
+fi
+
+# The browser agent is a LaunchAgent whose only purpose is to hold the macOS Automation grant under
+# a stable identity (/bin/bash), so an unattended run is never blocked by a consent dialog nobody is
+# there to click. Interactive runs do not need it — browser-do.mjs falls back to running in-process,
+# which works fine and only re-prompts after a Claude Code update. So it is installed only for the
+# scheduled path: a first-time manual user should not be asked to accept a background agent they
+# have no use for yet.
+if [ "$SCHED_INSTALLED" != 1 ]; then
+  skip "browser agent — not needed for manual runs (added automatically if you schedule later)"
+elif launchctl print "gui/$(id -u)/com.jobseeker.browser" >/dev/null 2>&1; then
+  ok "browser agent already installed (com.jobseeker.browser)"
+else
+  if [ "$DRY" = 1 ]; then skip "browser agent would be installed"
+  else
+    if bash "$REPO/scripts/install-browser-agent.sh" >/dev/null 2>&1; then
+      done_ "browser agent installed (com.jobseeker.browser)"
+    else
+      fail "could not install the browser agent — run: npm run browser:install-agent"
+      GAPS+=("browser agent not installed — run: npm run browser:install-agent")
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------- 3. permissions: trigger + verify
@@ -275,14 +296,18 @@ else
   if [ "$BROWSER_OK" = 1 ]; then
     TABS="$(node -e 'try{process.stdout.write(String(require("./data/.browser-status.json").tabs_open))}catch{process.stdout.write("?")}' 2>/dev/null)"
     ok "browser verified — read-pages via apple-events, $TABS tabs"
-    # Reading works NOW, at the keyboard, with the tabs awake. The unattended run is the one that
-    # struggles, so recommend this while things look healthy rather than after a silent 08:00.
-    say ""
-    say "  ${BOLD}One more Chrome setting, so the 08:00 run works too:${OFF}"
-    memory_saver_steps
-    say "  Chrome puts idle background tabs to sleep, and a sleeping tab cannot be read. That is why"
-    say "  a channel can read fine now and read nothing overnight. Keeping these two awake fixes it."
-    say ""
+    # Only relevant to the scheduled path. Memory Saver discards tabs that have been idle for hours,
+    # which is what happens overnight before an 08:00 run — not what happens while you are sitting
+    # there using the browser. Asking a manual-mode user to change a Chrome setting for a failure
+    # they will never hit is the kind of noise that makes people skip the steps that do matter.
+    if [ "$SCHED_INSTALLED" = 1 ]; then
+      say ""
+      say "  ${BOLD}One more Chrome setting, so the 08:00 run works too:${OFF}"
+      memory_saver_steps
+      say "  Chrome puts idle background tabs to sleep, and a sleeping tab cannot be read. That is why"
+      say "  a channel can read fine now and read nothing overnight. Keeping these two awake fixes it."
+      say ""
+    fi
   else
     fail "browser cannot read page content yet"
     browser_blockers | sed 's/^/          /'

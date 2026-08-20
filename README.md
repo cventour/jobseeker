@@ -152,6 +152,20 @@ walks you through the one or two things macOS insists you click yourself, and th
 each one actually worked** rather than assuming. There is nothing to `npm install` — JobSeeker itself
 has zero package dependencies; everything above is Claude Code or the OS, not an npm package.
 
+It asks one question that decides how much setup you actually need:
+
+- **Run it manually** (the default) — you run `/job-run` when you want it, nothing runs on its own.
+  No background job, no System Settings changes. This is the short path, and the one to start on.
+- **Run it on a schedule** — it goes off at 08:00 and sends you a summary. Because that has to work
+  while you are away, it needs a few one-time macOS permissions: an Automation grant for the
+  scheduler specifically, and a Chrome setting or two.
+
+Start manual. Add the schedule later, in one command, once it has earned some trust:
+
+```bash
+npm run schedule -- 08:00
+```
+
 Then open Claude Code inside the folder and introduce yourself:
 
 ```bash
