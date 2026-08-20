@@ -51,9 +51,15 @@ export JOBRUN_SOURCE=scheduled
 # scripts/browser.mjs — DarkWake was silently discarding the launch. This looked identical to a
 # broken permission or a slow machine; it was neither. `caffeinate -u` is the documented way to ask
 # for a real wake (turns the display on, exits DarkWake) and needs no sudo, unlike `pmset schedule`.
-# Bounded by its own -t rather than tracked and killed, so nothing here can outlive a wedged run.
+#
+# The `-t` ceiling (run timeout + 5 min) is a BACKSTOP, not the normal exit path — it exists only so
+# a killed or crashed run cannot hold the Mac awake indefinitely. The normal path is the EXIT trap
+# below, which kills it the moment the run actually finishes, so a run that completes in 10 minutes
+# does not force the Mac awake for the other 40.
+CAFFEINATE_PID=""
 if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -u -t $((TIMEOUT_SECS + 300)) >/dev/null 2>&1 &
+  CAFFEINATE_PID=$!
   disown
 fi
 
@@ -162,7 +168,9 @@ reap_whatsapp_mcp() {
 # launchd gives a minimal PATH; resolve node once rather than at each call site.
 NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
 COST_FILE="$(mktemp)"
-trap 'rm -f "$COST_FILE"' EXIT
+# Single EXIT trap for both cleanups — a second `trap ... EXIT` would silently REPLACE this one
+# rather than add to it, which is exactly how the caffeinate release would have gone missing.
+trap 'rm -f "$COST_FILE"; [ -n "$CAFFEINATE_PID" ] && kill "$CAFFEINATE_PID" 2>/dev/null' EXIT
 
 # ---- spend caps -------------------------------------------------------------------------------
 # Read from config/job-seeker.config.md so the dashboard owns them. Falls back to a sane per-run cap
