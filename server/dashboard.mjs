@@ -401,7 +401,7 @@ function taskTarget(t, appTok, appIds) {
   const m = appTok.find((tok) => matchesApp(`${t.who} ${t.detail}`, tok));
   return m ? m.id : null;
 }
-function tasksHTML(rows, appTok, appIds, emptyMsg = "Nothing yet.") {
+function tasksHTML(rows, appTok, appIds, emptyMsg = "Nothing yet.", dueIds = null) {
   if (!rows.length) return `<p class="empty">${esc(emptyMsg)}</p>`;
   const headers = ["due_date", "type", "who", "status", "detail"];
   const body = rows
@@ -409,7 +409,8 @@ function tasksHTML(rows, appTok, appIds, emptyMsg = "Nothing yet.") {
       const target = taskTarget(t, appTok, appIds);
       const dismissed = t.status === "dismissed";
       const cls = [target ? "clickrow" : "", t.status === "done" ? "taskdone" : "", dismissed ? "rowdismissed" : ""].filter(Boolean).join(" ");
-      const attrs = `${cls ? ` class="${cls}"` : ""}${target ? ` onclick="openDetail('${esc(target)}')" title="Open activity summary"` : ""} data-status="${esc(t.status || "")}" data-type="${esc(t.type || "")}"`;
+      const isDue = dueIds ? dueIds.has(t.id) : false;
+      const attrs = `${cls ? ` class="${cls}"` : ""}${target ? ` onclick="openDetail('${esc(target)}')" title="Open activity summary"` : ""} data-status="${esc(t.status || "")}" data-type="${esc(t.type || "")}" data-due="${isDue ? "yes" : "no"}"`;
       const act = dismissed
         ? `<form method="POST" action="/set-task-status" class="prowact" onclick="event.stopPropagation()"><input type="hidden" name="id" value="${esc(t.id)}"><input type="hidden" name="status" value="open"><button type="submit" title="Restore">↺</button></form>`
         : `<form method="POST" action="/set-task-status" class="prowact" onclick="event.stopPropagation()"><input type="hidden" name="id" value="${esc(t.id)}"><input type="hidden" name="status" value="dismissed"><button type="submit" class="xbtn" title="Dismiss task">×</button></form>`;
@@ -425,37 +426,126 @@ function tasksHTML(rows, appTok, appIds, emptyMsg = "Nothing yet.") {
 }
 
 // The full Tasks section: a natural-language add field, Open/Done/All filter chips + search, and the table.
-function tasksSection(rows, appTok, appIds) {
+// `dueRows` (optional) adds a "Due" chip and makes it the default — used on Today, where the point
+// is the short list. Without it the section behaves as the old standalone Tasks tab did.
+function tasksSection(rows, appTok, appIds, dueRows = null) {
   const open = rows.filter((r) => r.status === "open").length;
   const done = rows.filter((r) => r.status === "done").length;
+  const hasDue = Array.isArray(dueRows);
+  // Marking the due rows lets one client-side filter serve both chips, rather than rendering the
+  // same table twice and having the two drift apart.
+  const dueIds = new Set(hasDue ? dueRows.map((r) => r.id) : []);
+  const chip = (f, label, on = false) => `<button type="button" class="tf${on ? " active" : ""}" data-f="${f}">${label}</button>`;
   return `<form method="POST" action="/add-task-nl" class="nladd">
     <input name="nl" placeholder="Add a task in plain English — e.g. 'call Dana Friday about the referral'" autocomplete="off" required>
     <button type="submit">+ Add</button>
   </form>
   <p class="muted nlhint">Typed in plain English — I parse the date, who, and type into columns. The full text is kept in the detail.</p>
   <div class="taskfilters">
-    <button type="button" class="tf active" data-f="open">Open (${open})</button>
-    <button type="button" class="tf" data-f="done">Done (${done})</button>
-    <button type="button" class="tf" data-f="dismissed">Dismissed (${rows.filter((r) => r.status === "dismissed").length})</button>
-    <button type="button" class="tf" data-f="all">All (${rows.length})</button>
+    ${hasDue ? chip("due", `Due (${dueRows.length})`, true) : ""}
+    ${chip("open", `Open (${open})`, !hasDue)}
+    ${chip("done", `Done (${done})`)}
+    ${chip("dismissed", `Dismissed (${rows.filter((r) => r.status === "dismissed").length})`)}
+    ${chip("all", `All (${rows.length})`)}
     <input class="tsearch" placeholder="filter text…" autocomplete="off">
   </div>
-  ${tasksHTML(rows, appTok, appIds)}`;
+  ${tasksHTML(rows, appTok, appIds, "No tasks yet.", dueIds)}`;
 }
 
-// Communications table with the thread_url rendered as a real hyperlink (Gmail/LinkedIn/WhatsApp).
-function commsHTML(table) {
-  if (!table.rows.length) return `<p class="empty">No messages yet.</p>`;
-  const body = table.rows
-    .map((r) => {
-      const link = threadLink(r.thread_url);
-      const openCell = link ? `<a href="${esc(link)}" target="_blank" rel="noreferrer">open ↗</a>` : esc(r.thread_url || "");
-      // Dates get .nw explicitly: this row is built by hand rather than through cellCls(), so
-      // without it "2026-07-13" wraps to "2026-07-" / "13" and every row grows to two lines.
-      return `<tr><td class="nw">${esc(String(r.date || "").slice(0, 10))}</td><td class="nw">${esc(r.source)}</td><td>${esc(r.from)}</td><td>${esc(r.subject)}</td><td>${cell(r.summary)}</td><td>${openCell}</td></tr>`;
+// ---------- People (contacts + their messages) ----------
+//
+// Comms was 179 rows of raw log with its own tab, and nobody opens a message log on purpose — it is
+// context ABOUT a person. Contacts, meanwhile, was a bare table with no sign of whether you had ever
+// spoken. Together they answer the question actually being asked: "who is this, and where did we
+// leave it?"
+//
+// Messages are matched to a contact by name or email appearing in the comms `from` field. That is
+// deliberately loose — comms rows store whatever identifier the channel gave us, raw and unguessed
+// (AGENT-RULES §1 forbids inventing a name from a handle) — so anything unmatched is kept and shown
+// under "Not matched to a contact" rather than dropped.
+function peopleHTML(all) {
+  const contacts = all.contacts.rows ?? [];
+  const comms = all.communications.rows ?? [];
+  const norm = (s) => String(s || "").toLowerCase().trim();
+
+  const used = new Set();
+  const forContact = (c) => {
+    const name = norm(c.name);
+    const email = norm(c.email);
+    return comms.filter((m, i) => {
+      const from = norm(m.from) + " " + norm(m.subject);
+      const hit = (email && from.includes(email)) || (name.length >= 4 && from.includes(name));
+      if (hit) used.add(i);
+      return hit;
+    });
+  };
+
+  const msgRows = (list) =>
+    list
+      .slice()
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+      .map((m) => {
+        const link = threadLink(m.thread_url);
+        return `<tr><td class="nw">${esc(String(m.date || "").slice(0, 10))}</td><td class="nw">${esc(m.source)}</td><td>${esc(m.subject)}</td><td>${cell(m.summary)}</td><td>${
+          link ? `<a href="${esc(link)}" target="_blank" rel="noreferrer">open ↗</a>` : ""
+        }</td></tr>`;
+      })
+      .join("");
+
+  const cards = contacts
+    .map((c) => {
+      const mine = forContact(c);
+      const last = mine.length ? String(mine.map((m) => m.date || "").sort().pop() || "").slice(0, 10) : "";
+      const who = [c.company, c.role].filter(Boolean).map(esc).join(" · ");
+      return `<details class="person" data-q="${esc(norm(c.name + " " + c.company + " " + c.role + " " + c.email + " " + c.notes))}">
+        <summary>
+          <span class="pname">${esc(c.name || c.email || "(unnamed)")}</span>
+          ${who ? `<span class="muted pmeta">${who}</span>` : ""}
+          <span class="pcount">${mine.length ? `${mine.length} message${mine.length === 1 ? "" : "s"}` : `<span class="muted">no messages logged</span>`}</span>
+          ${last ? `<span class="muted plast">last ${esc(last)}</span>` : ""}
+        </summary>
+        <div class="pbody">
+          <p class="muted pcontact">${[
+            c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : "",
+            c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn ↗</a>` : "",
+            c.notes ? esc(c.notes) : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")}</p>
+          ${mine.length ? `<div class="scroll"><table><thead><tr><th>date</th><th>source</th><th>subject</th><th>summary</th><th>link</th></tr></thead><tbody>${msgRows(mine)}</tbody></table></div>` : ""}
+        </div>
+      </details>`;
     })
     .join("");
-  return `<div class="scroll"><table><thead><tr><th>date</th><th>source</th><th>from</th><th>subject</th><th>summary</th><th>link</th></tr></thead><tbody>${body}</tbody></table></div>`;
+
+  // Everything the matcher could not attribute. Shown rather than hidden: a message from an unknown
+  // number is often exactly the one worth noticing.
+  const orphans = comms.filter((_, i) => !used.has(i));
+  const orphanBlock = orphans.length
+    ? `<details class="person orphans">
+        <summary><span class="pname">Not matched to a contact</span>
+          <span class="pcount">${orphans.length} message${orphans.length === 1 ? "" : "s"}</span></summary>
+        <div class="pbody"><div class="scroll"><table><thead><tr><th>date</th><th>source</th><th>from</th><th>subject</th><th>summary</th><th>link</th></tr></thead><tbody>${orphans
+          .slice()
+          .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+          .map((m) => {
+            const link = threadLink(m.thread_url);
+            return `<tr><td class="nw">${esc(String(m.date || "").slice(0, 10))}</td><td class="nw">${esc(m.source)}</td><td>${esc(m.from)}</td><td>${esc(m.subject)}</td><td>${cell(m.summary)}</td><td>${
+              link ? `<a href="${esc(link)}" target="_blank" rel="noreferrer">open ↗</a>` : ""
+            }</td></tr>`;
+          })
+          .join("")}</tbody></table></div></div>
+      </details>`
+    : "";
+
+  return `<div class="taskfilters">
+      <input class="tsearch psearch2" placeholder="search people, companies, notes…" autocomplete="off">
+      <span class="muted pmatch"></span>
+    </div>
+    ${contacts.length ? cards : `<p class="empty">No contacts yet.</p>`}
+    ${orphanBlock}
+    <h3 style="margin-top:18px">Add a contact</h3>
+    ${addContactFormHTML()}`;
 }
 
 // Small colored tag for the lead/application channel.
@@ -467,47 +557,73 @@ function channelTag(ch) {
 
 // Leads: opportunities WITHOUT confirmed-application evidence (CV sent / referral). Shows the
 // referrer and the channel it came through.
-function leadsHTML(leads) {
-  if (!leads.length)
-    return `<p class="empty">No leads yet. A CV sent or a referral (no application confirmation) is a lead.</p>`;
-  const rows = leads
+// ---------- Pipeline (leads + applications, one funnel) ----------
+//
+// These were two tabs over ONE record type — the split was a single field, `kind === "application"`
+// (see the `applied`/`leads` filter in page()). Same ids, same detail drawer, same advance button,
+// near-identical columns. Two tabs meant checking two places to answer "where does this company
+// stand", and a lead becoming an application appeared to move between tables.
+//
+// The lead-vs-application distinction is NOT dropped — it is load-bearing (AGENT-RULES: a sent CV
+// is a lead; only confirmation evidence makes an application, so the tracker cannot flatter you).
+// It stays as a visible Kind column and its own filter chip; what goes away is having to look twice.
+function pipelineHTML(records) {
+  if (!records.length)
+    return `<p class="empty">Nothing in the pipeline yet. A CV sent or a referral is a lead; a confirmation email makes it an application.</p>`;
+  const rows = records
     .map((a) => a.data)
     .sort((x, y) => (y.last_update ?? "").localeCompare(x.last_update ?? ""))
     .map((a) => {
       const st = (a.status || "").toLowerCase();
+      const isApp = a.kind === "application";
       const dismissed = st === "dismissed";
       const act = dismissed
         ? `<form method="POST" action="/set-app-status" class="prowact" onclick="event.stopPropagation()"><input type="hidden" name="id" value="${esc(a.id)}"><input type="hidden" name="status" value="Saved"><button type="submit" title="Restore">↺</button></form>`
-        : `<button type="button" class="xbtn dbtn" data-id="${esc(a.id)}" data-label="${esc(a.company + " — " + a.role)}" title="Dismiss lead (add a reason)">×</button>`;
-      return `<tr class="clickrow${dismissed ? " rowdismissed" : ""}${a.pending_stage ? " rowpending" : ""}" data-status="${esc(st)}" title="${esc(shortSummary(a))}${dismissed && a.dismiss_reason ? " — dismissed: " + esc(a.dismiss_reason) : ""}" onclick="openDetail('${esc(a.id)}')">
+        : `<button type="button" class="xbtn dbtn" data-id="${esc(a.id)}" data-label="${esc(a.company + " — " + a.role)}" title="Dismiss (add a reason)">×</button>`;
+      // data-kind drives the Lead/Applied chips; data-status drives the stage chips.
+      return `<tr class="clickrow${dismissed ? " rowdismissed" : ""}${a.pending_stage ? " rowpending" : ""}" data-status="${esc(st)}" data-kind="${isApp ? "application" : "lead"}" title="${esc(shortSummary(a))}${dismissed && a.dismiss_reason ? " — dismissed: " + esc(a.dismiss_reason) : ""}" onclick="openDetail('${esc(a.id)}')">
         <td>${act}</td>
         <td>${esc(a.company)}</td>
         <td>${esc(a.role)}</td>
-        <td>${channelTag(a.channel)}</td>
-        <td>${esc(a.referrer)}</td>
+        <td>${
+          isApp
+            ? `<span class="kindtag k-app" title="Confirmed by a received/confirmation email">application</span>`
+            : `<span class="kindtag k-lead" title="CV sent or referral — no confirmation evidence yet">lead</span>`
+        }</td>
         <td><span class="pill s-${esc(st)}">${esc(a.status)}</span>${advanceBtn(a)}</td>
+        <td>${esc(a.channel || a.source || "")}${a.referrer ? ` <span class="muted">· ${esc(a.referrer)}</span>` : ""}</td>
         <td>${dismissed && a.dismiss_reason ? `<span class="muted">✕ ${esc(a.dismiss_reason)}</span>` : `${esc(a.next_action)}${a.next_action_date ? ` <span class="muted">(${esc(a.next_action_date)})</span>` : ""}`}</td>
         <td>${a.job_url ? `<a href="${esc(a.job_url)}" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">↗ open</a>` : ""}</td>
       </tr>`;
     })
     .join("");
   return `<div class="scroll"><table>
-    <thead><tr><th></th><th>Company</th><th>Role</th><th>Channel</th><th>Referrer / source</th><th>Stage</th><th>Next action</th><th>Job</th></tr></thead>
+    <thead><tr><th></th><th>Company</th><th>Role</th><th>Kind</th><th>Stage</th><th>Via</th><th>Next action</th><th>Job</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
-// Leads section with status filter chips (Active hides dismissed; chips generated from statuses present).
-function leadsSection(leadRecords) {
+function pipelineSection(records) {
   const st = (a) => (a.data.status || "").toLowerCase();
-  const present = [...new Set(leadRecords.map(st).filter((s) => s && s !== "dismissed"))];
-  const n = (f) => leadRecords.filter((a) => (f === "all" ? true : f === "active" ? st(a) !== "dismissed" : st(a) === f)).length;
+  const kind = (a) => (a.data.kind === "application" ? "application" : "lead");
+  const present = [...new Set(records.map(st).filter((s) => s && s !== "dismissed"))];
+  const n = (f) =>
+    records.filter((a) =>
+      f === "all" ? true
+      : f === "active" ? st(a) !== "dismissed"
+      : f === "lead" || f === "application" ? kind(a) === f && st(a) !== "dismissed"
+      : st(a) === f
+    ).length;
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const chip = (f, label) => `<button type="button" class="tf${f === "active" ? " active" : ""}" data-f="${f}">${label} (${n(f)})</button>`;
   return `<div class="taskfilters lfilters">
-    ${chip("active", "Active")}${present.map((s) => chip(s, cap(s))).join("")}${chip("dismissed", "Dismissed")}${chip("all", "All")}
+    ${chip("active", "Active")}<span class="chipsep"></span>${chip("lead", "Leads")}${chip("application", "Applications")}<span class="chipsep"></span>${present
+      .map((s) => chip(s, cap(s)))
+      .join("")}${chip("dismissed", "Dismissed")}${chip("all", "All")}
     <input class="tsearch lsearch" placeholder="filter text…" autocomplete="off">
   </div>
-  ${leadsHTML(leadRecords)}`;
+  <p class="muted nlhint">A <b>lead</b> is a CV sent or a referral. It only becomes an <b>application</b>
+    when there is confirmation evidence — so the count you see is the one you can trust.</p>
+  ${pipelineHTML(records)}`;
 }
 
 // One-click stage-advance button: shown when an agent detected evidence of progress and recorded a
@@ -519,28 +635,6 @@ function advanceBtn(a) {
     <input type="hidden" name="id" value="${esc(a.id)}">
     <button type="submit" class="advbtn">🔔 Advance → ${esc(a.pending_stage)}</button>
   </form>`;
-}
-
-function applicationsHTML(apps) {
-  if (!apps.length) return `<p class="empty">No confirmed applications yet (needs a "received/confirmed" email).</p>`;
-  const rows = apps
-    .map((a) => a.data)
-    .sort((x, y) => (y.last_update ?? "").localeCompare(x.last_update ?? ""))
-    .map(
-      (a) => `<tr class="clickrow${a.pending_stage ? " rowpending" : ""}" title="${esc(shortSummary(a))} — click for activity" onclick="openDetail('${esc(a.id)}')">
-        <td>${esc(a.company)}</td>
-        <td>${esc(a.role)}</td>
-        <td>${esc(a.location)}</td>
-        <td><span class="pill s-${esc((a.status || "").toLowerCase())}">${esc(a.status)}</span>${advanceBtn(a)}</td>
-        <td>${esc(a.source)}</td>
-        <td>${esc(a.next_action)}${a.next_action_date ? ` <span class="muted">(${esc(a.next_action_date)})</span>` : ""}</td>
-        <td>${a.job_url ? `<a href="${esc(a.job_url)}" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">↗ open</a>` : ""}</td>
-      </tr>`
-    )
-    .join("");
-  return `<div class="scroll"><table>
-    <thead><tr><th>Company</th><th>Role</th><th>Location</th><th>Status</th><th>Source</th><th>Next action</th><th>Job</th></tr></thead>
-    <tbody>${rows}</tbody></table></div>`;
 }
 
 function statusBoardHTML(apps) {
@@ -1544,9 +1638,12 @@ function todayHTML(all, dueToday, appTok, appIds) {
     ${advancesBlock}
     ${approvalsBlock}
     ${boardsBlock}
-    <div class="tblock">
-      <p class="th">Follow-ups due <span class="muted">— from All tasks, due on or before today</span></p>
-      ${tasksHTML(dueToday, appTok, appIds, "Nothing due today. 🎉")}
+    <div class="tblock taskblock">
+      <p class="th">Follow-ups <span class="muted">— due on or before today; switch to All for the rest</span></p>
+      ${/* The Tasks tab was this same table with the same five columns, filtered differently — so it
+           is now a chip here instead of a tab. "Due" stays the default: Today is meant to be the
+           short list, and defaulting to 136 rows would make it another backlog to scroll past. */""}
+      ${tasksSection(all.tasks.rows, appTok, appIds, dueToday)}
     </div>`;
 }
 
@@ -1607,14 +1704,19 @@ function page(all, flash) {
   const pendingApprovals = all.approvals.filter((a) => a.data.status === "pending").length;
   const todayCount = dueToday.length + advances + pendingApprovals;
 
+  // Eight tabs became five. What merged, and why:
+  //   Applications + Leads -> Pipeline   one record type split by a single field; see pipelineHTML
+  //   Contacts + Comms     -> People     179 comms rows are context ABOUT a person, not a destination
+  //   Tasks                -> Today      identical columns; Today was already Tasks filtered to "due"
+  // Jobs stays separate on purpose: triaging ~100 incoming suggestions is a different activity from
+  // tracking the ~50 conversations already in flight, and it carries machinery the others do not
+  // (NEW badges + mark-all-seen, repost flags, applied-here cross-refs, verified/volatile links).
+  // Folding it in would produce one 150-row table that is worse at both jobs.
   const TABS = [
     { id: "today", label: "Today", count: todayCount || null },
-    { id: "applications", label: "Applications", count: applied.length },
-    { id: "leads", label: "Leads", count: activeLeads.length },
     { id: "proposals", label: "Jobs", count: openProposals.length },
-    { id: "tasks", label: "Tasks", count: openTasks.length },
-    { id: "communications", label: "Comms", count: all.communications.rows.length },
-    { id: "contacts", label: "Contacts", count: all.contacts.rows.length },
+    { id: "pipeline", label: "Pipeline", count: applied.length + activeLeads.length },
+    { id: "people", label: "People", count: all.contacts.rows.length },
     { id: "activity", label: "Activity", count: null },
   ];
   const active = TABS.some((x) => x.id === all.tab) ? all.tab : "today";
@@ -1647,12 +1749,9 @@ ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
 ${tabPanel("today", on("today"), sec("today", "", todayHTML(all, dueToday, appTok, appIds)))}
-${tabPanel("applications", on("applications"), sec("applications", `Applications <span class="muted">— confirmed by a received/confirmation email (click a row)</span>`, statusBoardHTML(applied) + applicationsHTML(applied)))}
-${tabPanel("leads", on("leads"), sec("leads", `Leads <span class="muted">— CV sent / referrals (× to dismiss · filter by status)</span>`, leadsSection(leads)))}
 ${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts)))}
-${tabPanel("tasks", on("tasks"), sec("tasks", `All tasks <span class="muted">(add in plain English · filter · click a row)</span>`, tasksSection(all.tasks.rows, appTok, appIds)))}
-${tabPanel("communications", on("communications"), sec("communications", "Communications", commsHTML(all.communications)))}
-${tabPanel("contacts", on("contacts"), sec("contacts", "Contacts", tableHTML(all.contacts) + `<h3 style="margin-top:18px">Add a contact</h3>` + addContactFormHTML()))}
+${tabPanel("pipeline", on("pipeline"), sec("pipeline", `Pipeline <span class="muted">— everything you have acted on, from CV sent to offer</span>`, statusBoardHTML(applied) + pipelineSection(all.applications)))}
+${tabPanel("people", on("people"), sec("people", `People <span class="muted">— who you are talking to, and every message logged with them</span>`, peopleHTML(all)))}
 ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="muted">— append-only audit log (filter by kind · search · run boundaries highlighted)</span>`, activitySection(all.activity)))}
 </div>
 
@@ -1842,6 +1941,25 @@ nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel .secbody .scroll tr:last-child td{border-bottom:0}
 th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
+/* Pipeline: lead vs application stays visible at a glance — it is the distinction the whole
+   tracker is built to protect, so it must not read as a minor detail. */
+.kindtag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:650;letter-spacing:.02em}
+.k-lead{background:rgba(110,168,254,.16);color:#6ea8fe}
+.k-app{background:rgba(46,160,67,.18);color:#3fb950}
+.chipsep{display:inline-block;width:1px;height:18px;background:var(--line);margin:0 4px;vertical-align:middle}
+
+/* People: one card per contact, their messages folded inside. */
+details.person{border:1px solid var(--line);border-radius:9px;margin:0 0 8px;background:var(--card)}
+details.person > summary{cursor:pointer;padding:11px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+details.person[open] > summary{border-bottom:1px solid var(--line)}
+.pname{font-weight:650}
+.pmeta{font-size:12px}
+.pcount{font-size:12px;margin-left:auto}
+.plast{font-size:11.5px}
+.pbody{padding:12px 14px}
+.pcontact{font-size:12px;margin:0 0 10px}
+details.orphans{border-style:dashed}
+
 /* Setup page */
 .cfgform{margin:0 0 26px}
 .cfggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px 18px;margin:0 0 18px}
@@ -2406,29 +2524,62 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   apply();
 })();
 
-// Tasks section: Open/Done/All filter chips + text search (client-side, default = Open).
+// Tasks: Due/Open/Done/Dismissed/All chips + text search. Lives inside Today now (the standalone
+// Tasks tab was this same five-column table filtered differently). "Due" filters on data-due, which
+// is stamped server-side, so one table serves every chip instead of rendering two that can drift.
 (function(){
-  var sec=document.querySelector('.sec[data-id="tasks"]');
+  var sec=document.querySelector('.sec[data-id="today"]');
   if(!sec) return;
-  var rows=function(){return Array.prototype.slice.call(sec.querySelectorAll('tbody tr'));};
-  var filter='open', q='';
+  // .taskblock, not .tblock — the advances block is also a .tblock and comes first, so selecting on
+  // the shared class silently bound the filter to a table with no rows and nothing ever filtered.
+  var wrap=sec.querySelector('.taskblock');
+  if(!wrap) return;
+  var rows=function(){return Array.prototype.slice.call(wrap.querySelectorAll('tbody tr'));};
+  var start=wrap.querySelector('.tf.active');
+  var filter=start?start.getAttribute('data-f'):'open', q='';
   function apply(){
     rows().forEach(function(tr){
       var st=tr.getAttribute('data-status')||'';
-      var okF=(filter==='all')||(st===filter);
+      var okF=(filter==='all')||(filter==='due'?tr.getAttribute('data-due')==='yes':st===filter);
       var okQ=!q||(tr.textContent||'').toLowerCase().indexOf(q)>=0;
       tr.style.display=(okF&&okQ)?'':'none';
     });
   }
-  sec.querySelectorAll('.tf').forEach(function(b){
+  wrap.querySelectorAll('.tf').forEach(function(b){
     b.addEventListener('click', function(){
-      sec.querySelectorAll('.tf').forEach(function(x){x.classList.remove('active');});
+      // Scoped to the tasks block, not the whole Today section — Today also carries the approvals
+      // and advances blocks, and clearing .active across all of them would fight those controls.
+      wrap.querySelectorAll('.tf').forEach(function(x){x.classList.remove('active');});
       b.classList.add('active'); filter=b.getAttribute('data-f'); apply();
     });
   });
-  var s=sec.querySelector('.tsearch');
+  var s=wrap.querySelector('.tsearch');
   if(s) s.addEventListener('input', function(){ q=s.value.toLowerCase().trim(); apply(); });
   apply();
+})();
+
+// People: one search box across the contact cards.
+(function(){
+  var sec=document.querySelector('.sec[data-id="people"]');
+  if(!sec) return;
+  var cards=Array.prototype.slice.call(sec.querySelectorAll('details.person'));
+  var s=sec.querySelector('.psearch2');
+  var out=sec.querySelector('.pmatch');
+  if(!s) return;
+  s.addEventListener('input', function(){
+    var q=s.value.toLowerCase().trim();
+    var shown=0;
+    cards.forEach(function(c){
+      // The orphan block has no data-q; keep it out of search results rather than always showing it.
+      var hay=c.getAttribute('data-q');
+      var vis=!q||(hay!==null&&hay.indexOf(q)>=0);
+      c.hidden=!vis;
+      if(vis&&hay!==null) shown++;
+      if(q&&vis&&hay!==null) c.open=true;
+      if(!q) c.open=false;
+    });
+    if(out) out.textContent=q?(shown+' matching'):'';
+  });
 })();
 
 // Proposals (roles) section: Active/Proposed/Applied/Dismissed/All filter + search. Default = Active (hides dismissed).
@@ -2456,16 +2607,23 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   apply();
 })();
 
-// Leads section: Active/<statuses>/Dismissed/All filter + search. Default = Active (hides dismissed).
+// Pipeline section: Active / Leads / Applications / <stages> / Dismissed / All + search.
+// Default = Active (hides dismissed). The Leads and Applications chips filter on data-kind rather
+// than data-status, because kind and stage are independent — a lead can be at "Screening" too.
 (function(){
-  var sec=document.querySelector('.sec[data-id="leads"]');
+  var sec=document.querySelector('.sec[data-id="pipeline"]');
   if(!sec) return;
   var rows=function(){return Array.prototype.slice.call(sec.querySelectorAll('tbody tr'));};
   var filter='active', q='';
   function apply(){
     rows().forEach(function(tr){
       var st=tr.getAttribute('data-status')||'';
-      var okF=(filter==='all')||(filter==='active'?st!=='dismissed':st===filter);
+      var kd=tr.getAttribute('data-kind')||'';
+      var okF;
+      if(filter==='all') okF=true;
+      else if(filter==='active') okF=(st!=='dismissed');
+      else if(filter==='lead'||filter==='application') okF=(kd===filter && st!=='dismissed');
+      else okF=(st===filter);
       var okQ=!q||(tr.textContent||'').toLowerCase().indexOf(q)>=0;
       tr.style.display=(okF&&okQ)?'':'none';
     });
