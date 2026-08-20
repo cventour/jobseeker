@@ -353,42 +353,84 @@ function detailHTML(app, allComms, allTasks) {
     .filter((c) => c.related_application_id === d.id || matchesApp(`${c.from} ${c.subject} ${c.summary} ${c.thread_url}`, tok))
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
   const relTasks = allTasks.filter((t) => t.related_id === d.id || matchesApp(`${t.who} ${t.detail}`, tok));
-  const meta = [
-    ["Type", d.kind ? `<strong>${esc(d.kind === "application" ? "Application" : "Lead")}</strong>` : ""],
+  // SHORT facts only. These used to share a two-column label/value grid with the next-action
+  // narrative — which meant a 400-word paragraph was squeezed down one half-width column into a
+  // tall ribbon about 30 characters wide, while the column beside it sat empty. Facts are a few
+  // words each and belong on a line together; prose needs the full width and a sane measure. They
+  // are different kinds of content and stopped sharing a layout.
+  const facts = [
+    ["Type", d.kind ? esc(d.kind === "application" ? "Application" : "Lead") : ""],
     ["Status", `<span class="pill s-${esc((d.status || "").toLowerCase())}">${esc(d.status)}</span>`],
-    ["Dismiss reason", esc(d.dismiss_reason)],
     ["Channel", channelTag(d.channel)],
-    ["Referrer / source", esc(d.referrer)],
+    ["Via", esc(d.source)],
+    ["Referrer", esc(d.referrer)],
     ["Location", esc(d.location)],
-    ["Captured via", esc(d.source)],
     ["Applied", esc(d.applied_date)],
-    ["Last update", esc(d.last_update)],
+    ["Updated", esc(d.last_update)],
     ["Contact", esc(d.contact)],
-    ["Next action", `${esc(d.next_action)}${d.next_action_date ? ` <span class="muted">(${esc(d.next_action_date)})</span>` : ""}`],
   ]
     .filter(([, v]) => v && v !== "")
-    .map(([k, v]) => `<div class="mrow"><span class="mk">${k}</span><span class="mv">${v}</span></div>`)
+    .map(([k, v]) => `<span class="fact"><span class="fk">${k}</span><span class="fv">${v}</span></span>`)
     .join("");
-  const jobLink = d.job_url ? `<a class="btn" href="${esc(d.job_url)}" target="_blank" rel="noreferrer">↗ Job posting</a>` : "";
+
+  // The narrative the user actually opened this to read. Full width, its own block, set at a
+  // comfortable measure — not a table cell.
+  const nextAction = d.next_action
+    ? `<section class="mblock mnext">
+         <p class="mh">Next action${d.next_action_date ? ` <span class="muted">· ${esc(d.next_action_date)}</span>` : ""}</p>
+         <p class="mprose">${linkifyText(String(d.next_action))}</p>
+       </section>`
+    : "";
+  const dismissed = d.dismiss_reason
+    ? `<section class="mblock mdismiss"><p class="mh">Dismissed</p><p class="mprose">${esc(d.dismiss_reason)}</p></section>`
+    : "";
+
   const commsList = relComms.length
     ? relComms
         .map((c) => {
           const link = threadLink(c.thread_url);
           const opener = link ? ` <a href="${esc(link)}" target="_blank" rel="noreferrer">open ↗</a>` : "";
-          return `<li><span class="muted">${esc(String(c.date || "").slice(0, 10))} · ${esc(c.source)}</span> <strong>${esc(c.from)}</strong>${opener}<br>${esc(c.summary)}</li>`;
+          return `<li>
+            <p class="tmeta"><span class="tdate">${esc(String(c.date || "").slice(0, 10))}</span>
+              <span class="muted">${esc(c.source)}</span> <strong>${esc(c.from)}</strong>${opener}</p>
+            <p class="mprose">${esc(c.summary)}</p>
+          </li>`;
         })
         .join("")
     : `<li class="muted">No linked messages.</li>`;
   const tasksList = relTasks.length
-    ? relTasks.map((t) => `<li><span class="muted">${esc(t.due_date || "—")} · ${esc(t.status)}</span> — ${esc(t.detail)}</li>`).join("")
+    ? relTasks
+        .map(
+          (t) => `<li>
+            <p class="tmeta"><span class="tdate">${esc(t.due_date || "—")}</span>
+              <span class="pill s-${esc((t.status || "").toLowerCase())}">${esc(t.status)}</span></p>
+            <p class="mprose">${esc(t.detail)}</p>
+          </li>`
+        )
+        .join("")
     : `<li class="muted">No tasks.</li>`;
-  const notes = app.body ? `<div class="mnote">${linkifyText(app.body)}</div>` : "";
-  return `<h3>${esc(d.company)} <span class="muted">— ${esc(d.role)}</span></h3>
-    ${jobLink}
-    <div class="mmeta">${meta}</div>
+  const notes = app.body
+    ? `<section class="mblock"><p class="mh">Notes</p><div class="mprose mnote">${linkifyText(app.body)}</div></section>`
+    : "";
+
+  // Header is sticky so the company you are reading about stays visible while you scroll a long
+  // history — the drawer scrolls itself now rather than the whole overlay.
+  return `<header class="mhead">
+      <h3>${esc(d.company)} <span class="muted">— ${esc(d.role)}</span></h3>
+      ${d.job_url ? `<a class="btn" href="${esc(d.job_url)}" target="_blank" rel="noreferrer">↗ Job posting</a>` : ""}
+    </header>
+    <div class="mfacts">${facts}</div>
+    ${nextAction}
+    ${dismissed}
     ${notes}
-    <h4>Activity (${relComms.length})</h4><ul class="mlist">${commsList}</ul>
-    <h4>Tasks (${relTasks.length})</h4><ul class="mlist">${tasksList}</ul>`;
+    <section class="mblock">
+      <p class="mh">Activity <span class="muted">· ${relComms.length}</span></p>
+      <ul class="tline">${commsList}</ul>
+    </section>
+    <section class="mblock">
+      <p class="mh">Tasks <span class="muted">· ${relTasks.length}</span></p>
+      <ul class="tline">${tasksList}</ul>
+    </section>`;
 }
 function buildDetails(all) {
   const map = {};
@@ -2223,20 +2265,53 @@ tr.isnew td{background:rgba(46,160,110,.16)}tr.isnew td:first-child{box-shadow:i
 .sec .sechead h2{margin:0;flex:1}
 .sec .secbody{padding:2px 16px 16px}
 .secbody .board{margin-bottom:12px}
-.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto}
-.modal{background:var(--card);border:1px solid var(--line);border-radius:14px;max-width:720px;width:100%;padding:24px;position:relative}
-.mclose{position:absolute;top:8px;right:10px;background:transparent;color:var(--mut);font-size:22px;padding:2px 8px}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:flex-start;justify-content:center;padding:32px 16px}
+/* The drawer scrolls ITSELF, capped to the viewport, so the header stays put and you are reading a
+   panel rather than pushing the whole page around. */
+.modal{background:var(--card);border:1px solid var(--line);border-radius:14px;max-width:760px;width:100%;
+  padding:0 26px 26px;position:relative;max-height:calc(100vh - 64px);overflow-y:auto;overscroll-behavior:contain}
+.mclose{position:absolute;top:10px;right:12px;background:transparent;color:var(--mut);font-size:22px;padding:2px 8px;z-index:2}
 .mclose:hover{filter:none;color:var(--fg)}
-.modal h3{margin:0 0 10px;font-size:18px}
-.modal h4{margin:16px 0 6px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
-.mmeta{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin:10px 0}
-.mrow{display:flex;gap:8px;font-size:13px}.mk{color:var(--mut);min-width:88px}.mv{flex:1}
-.mnote{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin:10px 0;white-space:pre-wrap;font-size:13px}
-.mlist{margin:4px 0;padding-left:18px;font-size:13px}.mlist li{margin:6px 0}
+/* Title left, job link right, and 34px reserved on the end so neither ever slides under the close
+   button — which is absolutely positioned and would otherwise sit on top of the link. */
+.mhead{position:sticky;top:0;background:var(--card);padding:22px 34px 12px 0;margin:0 0 4px;
+  border-bottom:1px solid var(--line);z-index:1;
+  display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.modal h3{margin:0;font-size:19px;line-height:1.35;flex:1 1 260px}
+.mhead .btn{flex:0 0 auto}
+
+/* Facts wrap as a single flowing strip. Each is a few words, so they read as a line of context
+   rather than a form — and nothing gets a column of its own to be squeezed into. */
+.mfacts{display:flex;flex-wrap:wrap;gap:7px 9px;margin:14px 0 4px}
+.fact{display:inline-flex;align-items:baseline;gap:6px;background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:4px 10px;font-size:12.5px;max-width:100%}
+.fk{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.04em;flex:0 0 auto}
+.fv{color:var(--fg);overflow-wrap:anywhere}
+
+.mblock{margin:20px 0 0}
+.mh{margin:0 0 8px;font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;font-weight:650}
+/* One measure for every piece of prose in here. ~74 characters is the readable range; the old
+   layout was forcing roughly 30. */
+.mprose{margin:0;font-size:14px;line-height:1.62;max-width:74ch;overflow-wrap:anywhere}
+.mnext{border-left:3px solid var(--acc);padding-left:14px}
+.mdismiss{border-left:3px solid #6b2330;padding-left:14px}
+.mnote{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:12px 14px;white-space:pre-wrap}
+
+/* Activity/tasks as a timeline: one rule down the side, entries hanging off it. Reads as history
+   rather than as bullet points. */
+.tline{list-style:none;margin:0;padding:0 0 0 16px;border-left:1px solid var(--line)}
+.tline li{position:relative;margin:0 0 16px;padding-left:4px}
+.tline li:last-child{margin-bottom:4px}
+.tline li::before{content:"";position:absolute;left:-21px;top:7px;width:7px;height:7px;border-radius:50%;
+  background:var(--line)}
+.tmeta{margin:0 0 4px;font-size:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.tdate{color:var(--mut);font-variant-numeric:tabular-nums}
 a.btn{display:inline-block;background:var(--acc);color:#fff;padding:6px 12px;border-radius:8px;text-decoration:none;font-size:13px}
 .tag{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
 .tag-email{background:#264a7a;color:#cfe0ff}.tag-whatsapp{background:#1f5b46;color:#c6f0dc}.tag-linkedin{background:#0a4a6b;color:#c3e7fb}.tag-web{background:#4a3a6b;color:#ddd0f7}
-@media(max-width:600px){.mmeta{grid-template-columns:1fr}}
+/* Nothing to collapse at narrow widths any more — the facts strip already wraps and the prose is
+   capped by a character measure rather than a column, so both adapt on their own. */
+@media(max-width:600px){.modal{padding:0 16px 18px;max-height:calc(100vh - 32px)}.overlay{padding:16px 8px}}
 `;
 
 const JS = `
