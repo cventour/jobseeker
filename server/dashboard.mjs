@@ -2312,23 +2312,126 @@ function bToggle(id){
   }, 5000);
 })();
 
-// Curated-proposals row actions (dismiss, restore, mark-all-seen): submit via fetch and remove
-// just that row in place — no full-page reload, so the page never jumps back to the top.
-document.addEventListener('submit', function(e){
-  var form = e.target;
-  if (!(form instanceof HTMLFormElement)) return;
-  var action = form.getAttribute('action') || '';
-  if (action !== '/set-proposal-status') return;
-  e.preventDefault();
-  var row = form.closest('tr');
-  var body = new URLSearchParams(new FormData(form)).toString();
-  fetch(action, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body })
-    .then(function(r){
-      if (!r.ok) throw new Error('request failed');
-      if (row){ row.style.transition='opacity .25s'; row.style.opacity='0'; setTimeout(function(){ row.remove(); }, 250); }
-    })
-    .catch(function(){ form.submit(); }); // fall back to normal submit on error
-});
+// Row actions across every list: submit via fetch and collapse just that row, with no page reload.
+//
+// Previously only proposals did this; a task or lead dismissal was a POST -> 303 -> full reload.
+// Saving and restoring scroll made it land in the right place, but you still SAW the round trip —
+// the page blanked, snapped to the top and jumped back down. Fixing the symptom made the flicker
+// more obvious, not less. Not reloading at all is the actual fix.
+//
+// Scoped by "is this form inside a table row", not by an endpoint allowlist. That is the honest
+// discriminator: bulk actions (Dismiss all N, Remove all N, mark-all-seen) live outside any row, so
+// they fall through to a normal submit and get the full reload they need, and any row action added
+// later is picked up without being registered anywhere.
+(function(){
+  var REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var ROW_ACTIONS = ['/set-proposal-status','/set-task-status','/set-app-status','/dismiss-board','/dismiss-advance'];
+
+  // Collapse a row to nothing: fade first, then close the gap it leaves. Two phases rather than one
+  // so the list does not lurch while the row is still legible.
+  function collapseRow(row, after){
+    if (REDUCED){ row.style.display='none'; after && after(); return; }
+    var tds = Array.prototype.slice.call(row.querySelectorAll('td'));
+    tds.forEach(function(td){ td.style.height = td.offsetHeight + 'px'; });
+    row.style.transition = 'opacity .15s ease';
+    row.style.opacity = '0';
+    setTimeout(function(){
+      tds.forEach(function(td){
+        td.style.transition = 'height .2s ease, padding-top .2s ease, padding-bottom .2s ease';
+        td.style.overflow = 'hidden';
+        // Text is already invisible at this point, so zeroing these is not seen — it is only what
+        // lets the row's height actually reach zero rather than being propped open by its content.
+        td.style.lineHeight = '0'; td.style.fontSize = '0';
+        td.style.height = '0px'; td.style.paddingTop = '0'; td.style.paddingBottom = '0';
+      });
+      setTimeout(function(){
+        row.style.display = 'none';
+        // Undo every inline style once hidden. Leaving height/padding/font-size at zero would mean
+        // that switching to the Dismissed filter later showed a real row as an invisible sliver —
+        // present in the DOM, counted in the chips, and impossible to see or click.
+        tds.forEach(function(td){
+          td.style.cssText = '';
+        });
+        row.style.transition = ''; row.style.opacity = '';
+        after && after();
+      }, 210);
+    }, 150);
+  }
+
+  // Keep the filter chips honest. The row stays in the DOM (hidden) with its new status, so counts
+  // are recomputed from the same attributes the filters read — no guessing, no drift, and switching
+  // to the Dismissed chip still shows what was just dismissed.
+  function refreshCounts(scope){
+    var rows = Array.prototype.slice.call(scope.querySelectorAll('tbody tr'));
+    if (!rows.length) return;
+    scope.querySelectorAll('.tf').forEach(function(chip){
+      var f = chip.getAttribute('data-f');
+      // Strip the trailing "(n)" without a regex, for the same escaping reason as ROW_ACTIONS above.
+      var label = chip.textContent;
+      var paren = label.lastIndexOf('(');
+      if (paren > 0) label = label.slice(0, paren);
+      label = label.trim();
+      var n = rows.filter(function(tr){
+        var st = tr.getAttribute('data-status') || '';
+        var kd = tr.getAttribute('data-kind') || '';
+        if (f === 'all') return true;
+        if (f === 'active') return st !== 'dismissed';
+        if (f === 'due') return tr.getAttribute('data-due') === 'yes' && st === 'open';
+        if (f === 'stale') return tr.getAttribute('data-stale') === 'yes' && st === 'open';
+        if (f === 'new') return tr.getAttribute('data-new') === 'yes';
+        if (f === 'lead' || f === 'application') return kd === f && st !== 'dismissed';
+        return st === f;
+      }).length;
+      chip.textContent = label + ' (' + n + ')';
+    });
+  }
+
+  // Flip a dismiss control into its restore counterpart, so the row is still correct if the user
+  // switches to the Dismissed filter instead of reloading.
+  function toRestore(form){
+    var st = form.querySelector('input[name=status]');
+    if (!st) return;
+    var action = form.getAttribute('action') || '';
+    st.value = action === '/set-proposal-status' ? 'proposed'
+             : action === '/set-app-status' ? 'Saved'
+             : 'open';
+    var btn = form.querySelector('button');
+    if (btn){ btn.textContent = '↺'; btn.classList.remove('xbtn'); btn.title = 'Restore'; }
+  }
+
+  document.addEventListener('submit', function(e){
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    if ((form.getAttribute('method') || '').toLowerCase() !== 'post') return;
+    var row = form.closest('tr');
+    if (!row) return;                       // bulk action — let it reload normally
+    var action = form.getAttribute('action') || '';
+    // A plain list, not a regex. This whole script is inside a template literal in dashboard.mjs,
+    // so backslashes are eaten as escape sequences before the browser ever sees them: the obvious
+    // /^\/(a|b)$/ arrives as /^/(a|b)$/, which is a SyntaxError that kills the ENTIRE script block —
+    // every handler on the page, silently, with the only symptom being that things stopped working.
+    // Anything needing a backslash here must double it; avoiding the need is safer.
+    if (ROW_ACTIONS.indexOf(action) === -1) return;
+
+    e.preventDefault();
+    var statusInput = form.querySelector('input[name=status]');
+    var newStatus = statusInput ? statusInput.value : 'dismissed';
+    var body = new URLSearchParams(new FormData(form)).toString();
+    var sec = form.closest('.sec');
+
+    fetch(action, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body })
+      .then(function(r){
+        if (!r.ok) throw new Error('request failed');
+        // Record what the server now holds BEFORE hiding, so the chip counts and any later filter
+        // pass agree with reality rather than with what was on screen a moment ago.
+        row.setAttribute('data-status', String(newStatus).toLowerCase());
+        if (String(newStatus).toLowerCase() === 'dismissed') toRestore(form);
+        collapseRow(row, function(){ if (sec) refreshCounts(sec); });
+      })
+      // Anything unexpected falls back to the ordinary submit, so an action never silently no-ops.
+      .catch(function(){ form.submit(); });
+  });
+})();
 
 document.getElementById('cvform')?.addEventListener('submit', async (e) => {
   e.preventDefault();

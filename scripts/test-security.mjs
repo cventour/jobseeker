@@ -147,6 +147,30 @@ async function main() {
   const scripted = await post({});
   check("scripted POST (no browser headers) is allowed", scripted >= 300 && scripted < 400, `status ${scripted}`);
 
+  // 6. The page's own inline <script> must actually parse.
+  //
+  // The client JS lives inside a template literal in dashboard.mjs, so a backslash meant for the
+  // BROWSER is eaten as a JS escape before it is ever served: `/^\/(a|b)$/` arrives as `/^/(a|b)$/`,
+  // a SyntaxError. One bad character takes out the entire script block — every filter, every tab,
+  // every row action — and the page still returns 200 and looks fine until something is clicked.
+  // Exactly the silent-success failure this project keeps fighting, so it gets a test.
+  const html = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text());
+  const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  check("dashboard serves at least one inline script", blocks.length > 0, `${blocks.length} block(s)`);
+  let scriptOk = true;
+  let scriptErr = "";
+  for (const src of blocks) {
+    try {
+      // Parse-only: never executed, just checked for syntactic validity.
+      new (async function () {}.constructor)(src);
+    } catch (e) {
+      scriptOk = false;
+      scriptErr = String(e?.message || e).slice(0, 120);
+      break;
+    }
+  }
+  check("inline dashboard JS parses", scriptOk, scriptErr);
+
   child.kill();
   await fs.rm(tmp, { recursive: true, force: true });
 
