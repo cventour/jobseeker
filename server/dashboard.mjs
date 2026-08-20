@@ -1019,23 +1019,86 @@ function activitySection(table) {
     ${activityHTML(table)}`;
 }
 
+// A real on/off switch for a value that is genuinely a yes/no.
+//
+// These were text boxes containing the literal word "true" — asking someone to spell a boolean, in
+// a field that would silently accept "ture". `channelEnabled()` in server/config.mjs already
+// tolerates yes/on/1, which is a parser working around a UI that should never have posed the
+// question this way.
+//
+// Browsers omit an unchecked checkbox from the POST entirely, so "off" and "never touched" look
+// identical to the server — and handleSaveConfig deliberately treats an absent key as "leave it
+// alone". The usual trick is a hidden `false` field before the checkbox, but NOT here: parseForm
+// joins repeated keys with a comma (so multi-checkbox groups work), which would store the literal
+// string "false,true" in the user's config file. Instead the form declares which keys are booleans
+// in a `_bools` field, and the handler resolves absent-means-false from that list.
+function toggleHTML(name, label, on, hint = "") {
+  return `<label class="tgl">
+    <input type="checkbox" name="${name}" value="true"${on ? " checked" : ""}>
+    <span class="tgl-track"><span class="tgl-thumb"></span></span>
+    <span class="tgl-text">${label}${hint ? `<span class="muted tgl-hint">${hint}</span>` : ""}</span>
+  </label>`;
+}
+
+// Config values are strings from Markdown frontmatter, and an absent key means "default on" for
+// these switches — matching channelEnabled()'s opt-OUT semantics in server/config.mjs.
+const isOn = (v, dflt = true) => {
+  const s = String(v ?? "").trim();
+  if (!s) return dflt;
+  return !/^(false|no|off|0)$/i.test(s);
+};
+
 function criteriaFormHTML(criteria) {
   const d = criteria.data ?? {};
   const val = (k) => esc(d[k] ?? "");
-  return `<form method="POST" action="/save-criteria" class="grid">
+  return `<form method="POST" action="/save-criteria" class="grid" id="criteriaform">
     <label>Markets (comma-separated)<input name="markets" value="${val("markets")}"></label>
     <label>Target roles<input name="roles" value="${val("roles")}"></label>
     <label>Locations<input name="locations" value="${val("locations")}"></label>
     <label>Seniority<input name="seniority" value="${val("seniority")}"></label>
-    <label>Weight: market<input name="weight_market" value="${val("weight_market")}"></label>
-    <label>Weight: role<input name="weight_role" value="${val("weight_role")}"></label>
-    <label>Weight: CV<input name="weight_cv" value="${val("weight_cv")}"></label>
-    <div class="actions"><button type="submit">Save criteria</button></div>
+    <div class="actions"><button type="submit">Save</button></div>
+    ${/* The three scoring weights live in Advanced, but they must still POST from THIS form —
+         /save-criteria writes all of criteria.md, so omitting them here would blank them on every
+         save. Rendered hidden, and mirrored by the visible Advanced inputs via a tiny sync script. */
+      ["weight_market", "weight_role", "weight_cv"]
+        .map((k) => `<input type="hidden" name="${k}" id="h_${k}" value="${val(k)}">`)
+        .join("")}
   </form>
   <form method="POST" action="/add-market" class="inline">
     <input name="market" placeholder="Add a market (e.g. Fintech)" required>
     <button type="submit">Add market</button>
   </form>`;
+}
+
+// Scoring weights: real controls, but the wrong thing to put in front of someone on day one. They
+// only make sense relative to each other, so they render as sliders showing their normalised share
+// rather than three decimals the user is left to make sum to 1.
+function weightsHTML(criteria) {
+  const d = criteria.data ?? {};
+  const num = (k, dflt) => {
+    const n = Number(d[k]);
+    return Number.isFinite(n) ? n : dflt;
+  };
+  const w = { weight_market: num("weight_market", 0.4), weight_role: num("weight_role", 0.35), weight_cv: num("weight_cv", 0.25) };
+  const label = { weight_market: "Market fit", weight_role: "Role match", weight_cv: "CV match" };
+  const rows = Object.entries(w)
+    .map(
+      ([k, v]) => `<label class="wrow">
+        <span class="wname">${label[k]}</span>
+        <input type="range" class="wslider" data-for="${k}" min="0" max="100" step="5" value="${Math.round(v * 100)}">
+        <span class="wpct" data-pct="${k}">—</span>
+      </label>`
+    )
+    .join("");
+  return `<p class="muted">How much each factor counts when a role is scored. Only the balance between
+    them matters — the percentages shown are each one's share of the total.</p>
+    <div class="wgrid">${rows}</div>
+    <p class="muted" id="wnote"></p>
+    ${/* Weights live in criteria.md, not the config file, so they belong to the criteria form —
+         which is a SIBLING form further up the page. `form="criteriaform"` is the standards-based
+         way to submit it from here, so the button next to the sliders saves the sliders, rather
+         than the nearby "Save settings" button (which posts a different form) appearing to. */""}
+    <button type="submit" form="criteriaform" class="btn-secondary btn-small">Save weights</button>`;
 }
 
 function profileHTML(profile) {
@@ -1223,19 +1286,39 @@ function setupHTML(st, criteria) {
       Past the ceiling the daily run does not start, and tells you why.</p>
 
     <p class="th">Channels</p>
+    <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled,linkedin_open_tab">
+    <div class="tglgrid">
+      ${toggleHTML("whatsapp_web_enabled", "Read WhatsApp Web", isOn(cfg.whatsapp_web_enabled), "Message list only — never opens a chat.")}
+      ${toggleHTML("linkedin_enabled", "Read LinkedIn", isOn(cfg.linkedin_enabled), "Message list only, through your logged-in Chrome.")}
+      ${toggleHTML("linkedin_open_tab", "Open a LinkedIn messaging tab", isOn(cfg.linkedin_open_tab, false), "Off: only reads a tab you leave open. On: opens one, which can mark the first conversation read.")}
+    </div>
     <div class="cfggrid">
-      <label>Approval channels<input name="approval_channels" value="${esc(cfg.approval_channels ?? "")}"></label>
-      <label>WhatsApp owner JID<input name="whatsapp_owner_jid" value="${esc(cfg.whatsapp_owner_jid ?? "")}"></label>
-      <label>Read WhatsApp Web<input name="whatsapp_web_enabled" value="${esc(cfg.whatsapp_web_enabled ?? "true")}"></label>
-      <label>Read LinkedIn<input name="linkedin_enabled" value="${esc(cfg.linkedin_enabled ?? "true")}"></label>
+      <label>Where to send approvals<input name="approval_channels" value="${esc(cfg.approval_channels ?? "")}" placeholder="whatsapp, chat"></label>
+      <label>Your WhatsApp number<input name="whatsapp_owner_jid" value="${esc(cfg.whatsapp_owner_jid ?? "")}" placeholder="971xxxxxxxxx@s.whatsapp.net"></label>
     </div>
 
-    <p class="th">Privacy</p>
-    <div class="cfggrid">
-      <label>Chats never to log<input name="ignored_chats" value="${esc(cfg.ignored_chats ?? "")}" placeholder="comma list, prefix match"></label>
-      <label>Company aliases<input name="company_aliases" value="${esc(cfg.company_aliases ?? "")}" placeholder="oldname=New Name"></label>
-      <label>Pause applying before<input name="apply_stop_before" value="${esc(cfg.apply_stop_before ?? "")}"></label>
-    </div>
+    <!-- Everything below is real, but nobody needs it on day one. Collapsed by default so the
+         first screen asks only for what the system genuinely cannot work without. -->
+    <details class="adv">
+      <summary>Advanced</summary>
+
+      <p class="th">Scoring weights</p>
+      ${weightsHTML(criteria)}
+
+      <p class="th">Privacy</p>
+      <div class="cfggrid">
+        <label>Chats never to log<input name="ignored_chats" value="${esc(cfg.ignored_chats ?? "")}" placeholder="comma list, prefix match"></label>
+        <label>Company aliases<input name="company_aliases" value="${esc(cfg.company_aliases ?? "")}" placeholder="oldname=New Name"></label>
+      </div>
+
+      <p class="th">Applying</p>
+      <div class="cfggrid">
+        <label>Pause applying before<input name="apply_stop_before" value="${esc(cfg.apply_stop_before ?? "")}" placeholder="unknown_question, submit"></label>
+      </div>
+      <p class="muted">Checkpoints where an application pauses for you. Removing <code>submit</code>
+        does <b>not</b> let anything be sent without approval — that gate is in the agent rules, not here.</p>
+    </details>
+
     <button type="submit" class="btn">Save settings</button>
   </form>
 
@@ -1612,8 +1695,11 @@ function settingsPage(all, flash) {
   // banner demanded attention for 45 boards nobody needed to touch.
   const needing = companies.filter((e) => companyState(e) === "needs-url").length;
   const TABS = [
+    // No separate "Criteria & weights" tab: its fields (markets, roles, locations, seniority and
+    // the three weights) were an exact subset of Setup's, so it was the same form rendered twice —
+    // two places to change one value, and two places for them to disagree. Setup is the single home;
+    // the weights moved into Setup > Advanced.
     { id: "setup", label: "Setup", count: null },
-    { id: "criteria", label: "Criteria &amp; weights", count: null },
     { id: "companies", label: "Companies", count: companyCount },
     { id: "cv", label: "CV / profile", count: null },
   ];
@@ -1640,7 +1726,6 @@ ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
 ${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, setupHTML(all.status, all.criteria)))}
-${tabPanel("criteria", on("criteria"), sec("criteria", `Criteria <span class="muted">— what the agents target and how they weight fit</span>`, criteriaFormHTML(all.criteria)))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
@@ -1745,7 +1830,6 @@ nav.tabs .tab[data-tab="communications"]{--h:340} /* pink */
 nav.tabs .tab[data-tab="contacts"]{--h:30}        /* orange */
 nav.tabs .tab[data-tab="activity"]{--h:228;--tab-c:.3}  /* muted on purpose: it is a log */
 /* Settings tabs reuse the same hues so the two pages read as one system. */
-nav.tabs .tab[data-tab="criteria"]{--h:213}
 nav.tabs .tab[data-tab="companies"]{--h:152}
 nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel[hidden]{display:none}
@@ -1763,6 +1847,35 @@ td.nw,th.nw{white-space:nowrap}
 .cfggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px 18px;margin:0 0 18px}
 .cfggrid label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--mut)}
 .cfggrid input{padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg);font:inherit}
+
+/* Toggle switches. The real checkbox stays in the DOM and keeps working for keyboard and
+   screen readers — it is moved offscreen rather than display:none, which would drop it from the
+   tab order and from form submission. The track/thumb are painted from its :checked state. */
+.tglgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 18px;margin:0 0 18px}
+.tgl{display:flex;align-items:flex-start;gap:11px;cursor:pointer;font-size:13px}
+.tgl input[type=checkbox]{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.tgl-track{flex:0 0 auto;width:38px;height:22px;border-radius:99px;background:var(--line);
+  position:relative;transition:background .15s ease;margin-top:1px}
+.tgl-thumb{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:var(--fg);opacity:.55;transition:transform .15s ease,opacity .15s ease}
+.tgl input:checked + .tgl-track{background:var(--acc)}
+.tgl input:checked + .tgl-track .tgl-thumb{transform:translateX(16px);background:#fff;opacity:1}
+.tgl input:focus-visible + .tgl-track{outline:2px solid var(--acc);outline-offset:2px}
+.tgl-text{display:flex;flex-direction:column;gap:2px;line-height:1.35}
+.tgl-hint{font-size:11.5px}
+
+/* Advanced — collapsed by default; these are real controls, just not first-run ones. */
+details.adv{margin:4px 0 18px;border-top:1px solid var(--line);padding-top:12px}
+details.adv > summary{cursor:pointer;font-size:12.5px;font-weight:650;color:var(--mut);
+  letter-spacing:.04em;text-transform:uppercase;padding:4px 0}
+details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
+
+/* Weight sliders — shown as share-of-total, because only the ratio between them means anything. */
+.wgrid{display:flex;flex-direction:column;gap:10px;max-width:520px;margin:0 0 12px}
+.wrow{display:grid;grid-template-columns:110px 1fr 48px;align-items:center;gap:12px;font-size:13px}
+.wname{color:var(--mut)}
+.wslider{width:100%;accent-color:var(--acc)}
+.wpct{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-size:12.5px}
 .ok-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(46,160,67,.16);color:#3fb950}
 .bad-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
 form.inline{display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0}
@@ -2189,6 +2302,36 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   apply();
 })();
 
+// Weight sliders (Settings > Advanced). The sliders are the visible control; the values that
+// actually POST are the hidden inputs inside the criteria form, because /save-criteria rewrites the
+// whole of criteria.md and would blank any field that was not submitted.
+//
+// Percentages shown are each weight's SHARE of the total, so the three always read as 100% between
+// them. That is what the scorer actually does with them — showing raw 0.4/0.35/0.25 invited people
+// to make them sum to 1 by hand, which was never required.
+(function(){
+  var sliders = Array.prototype.slice.call(document.querySelectorAll('.wslider'));
+  if(!sliders.length) return;
+  function apply(){
+    var total = 0;
+    sliders.forEach(function(s){ total += Number(s.value)||0; });
+    sliders.forEach(function(s){
+      var k = s.getAttribute('data-for');
+      var raw = Number(s.value)||0;
+      var pct = total > 0 ? Math.round(raw/total*100) : 0;
+      var out = document.querySelector('[data-pct="'+k+'"]');
+      if(out) out.textContent = total > 0 ? pct+'%' : '—';
+      // Store the normalised fraction, so what is saved is independent of where the sliders sit.
+      var hidden = document.getElementById('h_'+k);
+      if(hidden) hidden.value = total > 0 ? (raw/total).toFixed(3) : '0';
+    });
+    var note = document.getElementById('wnote');
+    if(note && total === 0) note.innerHTML = 'All three at zero would score every role the same — raise at least one.';
+  }
+  sliders.forEach(function(s){ s.addEventListener('input', apply); });
+  apply();
+})();
+
 // Companies section: search + sort + state chips + collapse-all, all client-side.
 // ~230 rows across a handful of markets is too many to scan, so the groups collapse and the search
 // is what makes the page usable rather than decorative. A search that matches inside a collapsed
@@ -2580,6 +2723,7 @@ const CONFIG_KEYS = [
   "apply_stop_before",
   "whatsapp_web_enabled",
   "linkedin_enabled",
+  "linkedin_open_tab",
   "ignored_chats",
   "company_aliases",
   "max_spend_per_run_usd",
@@ -2591,7 +2735,19 @@ async function handleSaveConfig(form) {
   const existing = await safeRead(file);
   const { data, body } = parseFrontmatter(existing);
   const merged = { ...data };
+  // Toggles first. `_bools` names the checkbox-backed keys this particular form governs, which is
+  // the only way to tell "the user switched it off" (absent) from "this form does not contain that
+  // field" (also absent) — and getting that wrong would mean a switch you turn off silently turns
+  // itself back on. Only keys that are BOTH declared here and in CONFIG_KEYS are honoured, so a
+  // crafted request cannot use `_bools` to write arbitrary config.
+  const declaredBools = String(form._bools ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s && CONFIG_KEYS.includes(s));
+  for (const k of declaredBools) merged[k] = k in form ? "true" : "false";
+
   for (const k of CONFIG_KEYS) {
+    if (declaredBools.includes(k)) continue; // already resolved above
     if (!(k in form)) continue; // absent field = not on this form, leave it alone
     merged[k] = sanitizeCell(String(form[k] ?? "").trim());
   }
@@ -2605,7 +2761,10 @@ async function handleSaveConfig(form) {
   }
   await fs.mkdir(path.dirname(file), { recursive: true });
   await writeFileAtomic(file, stringifyFrontmatter(merged, body || "", Object.keys(merged)));
-  await logActivity("config-edit", `Updated settings: ${CONFIG_KEYS.filter((k) => k in form).join(", ")}`);
+  // Include the toggles even when switched OFF — those are absent from the form by definition, so
+  // filtering on `k in form` alone would log every switch-off as if nothing had changed.
+  const touched = [...new Set([...CONFIG_KEYS.filter((k) => k in form), ...declaredBools])];
+  await logActivity("config-edit", `Updated settings: ${touched.join(", ")}`);
 }
 
 // Actions the Setup page may run. An ALLOWLIST of named actions mapped to fixed scripts — never a

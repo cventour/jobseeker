@@ -271,9 +271,16 @@ write_status "running" 0 "in progress"
       # ceiling across runs was impossible. The JSON carries `result` (the narrative) alongside
       # `total_cost_usd`, so the readable log survives -- extracted back out below.
       RESP="$(mktemp)"
+      # stdout ONLY. `2>&1` here was silently breaking the whole spend ledger: any stderr line the
+      # CLI emits (a warning, a notice) landed in the same file as the JSON, so JSON.parse threw,
+      # the catch below printed the raw blob, and total_cost_usd was never extracted. Four
+      # consecutive runs logged "spend NOT recorded" while their own output carried
+      # total_cost_usd 3.8 / 4.9 — which meant data/spend.md stayed empty, Settings reported
+      # "$0.00 across 0 runs", and the monthly ceiling could never fire no matter what was spent.
+      # stderr now goes to the run log, where it is readable but cannot corrupt the payload.
       JOBRUN_SOURCE=scheduled \
         run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
-          --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP" 2>&1
+          --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP"
       rc=$?
 
       # Put the narrative back in the log, so this costs nothing in readability. If the response is
