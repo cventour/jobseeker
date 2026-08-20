@@ -43,6 +43,20 @@ export GUARD_MAX_RSS_MB="${JOBRUN_GUARD_MAX_RSS_MB:-4096}"
 export GUARD_TOTAL_RSS_MB="${JOBRUN_GUARD_TOTAL_RSS_MB:-12288}"
 export JOBRUN_SOURCE=scheduled
 
+# Force a FULL wake before touching Chrome. Measured on this machine across four consecutive
+# mornings: at every 08:00 firing, `pmset -g log` showed the Mac in DarkWake — a background
+# maintenance state (Time Machine, Spotlight, mail fetch) that macOS deliberately keeps invisible:
+# no display, no new GUI windows. `open -g -a "Google Chrome"` was returning success (LaunchServices
+# accepted it) while the actual process never appeared for the full 180s ensureChrome() budget in
+# scripts/browser.mjs — DarkWake was silently discarding the launch. This looked identical to a
+# broken permission or a slow machine; it was neither. `caffeinate -u` is the documented way to ask
+# for a real wake (turns the display on, exits DarkWake) and needs no sudo, unlike `pmset schedule`.
+# Bounded by its own -t rather than tracked and killed, so nothing here can outlive a wedged run.
+if command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -u -t $((TIMEOUT_SECS + 300)) >/dev/null 2>&1 &
+  disown
+fi
+
 iso_now() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
 # Coverage, not just exit status. A run that read no messages and skipped 33 boards used to write

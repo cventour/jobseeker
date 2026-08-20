@@ -108,6 +108,14 @@ search, and tells you the few things that need you today.**
   foreground first**, and never conclude from one. A probe pinned to `tab 1 of window 1` reported a
   fully working browser as unreadable, which disabled the board sweep for an entire run and left the
   digest telling the user their messages could not be read.
+- **FR-7.9** The scheduled run must force a real system wake **before** attempting to launch Chrome.
+  Diagnosed across four consecutive mornings (`pmset -g log`): at every 08:00 firing the Mac was in
+  **DarkWake**, a background maintenance state that accepts `open -g -a` without error but never
+  spawns the actual process, because showing a new window is exactly what DarkWake exists to
+  prevent. This produced `chrome_launched_by_us: true` with no browser ever appearing — indistinguishable
+  from a slow machine or a broken permission, and neither. `caffeinate -u` (no `sudo`, unlike `pmset
+  schedule`) is required at the start of every scheduled run. Documented in
+  [`PERMISSIONS.md`](PERMISSIONS.md#4-darkwake--why-chrome-sometimes-never-opens-at-all).
 
 ### FR-8 — Interface
 - **FR-8.1** A local dashboard for viewing and light editing, organised as tabs with configuration
@@ -196,6 +204,11 @@ These are recorded because each was reached by measurement, and re-deriving them
   lazily, so a fresh browser has *fewer* live tabs than a warm one; and killing Chrome risks the
   profile store holding the WhatsApp Web linked-device session, which FR-7.2 forbids putting at
   risk. Considered and rejected on 2026-08-17.
+- **DarkWake silently swallows `open -g -a "Google Chrome"`.** Confirmed by reading `pmset -g log`
+  across four consecutive 08:00 runs: the Mac was in DarkWake every time, `open` reported success,
+  and no process ever appeared. `pmset schedule wake` would force a real wake but requires `sudo`,
+  which a scheduled job cannot prompt for; `caffeinate -u` does the same thing with no privilege
+  needed, so that is what `scripts/job-run.sh` runs first. Diagnosed and fixed 2026-08-20.
 - **Email cannot be used for digest delivery** — the Gmail connector can create drafts but has no
   send capability, so an "emailed digest" would sit unsent.
 
@@ -221,3 +234,5 @@ These are recorded because each was reached by measurement, and re-deriving them
 8. A browser that **can** read pages is never reported as unable to. Specifically: with one wedged or
    discarded tab open, `npm run browser:probe` still returns `read_page_content: true`, and the
    board sweep still runs.
+9. The scheduled run opens Chrome successfully from a Mac that is in DarkWake at fire time, not just
+   from one already fully awake.

@@ -202,6 +202,38 @@ holds your WhatsApp Web linked-device session, which would put you back at a QR 
 
 ---
 
+## 4. DarkWake — why Chrome sometimes never opens at all
+
+Not a permission either, and not something `npm run setup` can fix, but it produces the single most
+confusing failure this project has: **the digest reports "no Chrome this run", `chrome_launched_by_us`
+is `true`, and yet no browser window ever appeared.**
+
+Diagnosed by reading `pmset -g log` against four consecutive mornings: at every 08:00 firing, the Mac
+was in **DarkWake** — a low-power background state macOS uses for maintenance (Time Machine,
+Spotlight, mail fetch) that deliberately stays invisible: no display, no new GUI windows. `open -g -a
+"Google Chrome"` reports success in DarkWake — LaunchServices accepts the request — but the actual
+process never appears, because spawning a new visible application is exactly what DarkWake exists to
+prevent. `ensureChrome()` in `scripts/browser.mjs` then polls for up to 180s and times out with
+`Chrome process not visible yet`, which looks identical to a slow machine or a broken permission and
+is neither.
+
+**The fix ships in `scripts/job-run.sh`**, not something you need to configure: it calls
+`caffeinate -u` at the very start of every run, which forces a real wake (turns the display on, exits
+DarkWake) and needs no `sudo` — unlike `pmset schedule`, which does and was rejected for that reason.
+
+**If Chrome still never opens after this**, the browser status file tells you which case you are in:
+
+```bash
+node -e 'console.log(require("./data/.browser-status.json"))'
+```
+
+- `chrome_launched_by_us: false` and no window — Chrome was not running and the launch itself
+  failed; check `chrome_launch_reason`.
+- `chrome_launched_by_us: true` with a `never became scriptable` blocker — this is the DarkWake
+  failure mode. Confirm with `pmset -g log | grep -E "DarkWake|Sleep " ` around the run's start time.
+
+---
+
 ## What JobSeeker does NOT need
 
 Worth stating, because these are the permissions people assume an automation like this wants:
