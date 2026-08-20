@@ -110,7 +110,10 @@ export async function writeRecord(dir, id, data, body = "", order = null) {
 // of the row one column to the right. Real damage, found in the wild -- seven board rows had notes
 // with pipes in them, and communications.md and activity.md were misaligned the same way. Reading
 // and writing must agree about the escape or the table is quietly lossy.
-const splitRow = (line) =>
+// Exported because anything that EDITS a table row in place has to split it the same way the reader
+// does. Hand-rolled `.split("|")` in a writer re-introduces exactly the corruption described above,
+// one row at a time and silently.
+export const splitRow = (line) =>
   line
     .replace(/^\s*\|/, "")
     .replace(/(?<!\\)\|\s*$/, "")

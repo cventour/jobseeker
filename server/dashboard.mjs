@@ -17,6 +17,7 @@ import {
   readTable,
   appendTableRow,
   sanitizeCell,
+  splitRow,
   newId,
   writeFileAtomic,
 } from "./md.mjs";
@@ -410,7 +411,14 @@ function tasksHTML(rows, appTok, appIds, emptyMsg = "Nothing yet.", dueIds = nul
       const dismissed = t.status === "dismissed";
       const cls = [target ? "clickrow" : "", t.status === "done" ? "taskdone" : "", dismissed ? "rowdismissed" : ""].filter(Boolean).join(" ");
       const isDue = dueIds ? dueIds.has(t.id) : false;
-      const attrs = `${cls ? ` class="${cls}"` : ""}${target ? ` onclick="openDetail('${esc(target)}')" title="Open activity summary"` : ""} data-status="${esc(t.status || "")}" data-type="${esc(t.type || "")}" data-due="${isDue ? "yes" : "no"}"`;
+      // How long it has been sitting there. A date alone does not read as urgent — "21d overdue"
+      // does, and it is what separates a live follow-up from one that has quietly become fiction.
+      const overdueDays =
+        t.status === "open" && t.due_date && t.due_date < today()
+          ? Math.round((new Date(today()) - new Date(t.due_date)) / 864e5)
+          : 0;
+      const stale = overdueDays > STALE_TASK_DAYS;
+      const attrs = `${cls ? ` class="${cls}"` : ""}${target ? ` onclick="openDetail('${esc(target)}')" title="Open activity summary"` : ""} data-status="${esc(t.status || "")}" data-type="${esc(t.type || "")}" data-due="${isDue ? "yes" : "no"}" data-stale="${stale ? "yes" : "no"}"`;
       const act = dismissed
         ? `<form method="POST" action="/set-task-status" class="prowact" onclick="event.stopPropagation()"><input type="hidden" name="id" value="${esc(t.id)}"><input type="hidden" name="status" value="open"><button type="submit" title="Restore">↺</button></form>`
         : `<form method="POST" action="/set-task-status" class="prowact" onclick="event.stopPropagation()"><input type="hidden" name="id" value="${esc(t.id)}"><input type="hidden" name="status" value="dismissed"><button type="submit" class="xbtn" title="Dismiss task">×</button></form>`;
@@ -418,7 +426,11 @@ function tasksHTML(rows, appTok, appIds, emptyMsg = "Nothing yet.", dueIds = nul
       // 4,161-character detail once filled the entire Today page with one row. The writer now caps
       // details at 200 chars, but the display must survive legacy rows and anything hand-edited.
       return `<tr${attrs}><td>${act}</td>${headers
-        .map((h) => `<td${cellCls(t[h])}>${cell(t[h] || "")}</td>`)
+        .map((h) =>
+          h === "due_date" && overdueDays
+            ? `<td${cellCls(t[h])}>${cell(t[h] || "")}<div class="odue${stale ? " odue-stale" : ""}">${overdueDays}d overdue</div></td>`
+            : `<td${cellCls(t[h])}>${cell(t[h] || "")}</td>`
+        )
         .join("")}</tr>`;
     })
     .join("");
@@ -436,6 +448,10 @@ function tasksSection(rows, appTok, appIds, dueRows = null) {
   // same table twice and having the two drift apart.
   const dueIds = new Set(hasDue ? dueRows.map((r) => r.id) : []);
   const chip = (f, label, on = false) => `<button type="button" class="tf${on ? " active" : ""}" data-f="${f}">${label}</button>`;
+  const t0 = today();
+  const staleRows = rows.filter(
+    (r) => r.status === "open" && r.due_date && r.due_date < addDays(t0, -STALE_TASK_DAYS)
+  );
   return `<form method="POST" action="/add-task-nl" class="nladd">
     <input name="nl" placeholder="Add a task in plain English — e.g. 'call Dana Friday about the referral'" autocomplete="off" required>
     <button type="submit">+ Add</button>
@@ -444,11 +460,27 @@ function tasksSection(rows, appTok, appIds, dueRows = null) {
   <div class="taskfilters">
     ${hasDue ? chip("due", `Due (${dueRows.length})`, true) : ""}
     ${chip("open", `Open (${open})`, !hasDue)}
+    ${staleRows.length ? chip("stale", `Stale (${staleRows.length})`) : ""}
     ${chip("done", `Done (${done})`)}
     ${chip("dismissed", `Dismissed (${rows.filter((r) => r.status === "dismissed").length})`)}
     ${chip("all", `All (${rows.length})`)}
     <input class="tsearch" placeholder="filter text…" autocomplete="off">
   </div>
+  ${
+    // The backlog only shrinks if there is a way to clear it in one pass. Shown only when there is
+    // actually something stale, so it is not a permanent button nagging at an empty list.
+    staleRows.length
+      ? `<div class="alert warn stalebar">
+           <b>${staleRows.length} follow-up${staleRows.length === 1 ? " is" : "s are"} more than ${STALE_TASK_DAYS} days overdue.</b>
+           Deciding on them is the point — but if they have gone stale, clear them in one go rather
+           than scrolling past them every morning. They stay under <b>Dismissed</b> with ↺ to restore.
+           <form method="POST" action="/dismiss-stale-tasks" class="inline" style="margin-left:8px"
+                 onsubmit="return confirm('Dismiss ${staleRows.length} follow-up(s) more than ${STALE_TASK_DAYS} days overdue? Nothing is deleted — they move to Dismissed and can be restored.')">
+             <button type="submit" class="btn-small">Dismiss all ${staleRows.length}</button>
+           </form>
+         </div>`
+      : ""
+  }
   ${tasksHTML(rows, appTok, appIds, "No tasks yet.", dueIds)}`;
 }
 
@@ -1921,12 +1953,9 @@ nav.tabs .tab .tn{font-size:11px;font-variant-numeric:tabular-nums;opacity:.75;f
 nav.tabs .tab.on .tn{opacity:.95}
 /* One hue per destination, spaced around the wheel so neighbours never read as the same colour. */
 nav.tabs .tab[data-tab="today"]{--h:213}          /* accent blue — the landing tab */
-nav.tabs .tab[data-tab="applications"]{--h:152}   /* green, echoing the interview status pill */
-nav.tabs .tab[data-tab="leads"]{--h:296}          /* violet, echoing the screening status pill */
 nav.tabs .tab[data-tab="proposals"]{--h:187}      /* teal */
-nav.tabs .tab[data-tab="tasks"]{--h:70}           /* olive-amber */
-nav.tabs .tab[data-tab="communications"]{--h:340} /* pink */
-nav.tabs .tab[data-tab="contacts"]{--h:30}        /* orange */
+nav.tabs .tab[data-tab="pipeline"]{--h:152}       /* green, echoing the interview status pill */
+nav.tabs .tab[data-tab="people"]{--h:30}          /* orange */
 nav.tabs .tab[data-tab="activity"]{--h:228;--tab-c:.3}  /* muted on purpose: it is a log */
 /* Settings tabs reuse the same hues so the two pages read as one system. */
 nav.tabs .tab[data-tab="companies"]{--h:152}
@@ -1941,6 +1970,11 @@ nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel .secbody .scroll tr:last-child td{border-bottom:0}
 th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
+/* Overdue age. A date does not read as urgent; "21d overdue" does. */
+.odue{font-size:11px;color:#d68a00;font-weight:650;margin-top:2px;white-space:nowrap}
+.odue-stale{color:#f85149}
+.stalebar{margin:10px 0 12px}
+
 /* Pipeline: lead vs application stays visible at a glance — it is the distinction the whole
    tracker is built to protect, so it must not read as a minor detail. */
 .kindtag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:650;letter-spacing:.02em}
@@ -2540,7 +2574,10 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   function apply(){
     rows().forEach(function(tr){
       var st=tr.getAttribute('data-status')||'';
-      var okF=(filter==='all')||(filter==='due'?tr.getAttribute('data-due')==='yes':st===filter);
+      var okF=(filter==='all')?true
+        :(filter==='due')?tr.getAttribute('data-due')==='yes'
+        :(filter==='stale')?tr.getAttribute('data-stale')==='yes'
+        :st===filter;
       var okQ=!q||(tr.textContent||'').toLowerCase().indexOf(q)>=0;
       tr.style.display=(okF&&okQ)?'':'none';
     });
@@ -2888,6 +2925,51 @@ const CONFIG_KEYS = [
   "max_spend_per_month_usd",
 ];
 
+/**
+ * Rewrite config frontmatter IN PLACE, changing only the values whose keys changed.
+ *
+ * `stringifyFrontmatter` rebuilds the block from a plain object, so every `#` comment vanishes —
+ * parseFrontmatter never captured them in the first place. That is fine for `data/` records, which
+ * have no comments, but config/job-seeker.config.md is the one file here that is DOCUMENTED in
+ * comments: it is seeded from the .example, which explains what each setting does and what it costs
+ * (the linkedin_open_tab note about marking a conversation read, for one). Saving once from the
+ * dashboard silently deleted all of it — measured: 10 comment lines gone in a single round-trip.
+ *
+ * So this edits lines rather than regenerating them. Comments, blank lines, key order, the body, and
+ * any key the dashboard does not manage all survive byte-for-byte; only the value after `key:`
+ * changes, and genuinely new keys are appended just before the closing `---`.
+ *
+ * Not folded into stringifyFrontmatter itself: that is on record.mjs's write path for every record
+ * in data/, and this problem does not exist there.
+ */
+function rewriteConfigPreservingComments(existing, merged) {
+  const src = String(existing ?? "");
+  const lines = src.split("\n");
+  const open = lines.findIndex((l) => l.trim() === "---");
+  const close = open >= 0 ? lines.findIndex((l, i) => i > open && l.trim() === "---") : -1;
+  // No usable frontmatter (a fresh or hand-broken file) — fall back to generating it wholesale.
+  if (open < 0 || close < 0) return stringifyFrontmatter(merged, "", Object.keys(merged));
+
+  const seen = new Set();
+  for (let i = open + 1; i < close; i++) {
+    const m = /^([A-Za-z0-9_]+):/.exec(lines[i]);
+    if (!m) continue; // comment, blank line, or continuation — leave exactly as it is
+    const key = m[1];
+    if (!(key in merged)) continue;
+    seen.add(key);
+    const v = merged[key] ?? "";
+    // Preserve the "key:" with no trailing space when the value is blank, matching how the example
+    // file writes an unset key.
+    lines[i] = String(v).length ? `${key}: ${v}` : `${key}:`;
+  }
+
+  const added = Object.keys(merged).filter((k) => !seen.has(k));
+  if (added.length) {
+    lines.splice(close, 0, ...added.map((k) => (String(merged[k] ?? "").length ? `${k}: ${merged[k]}` : `${k}:`)));
+  }
+  return lines.join("\n");
+}
+
 async function handleSaveConfig(form) {
   const file = path.join(ROOT, "config", "job-seeker.config.md");
   const existing = await safeRead(file);
@@ -2918,7 +3000,7 @@ async function handleSaveConfig(form) {
     }
   }
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await writeFileAtomic(file, stringifyFrontmatter(merged, body || "", Object.keys(merged)));
+  await writeFileAtomic(file, rewriteConfigPreservingComments(existing, merged));
   // Include the toggles even when switched OFF — those are absent from the form by definition, so
   // filtering on `k in form` alone would log every switch-off as if nothing had changed.
   const touched = [...new Set([...CONFIG_KEYS.filter((k) => k in form), ...declaredBools])];
@@ -3105,29 +3187,76 @@ async function handleAdvanceAppStage(form) {
   await logActivity("stage-advance", `${data.company} — ${data.role} → ${newStatus} (confirmed via dashboard)`);
 }
 
-async function handleSetTaskStatus(form) {
-  const id = (form.id ?? "").trim();
-  const status = (form.status ?? "").trim();
-  if (!id || !status) return;
+/**
+ * Set `status` on every task whose id is in `ids`. Returns how many rows changed.
+ *
+ * Uses md.mjs's splitRow/sanitizeCell rather than a hand-rolled `.split("|")`. The previous version
+ * split on raw pipes, so a task detail containing one would shift every later cell one column left
+ * on rewrite — the identical corruption that misaligned seven board rows plus communications.md and
+ * activity.md before splitRow existed. One row at a time it is easy to miss; a bulk action would
+ * have multiplied it.
+ */
+async function setTaskStatusFor(ids, status, note = "") {
+  const wanted = new Set(ids);
+  if (!wanted.size || !status) return 0;
   const file = path.join(DATA, "tasks.md");
   const text = await fs.readFile(file, "utf8");
   const lines = text.split("\n");
   const headerIdx = lines.findIndex((l) => /^\s*\|/.test(l));
-  if (headerIdx === -1) return;
-  const headers = lines[headerIdx].replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+  if (headerIdx === -1) return 0;
+  const headers = splitRow(lines[headerIdx]);
   const idIdx = headers.indexOf("id");
   const stIdx = headers.indexOf("status");
+  if (idIdx === -1 || stIdx === -1) return 0;
+  let changed = 0;
   for (let i = headerIdx + 2; i < lines.length; i++) {
     if (!/^\s*\|/.test(lines[i])) continue;
-    const cells = lines[i].replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
-    if (cells[idIdx] === id) {
-      cells[stIdx] = status;
-      lines[i] = `| ${cells.join(" | ")} |`;
-      break;
-    }
+    const cells = splitRow(lines[i]);
+    if (!wanted.has(cells[idIdx])) continue;
+    cells[stIdx] = status;
+    lines[i] = `| ${cells.map((c) => sanitizeCell(c)).join(" | ")} |`;
+    changed++;
   }
-  await writeFileAtomic(file, lines.join("\n"));
-  await logActivity("task-" + status, `Task ${id} → ${status} (dashboard)`);
+  if (changed) {
+    await writeFileAtomic(file, lines.join("\n"));
+    await logActivity("task-" + status, `${changed} task(s) → ${status} (dashboard)${note ? ` — ${note}` : ""}`);
+  }
+  return changed;
+}
+
+async function handleSetTaskStatus(form) {
+  const id = (form.id ?? "").trim();
+  const status = (form.status ?? "").trim();
+  if (!id || !status) return;
+  await setTaskStatusFor([id], status);
+}
+
+// Bulk-clear the stale end of the follow-up backlog.
+//
+// Measured on this tracker: 20 overdue against 3 due today, 12 of them more than a week past due and
+// the oldest three weeks old. That is the failure mode that kills a to-do list — the system creates
+// follow-ups faster than anyone closes them, and a Today view opening with three weeks of overdue
+// reads as a guilt list rather than a plan, so people stop reading it at all.
+//
+// Deliberately a DISMISS, not a delete: the rows stay in tasks.md with status "dismissed", the
+// Dismissed chip still shows them, each carries a ↺ to restore, and the activity log records the
+// sweep. Nothing is destroyed — the point is only to get them out of the daily view.
+const STALE_TASK_DAYS = 7;
+async function handleDismissStaleTasks() {
+  const t = today();
+  const cutoff = addDays(t, -STALE_TASK_DAYS);
+  const table = await readTable(path.join(DATA, "tasks.md"));
+  const stale = table.rows.filter((r) => r.status === "open" && r.due_date && r.due_date < cutoff);
+  const n = await setTaskStatusFor(
+    stale.map((r) => r.id),
+    "dismissed",
+    `overdue more than ${STALE_TASK_DAYS} days as of ${t}`
+  );
+  return {
+    flash: n
+      ? { kind: "ok", msg: `${n} follow-up${n === 1 ? "" : "s"} overdue by more than ${STALE_TASK_DAYS} days dismissed. They are still in the Dismissed filter, with ↺ to restore.` }
+      : { kind: "ok", msg: "Nothing was more than a week overdue." },
+  };
 }
 
 async function handleMarkAllProposalsSeen() {
@@ -3392,6 +3521,10 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/set-task-status") {
     await handleSetTaskStatus(form);
     return redirect(res, { kind: "ok", msg: form.status === "dismissed" ? "Task dismissed." : "Task updated." });
+  }
+  if (url.pathname === "/dismiss-stale-tasks") {
+    const r = await handleDismissStaleTasks();
+    return redirect(res, r.flash);
   }
   if (url.pathname === "/add-contact") {
     await handleAddContact(form);
