@@ -912,6 +912,19 @@ function joinCompanies(all) {
   return [...byKey.values()];
 }
 
+/**
+ * Markets with no vendors in them yet.
+ *
+ * A market you have just added is only a name and an empty file until something researches it.
+ * server/audit.mjs already reports such a market as `stale`, and the daily run researches every
+ * stale market — so with a schedule this resolves itself overnight and the right thing to do is
+ * say so, not nag. Without a schedule nothing will ever pick it up, which is the case that needs a
+ * button.
+ */
+function emptyMarkets(markets) {
+  return (markets ?? []).filter((m) => (m.table?.rows?.length ?? 0) === 0).map((m) => m.label || m.name);
+}
+
 const UNGROUPED = "Not in a market list";
 
 // Truncate on a word boundary. A hard slice left rows ending "an exact match for the user's target
@@ -944,8 +957,39 @@ function companyState(e) {
 
 function companiesHTML(all) {
   const entries = joinCompanies(all);
+
+  // An empty market needs research before it is worth anything. What to SAY about it depends
+  // entirely on whether a daily run exists — with one, this fixes itself and a button would just be
+  // an expensive way to skip the wait; without one, nothing will ever pick it up and telling the
+  // user "it will be researched" would be a lie.
+  const empties = emptyMarkets(all.markets);
+  const scheduled = Boolean(all.status?.schedInstalled);
+  const emptyBlock = empties.length
+    ? `<div class="alert warn">
+         <b>${empties.map(esc).join(", ")} ${empties.length === 1 ? "has" : "have"} no companies yet.</b>
+         ${
+           scheduled
+             ? `The ${esc(all.status.schedTime || "daily")} run researches any market that has never been
+                reviewed, so ${empties.length === 1 ? "it" : "they"} will be filled in then — nothing to do.
+                To do it now instead:`
+             : `You have no daily run, so nothing will research
+                ${empties.length === 1 ? "it" : "them"} on its own. Either
+                <a href="/settings?tab=setup">schedule a daily run</a>, or do it now:`
+         }
+         ${empties
+           .map(
+             (m) => `<form method="POST" action="/research-market" class="inline" style="margin-left:6px"
+                 onsubmit="return confirm('Research ${esc(m).replace(/'/g, "\\'")} now?\\n\\nThis runs a Claude pass to find and rank vendors — it takes a few minutes and costs roughly a dollar, charged to your usual spend cap. It runs in the background; reload this page to see the results.')">
+                 <input type="hidden" name="market" value="${esc(m)}">
+                 <button type="submit" class="btn-small">Research ${esc(m)} now</button>
+               </form>`
+           )
+           .join("")}
+       </div>`
+    : "";
+
   if (!entries.length)
-    return `<p class="empty">No companies yet. Add a market in <b>Criteria</b>, then run <code>/markets</code>.</p>`;
+    return `${emptyBlock}<p class="empty">No companies yet. Add a market under <b>Setup</b> to get started.</p>`;
 
   const dismissedCount = (all.boards?.rows ?? []).filter((r) => String(r.dismissed || "").trim()).length;
 
@@ -1110,6 +1154,7 @@ function companiesHTML(all) {
         dismissedCount ? ` · <b>${dismissedCount} removed</b> — kept in <code>data/boards.md</code>, restore with <code>record.mjs restore-board "Company"</code>` : ""
       }
     </p>
+    ${emptyBlock}
     ${batchHTML}
     ${queuedHTML}
     <div class="cotools">
@@ -4247,6 +4292,29 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/set-task-status") {
     await handleSetTaskStatus(form);
     return redirect(res, { kind: "ok", msg: form.status === "dismissed" ? "Task dismissed." : "Task updated." });
+  }
+  if (url.pathname === "/research-market") {
+    const market = String(form.market || "").trim();
+    // Only a market that actually exists on disk can be researched. This is the boundary that faces
+    // the browser and the value reaches a shell script, so it is checked against the real list
+    // rather than merely escaped.
+    const known = (await loadMarkets()).some((m) => marketKey(m.label) === marketKey(market) || marketKey(m.name) === marketKey(market));
+    if (!market || !known) {
+      return redirect(res, { kind: "bad", msg: `Unknown market ${JSON.stringify(market).slice(0, 40)} — nothing started.` });
+    }
+    // Detached, because a research pass runs for minutes and the dashboard must not block on it.
+    // Same pattern as the per-company board discovery in handleAddCompany.
+    const child = spawn("bash", [path.join(ROOT, "scripts", "research-market.sh"), market], {
+      cwd: ROOT,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    await logActivity("markets", `Market research started for ${market} from the dashboard`);
+    return redirect(res, {
+      kind: "ok",
+      msg: `Researching ${market} in the background — takes a few minutes. Reload this page to see the companies appear; progress is in data/.markets-run.log.`,
+    });
   }
   if (url.pathname === "/dismiss-orphaned-proposals") {
     const r = await handleDismissOrphanedProposals();

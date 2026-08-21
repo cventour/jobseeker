@@ -150,7 +150,17 @@ async function lastRun() {
 }
 
 async function main() {
-  const today = process.argv[2] || "1970-01-01"; // caller passes `date +%F`
+  // Callers normally pass `date +%F`. The old fallback was "1970-01-01", which did not fail — it
+  // answered CONFIDENTLY AND WRONGLY: every age came out around -20,700 days, and because
+  // staleness is `age >= 7`, no market reviewed at any point in history could ever be reported
+  // stale. `npm run audit` passes no argument, so anyone running it by hand got that. Defaulting to
+  // the real date makes the no-argument case correct; the argument stays for tests and for pinning
+  // a run to a specific day.
+  const today = process.argv[2] || new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+    console.error(`audit: expected YYYY-MM-DD, got ${JSON.stringify(process.argv[2])}`);
+    process.exit(64);
+  }
   const applications = await readRecordDir(path.join(DATA, "applications"));
   const proposals = await readRecordDir(path.join(DATA, "proposals"));
   const approvals = await readRecordDir(path.join(DATA, "approvals"));
