@@ -1319,11 +1319,11 @@ function criteriaFormHTML(criteria, marketNames = []) {
       ["weight_market", "weight_role", "weight_cv"]
         .map((k) => `<input type="hidden" name="${k}" id="h_${k}" value="${val(k)}">`)
         .join("")}
-  </form>
-  <form method="POST" action="/add-market" class="inline">
-    <input name="market" placeholder="Add a market (e.g. Fintech)" required>
-    <button type="submit">Add market</button>
   </form>`;
+  // The separate "Add market" form is gone. It did exactly what the Markets field above does —
+  // append a name to criteria.md — so the screen offered two controls for one action, neither of
+  // which created the market file or started any work. Adding a market is now one place, and
+  // saving it actually sets the market up (see handleSaveCriteria).
 }
 
 // Scoring weights: real controls, but the wrong thing to put in front of someone on day one. They
@@ -3583,12 +3583,73 @@ async function criteriaImpact(nextMarkets) {
   return { removed, proposals: hit.length, ids: hit.map((p) => p.data.id), byMarket };
 }
 
+/**
+ * Set a newly-added market up so it is a real thing, not just a word in a list.
+ *
+ * Adding a market used to append a name and stop there — no file for the prioritization-agent to
+ * write into, and nothing to tell you the next step. Two things happen now:
+ *
+ *   1. data/markets/<slug>.md is created with the header and column layout the agent expects, so
+ *      the vertical exists the moment it is named.
+ *   2. Roles previously auto-dismissed BECAUSE this market was dropped come back. Only those
+ *      carrying the `market` tag — a role you rejected by hand for any other reason stays
+ *      rejected, because re-adding a vertical is not a statement about that specific job.
+ *
+ * Vendor discovery itself is not started here: finding companies for a market is a research pass
+ * that costs real money and minutes (`/markets` → prioritization-agent), and silently spending that
+ * from a settings save would be a surprising thing for a form to do. The file and the restored
+ * roles are the setup; the flash message names the command that fills it.
+ */
+async function setUpAddedMarkets(added) {
+  const created = [];
+  const restored = [];
+  for (const name of added) {
+    const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!slug) continue;
+    const file = path.join(DATA, "markets", `${slug}.md`);
+    try {
+      await fs.access(file);
+    } catch {
+      await fs.mkdir(path.join(DATA, "markets"), { recursive: true });
+      await writeFileAtomic(
+        file,
+        `# Market: ${name}\n\n` +
+          "Maintained by the prioritization-agent. `tier` 1 = strongest fit. Ranked best-first.\n\n" +
+          `Created from the dashboard on ${today()}. Run \`/markets\` in Claude Code to research and rank vendors.\n\n` +
+          "| company | tier | hq | why | careers_url | linkedin_url | last_reviewed | notes |\n" +
+          "|---------|------|----|-----|-------------|--------------|---------------|-------|\n"
+      );
+      created.push(name);
+    }
+  }
+  // Undo the auto-dismissals from a previous removal, so dropping and re-adding a vertical is
+  // symmetrical rather than one-way.
+  if (added.length) {
+    const keys = new Set(added.map(marketKey));
+    const dir = path.join(DATA, "proposals");
+    const recs = await readRecordDir(dir);
+    for (const rec of recs) {
+      const d = rec.data;
+      if (String(d.status || "").toLowerCase() !== "dismissed") continue;
+      if (!String(d.dismiss_tags || "").split(/[,\s]+/).includes("market")) continue;
+      if (!keys.has(marketKey(d.market))) continue;
+      const next = { ...d, status: "proposed", dismiss_tags: "", dismiss_reason: "" };
+      await writeFileAtomic(path.join(dir, rec.file), stringifyFrontmatter(next, rec.body, Object.keys(next)));
+      restored.push(d.id);
+    }
+  }
+  return { created, restored };
+}
+
 async function handleSaveCriteria(form) {
   const file = path.join(DATA, "criteria.md");
   const { body } = parseFrontmatter(await safeRead(file));
   const keys = ["markets", "roles", "locations", "seniority", "weight_market", "weight_role", "weight_cv"];
   // Worked out BEFORE the write, while criteria.md still holds the old market list.
   const impact = await criteriaImpact(form.markets ?? "");
+  const before = marketList((parseFrontmatter(await safeRead(file)).data || {}).markets);
+  const beforeKeys = new Set(before.map(marketKey));
+  const added = marketList(form.markets ?? "").filter((m) => !beforeKeys.has(marketKey(m)));
   const data = {};
   for (const k of keys) data[k] = (form[k] ?? "").trim();
   await fs.mkdir(DATA, { recursive: true });
@@ -3612,22 +3673,23 @@ async function handleSaveCriteria(form) {
       `${impact.ids.length} proposal(s) dismissed — market(s) removed from criteria: ${impact.removed.join(", ")}`
     );
   }
-  return impact;
-}
 
-async function handleAddMarket(form) {
-  const market = (form.market ?? "").trim();
-  if (!market) return;
-  const file = path.join(DATA, "criteria.md");
-  const { data, body } = parseFrontmatter(await safeRead(file));
-  const list = (data.markets ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!list.some((m) => m.toLowerCase() === market.toLowerCase())) list.push(market);
-  data.markets = list.join(", ");
-  await writeFileAtomic(file, stringifyFrontmatter(data, body, Object.keys(data)));
-  await logActivity("market-add", `Added market: ${market} (run /markets to build the list)`);
+  const setup = added.length ? await setUpAddedMarkets(added) : { created: [], restored: [] };
+  if (setup.created.length) {
+    await logActivity("market-add", `Market file created for ${setup.created.join(", ")} — run /markets to research vendors`);
+  }
+  if (setup.restored.length) {
+    await logActivity("proposal-proposed", `${setup.restored.length} role(s) restored — market(s) re-added: ${added.join(", ")}`);
+  }
+
+  // What the user gets told. Silence after adding a market is what made it feel like nothing had
+  // happened, which is why a second "Add market" button existed in the first place.
+  const parts = [];
+  // Plain text: the flash is rendered through esc(), so markup here would show as literal "<code>".
+  if (setup.created.length) parts.push(`${setup.created.join(", ")} added — run /markets in Claude Code to research vendors`);
+  if (setup.restored.length) parts.push(`${setup.restored.length} previously dismissed role${setup.restored.length === 1 ? "" : "s"} restored`);
+  if (impact.ids.length) parts.push(`${impact.ids.length} role${impact.ids.length === 1 ? "" : "s"} from ${impact.removed.join(", ")} dismissed`);
+  return { ...impact, setup, flash: parts.length ? { kind: "ok", msg: `Criteria saved. ${parts.join(" · ")}.` } : null };
 }
 
 async function handleAddTask(form) {
@@ -4131,12 +4193,8 @@ async function handlePost(req, res, url) {
     }
   }
   if (url.pathname === "/save-criteria") {
-    await handleSaveCriteria(form);
-    return redirect(res, { kind: "ok", msg: "Criteria saved." });
-  }
-  if (url.pathname === "/add-market") {
-    await handleAddMarket(form);
-    return redirect(res, { kind: "ok", msg: "Market added. Run /markets to build its list." });
+    const r = await handleSaveCriteria(form);
+    return redirect(res, r?.flash || { kind: "ok", msg: "Criteria saved." });
   }
   if (url.pathname === "/add-company") {
     const r = await handleAddCompany(form);
