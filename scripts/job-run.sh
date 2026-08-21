@@ -123,7 +123,12 @@ run_with_timeout() {
   # Memory guard runs for the life of the attempt, watching everything under the claude process.
   local guard=""
   if [ "$GUARD_ENABLED" = "1" ] && [ -r "$REPO/scripts/rss-guard.sh" ]; then
-    bash "$REPO/scripts/rss-guard.sh" "$child" &
+    # >&2 matters. Callers redirect this function's STDOUT to capture the child's output — the
+    # claude call sends it to a temp file and parses it as JSON. The guard is started inside that
+    # redirect, so its banner ("[rss-guard ...] watching pid N") was landing in the capture file
+    # ahead of the JSON, making it unparseable and silently costing the spend ledger every run.
+    # stderr still reaches the log, so the line is not lost, only kept out of the payload.
+    bash "$REPO/scripts/rss-guard.sh" "$child" >&2 &
     guard=$!
   fi
   wait "$child"; local rc=$?
@@ -288,15 +293,28 @@ write_status "running" 0 "in progress"
       "$NODE_BIN" -e '
         const fs = require("fs");
         const raw = fs.readFileSync(process.argv[1], "utf8");
-        try {
-          const d = JSON.parse(raw);
-          if (d.result) process.stdout.write(d.result + "\n");
-          if (typeof d.total_cost_usd === "number") {
-            fs.writeFileSync(process.argv[2], String(d.total_cost_usd));
-            process.stdout.write("\n---- cost $" + d.total_cost_usd.toFixed(4) +
-              "  " + (d.num_turns ?? "?") + " turns ----\n");
-          }
-        } catch { process.stdout.write(raw); }
+        // Belt and braces. The whole file SHOULD be one JSON object, and two separate bugs have
+        // already broken that assumption by leaking another process`s output into it (stderr via
+        // 2>&1, then rss-guard`s banner via the shared stdout redirect). Each time, the cost was
+        // silently dropped and the monthly ceiling quietly stopped meaning anything. So: try the
+        // whole file first, and if that fails, take the last line that parses as an object with a
+        // cost. A stray line should cost a tidy log, not the ledger.
+        const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
+        let d = parse(raw);
+        let noisy = false;
+        if (!d) {
+          const lines = raw.split("\n").filter((l) => l.trim().startsWith("{"));
+          for (let i = lines.length - 1; i >= 0 && !d; i--) d = parse(lines[i]);
+          noisy = Boolean(d);
+        }
+        if (!d) { process.stdout.write(raw); process.exit(0); }
+        if (noisy) process.stdout.write("(note: response had extra output around the JSON)\n");
+        if (d.result) process.stdout.write(d.result + "\n");
+        if (typeof d.total_cost_usd === "number") {
+          fs.writeFileSync(process.argv[2], String(d.total_cost_usd));
+          process.stdout.write("\n---- cost $" + d.total_cost_usd.toFixed(4) +
+            "  " + (d.num_turns ?? "?") + " turns ----\n");
+        }
       ' "$RESP" "$COST_FILE" 2>/dev/null || cat "$RESP"
       rm -f "$RESP"
     if [ $rc -eq 0 ]; then
