@@ -140,6 +140,12 @@ export const DISMISS_TAGS = {
   company: "Company not a fit",
   duplicate: "Already applied / duplicate",
   dead: "Role closed or dead link",
+  // Set automatically when a whole vertical is dropped from criteria, never picked by hand. It is
+  // deliberately its OWN tag rather than reusing `domain`: these roles were not judged a bad fit,
+  // the market simply stopped being targeted. Filing them under `domain` would feed their titles
+  // into the do-not-propose list in dismissalPatterns() and suppress unrelated roles that happen to
+  // share a word with a fintech posting.
+  market: "Market no longer targeted",
 };
 
 async function ensureTable(file, template) {

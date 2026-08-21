@@ -151,6 +151,9 @@ async function loadAll() {
     readTable(BOARDS_FILE),
   ]);
   const markets = await loadMarkets();
+  // Roles left behind by a vertical dropped from criteria. Computed here because page() is
+  // synchronous and this needs to read the proposal records.
+  const orphans = await orphanedProposals().catch(() => ({ count: 0, ids: [], byMarket: {} }));
   // scripts/job-run.sh writes this. A failed scheduled run is otherwise invisible, so Today shows it.
   let lastRun = null;
   try {
@@ -194,6 +197,7 @@ async function loadAll() {
     activity,
     markets,
     boards,
+    orphans,
     lastRun,
     browser,
     status: await systemStatus(),
@@ -815,7 +819,7 @@ function proposalsHTML(props, appliedByCompany, reposts = {}) {
 }
 
 // Proposals section: NEW-highlight + status filter chips (Active hides dismissed).
-function proposalsSection(propRecords, appliedByCompany, reposts = {}) {
+function proposalsSection(propRecords, appliedByCompany, reposts = {}, orphans = null) {
   const st = (p) => (p.data.status || "proposed").toLowerCase();
   const isNew = (p) => (p.data.seen || "no") !== "yes" && st(p) === "proposed";
   const n = (f) =>
@@ -828,6 +832,21 @@ function proposalsSection(propRecords, appliedByCompany, reposts = {}) {
     ${newCount ? `<form method="POST" action="/mark-all-proposals-seen" style="margin:0 0 0 auto"><button type="submit" class="btn-secondary" title="Clear the NEW highlight on all roles">Mark all ${newCount} new as seen</button></form>` : ""}
   </div>
   <p class="muted nlhint">Rows highlighted <span class="newbadge">NEW</span> appeared since you last reviewed — they stay highlighted until you act, or until you mark the batch seen.</p>
+  ${
+    // Residue from a vertical dropped before criteria started clearing up after itself. Shown only
+    // when there is some, so it disappears for good once acted on.
+    orphans && orphans.count
+      ? `<div class="alert warn">
+           <b>${orphans.count} open role${orphans.count === 1 ? " is" : "s are"} from markets you no longer target</b>
+           — ${Object.entries(orphans.byMarket).map(([m, n]) => `${n} from ${esc(m)}`).join(", ")}.
+           Removing a market stops new roles being found there, but these were already on the list.
+           <form method="POST" action="/dismiss-orphaned-proposals" class="inline" style="margin-left:8px"
+                 onsubmit="return confirm('Dismiss ${orphans.count} role(s) from markets you no longer target? They can be restored from the Dismissed filter.')">
+             <button type="submit" class="btn-small">Dismiss all ${orphans.count}</button>
+           </form>
+         </div>`
+      : ""
+  }
   ${proposalsHTML(propRecords, appliedByCompany, reposts)}`;
 }
 
@@ -1823,7 +1842,7 @@ ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
 ${tabPanel("today", on("today"), sec("today", "", todayHTML(all, dueToday, appTok, appIds)))}
-${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts)))}
+${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts, all.orphans)))}
 ${tabPanel("pipeline", on("pipeline"), sec("pipeline", `Pipeline <span class="muted">— everything you have acted on, from CV sent to offer</span>`, statusBoardHTML(applied) + pipelineSection(all.applications)))}
 ${tabPanel("people", on("people"), sec("people", `People <span class="muted">— who you are talking to, and every message logged with them</span>`, peopleHTML(all)))}
 ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="muted">— append-only audit log (filter by kind · search · run boundaries highlighted)</span>`, activitySection(all.activity)))}
@@ -2695,6 +2714,46 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   apply();
 })();
 
+// Dropping a target market: confirm, with the count, before it takes anything with it.
+//
+// Editing criteria used to be silent about the past — it changed what the scout looks for next time
+// and left everything already found in place, so dropping a vertical left its roles sitting in the
+// dashboard being aged and counted. Now the save says what it will clear, and only clears it if
+// you agree. Async because the count is real (fetched for the exact market list being saved), so
+// the submit is deferred until the answer is back.
+(function(){
+  var form = document.getElementById('criteriaform');
+  if (!form) return;
+  var confirmed = false;
+  form.addEventListener('submit', function(e){
+    if (confirmed) return;                       // second pass, after the user said yes
+    var markets = (form.querySelector('input[name=markets]') || {}).value || '';
+    e.preventDefault();
+    fetch('/criteria-impact?markets=' + encodeURIComponent(markets))
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        // Nothing being dropped, or nothing to clear: save without interrupting.
+        if (!d || !d.removed.length || !d.proposals) return true;
+        var per = Object.keys(d.byMarket).map(function(m){ return d.byMarket[m] + ' from ' + m; }).join(', ');
+        return confirm(
+          'Removing ' + d.removed.join(', ') + ' from your target markets.\\n\\n' +
+          'This will also dismiss ' + d.proposals + ' open role' + (d.proposals === 1 ? '' : 's') +
+          ' you have not acted on (' + per + ').\\n\\n' +
+          'Applications and leads you already acted on are kept, and so is the vendor research for ' +
+          'that market. Dismissed roles can be restored from the Dismissed filter.'
+        );
+      })
+      .then(function(go){
+        if (go === false) return;                // cancelled: criteria unchanged
+        confirmed = true;
+        form.submit();
+      })
+      // If the preview cannot be reached, save anyway rather than trapping the user in a form that
+      // will not submit.
+      .catch(function(){ confirmed = true; form.submit(); });
+  });
+})();
+
 // Weight sliders (Settings > Advanced). The sliders are the visible control; the values that
 // actually POST are the hidden inputs inside the criteria form, because /save-criteria rewrites the
 // whole of criteria.md and would blank any field that was not submitted.
@@ -3281,15 +3340,109 @@ async function handleRunAction(form) {
   return out.text.split("\n").filter(Boolean).pop() || `${name} done`;
 }
 
+const marketList = (s) =>
+  String(s || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/**
+ * What dropping a vertical would clear out.
+ *
+ * Removing "Fintech" from criteria stopped the SCOUT looking there, but left everything it had
+ * already found sitting in the dashboard — measured on this tracker, 5 live Fintech proposals were
+ * still being surfaced and aged after the vertical was dropped. Criteria described future
+ * behaviour and said nothing about the existing pile.
+ *
+ * Scope is deliberately narrow, on the same reasoning as dismissImpact():
+ *   proposals   — suggestions. Not wanted any more, so they go (dismissed, restorable).
+ *   applications/leads — things you actually DID. They are history, and they carry no market field
+ *                 anyway; matching them by company would be a guess. Left alone.
+ *   market file — data/markets/<x>.md is research, often dozens of companies. Criteria already
+ *                 stops it being scouted, so deleting it would destroy work for no gain.
+ *   boards      — a careers-board URL is neutral knowledge, useful if the vertical ever returns.
+ */
+/**
+ * Live roles from markets that are NOT in criteria at all.
+ *
+ * criteriaImpact() only catches a market being removed as it happens. Anything dropped before that
+ * existed is already stranded — measured here, 5 live Fintech proposals were still being surfaced,
+ * counted and aged weeks after the vertical was dropped, because criteria only ever described what
+ * to look for NEXT time. This finds that residue so it can be cleared in one go.
+ */
+async function orphanedProposals() {
+  const wanted = new Set(
+    marketList((parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {}).markets).map(marketKey)
+  );
+  if (!wanted.size) return { count: 0, ids: [], byMarket: {} };
+  const proposals = await readRecordDir(path.join(DATA, "proposals"));
+  const hit = proposals.filter((p) => {
+    const m = marketKey(p.data.market);
+    // A proposal with no market recorded is not evidence of a dropped vertical — it is just an
+    // untagged row, and dismissing it here would be a guess.
+    if (!m) return false;
+    return !wanted.has(m) && String(p.data.status || "proposed").toLowerCase() !== "dismissed";
+  });
+  const byMarket = {};
+  for (const p of hit) {
+    const m = (p.data.market || "").trim();
+    byMarket[m] = (byMarket[m] || 0) + 1;
+  }
+  return { count: hit.length, ids: hit.map((p) => p.data.id), byMarket };
+}
+
+async function criteriaImpact(nextMarkets) {
+  const current = marketList((parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {}).markets);
+  const next = marketList(nextMarkets);
+  const nextKeys = new Set(next.map(marketKey));
+  const removed = current.filter((m) => !nextKeys.has(marketKey(m)));
+  const removedKeys = new Set(removed.map(marketKey));
+  const proposals = await readRecordDir(path.join(DATA, "proposals"));
+  // Case- and punctuation-insensitive: the data carries both "Fintech" and "fintech", and a
+  // literal comparison would silently leave half of them behind.
+  const hit = proposals.filter(
+    (p) =>
+      removedKeys.has(marketKey(p.data.market)) &&
+      String(p.data.status || "proposed").toLowerCase() !== "dismissed"
+  );
+  const byMarket = {};
+  for (const p of hit) {
+    const m = (p.data.market || "").trim() || "(none)";
+    byMarket[m] = (byMarket[m] || 0) + 1;
+  }
+  return { removed, proposals: hit.length, ids: hit.map((p) => p.data.id), byMarket };
+}
+
 async function handleSaveCriteria(form) {
   const file = path.join(DATA, "criteria.md");
   const { body } = parseFrontmatter(await safeRead(file));
   const keys = ["markets", "roles", "locations", "seniority", "weight_market", "weight_role", "weight_cv"];
+  // Worked out BEFORE the write, while criteria.md still holds the old market list.
+  const impact = await criteriaImpact(form.markets ?? "");
   const data = {};
   for (const k of keys) data[k] = (form[k] ?? "").trim();
   await fs.mkdir(DATA, { recursive: true });
   await writeFileAtomic(file, stringifyFrontmatter(data, body || "# Notes\n", keys));
   await logActivity("criteria-edit", `Updated criteria: markets=[${data.markets}] roles=[${data.roles}]`);
+
+  if (impact.ids.length) {
+    const dir = path.join(DATA, "proposals");
+    const recs = await readRecordDir(dir);
+    for (const id of impact.ids) {
+      const rec = recs.find((r) => r.data.id === id);
+      if (!rec) continue;
+      // `market`, NOT `domain`. dismissalPatterns() mines domain-tagged titles into a
+      // do-not-propose list; filing these there would let a dropped vertical suppress unrelated
+      // roles that merely share a word with one of its postings.
+      const d = { ...rec.data, status: "dismissed", dismiss_tags: "market", dismiss_reason: `${rec.data.market} removed from target markets` };
+      await writeFileAtomic(path.join(dir, rec.file), stringifyFrontmatter(d, rec.body, Object.keys(d)));
+    }
+    await logActivity(
+      "proposal-dismissed",
+      `${impact.ids.length} proposal(s) dismissed — market(s) removed from criteria: ${impact.removed.join(", ")}`
+    );
+  }
+  return impact;
 }
 
 async function handleAddMarket(form) {
@@ -3537,6 +3690,30 @@ async function handleSetTaskStatus(form) {
 // Dismissed chip still shows them, each carries a ↺ to restore, and the activity log records the
 // sweep. Nothing is destroyed — the point is only to get them out of the daily view.
 const STALE_TASK_DAYS = 7;
+// Clear the residue: live roles from verticals no longer in criteria. Same treatment as a market
+// removed today — dismissed with a reason, restorable, and tagged `market` rather than `domain` so
+// they never feed the do-not-propose title learning.
+async function handleDismissOrphanedProposals() {
+  const orphans = await orphanedProposals();
+  if (!orphans.ids.length) return { flash: { kind: "ok", msg: "Nothing to clear — every open role is from a market you target." } };
+  const dir = path.join(DATA, "proposals");
+  const recs = await readRecordDir(dir);
+  for (const id of orphans.ids) {
+    const rec = recs.find((r) => r.data.id === id);
+    if (!rec) continue;
+    const d = { ...rec.data, status: "dismissed", dismiss_tags: "market", dismiss_reason: `${rec.data.market} is no longer a target market` };
+    await writeFileAtomic(path.join(dir, rec.file), stringifyFrontmatter(d, rec.body, Object.keys(d)));
+  }
+  const per = Object.entries(orphans.byMarket).map(([m, n]) => `${n} from ${m}`).join(", ");
+  await logActivity("proposal-dismissed", `${orphans.ids.length} proposal(s) dismissed — markets no longer targeted (${per})`);
+  return {
+    flash: {
+      kind: "ok",
+      msg: `${orphans.ids.length} role${orphans.ids.length === 1 ? "" : "s"} from untargeted markets dismissed (${per}). Restore any of them from the Dismissed filter.`,
+    },
+  };
+}
+
 async function handleDismissStaleTasks() {
   const t = today();
   const cutoff = addDays(t, -STALE_TASK_DAYS);
@@ -3712,6 +3889,19 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify(out));
     }
+    // What changing the target markets would clear out. Asked before the form is submitted, so the
+    // count is shown while it can still be cancelled.
+    if (req.method === "GET" && url.pathname === "/criteria-impact") {
+      let out = { removed: [], proposals: 0, byMarket: {} };
+      try {
+        const { ids, ...rest } = await criteriaImpact(url.searchParams.get("markets") || "");
+        out = rest;
+      } catch {
+        /* preview only — never block the save */
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(out));
+    }
     if (req.method === "GET" && ASSETS.has(url.pathname)) {
       const [file, type] = ASSETS.get(url.pathname);
       const buf = await fs.readFile(path.join(PUBLIC, file));
@@ -3829,6 +4019,10 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/set-task-status") {
     await handleSetTaskStatus(form);
     return redirect(res, { kind: "ok", msg: form.status === "dismissed" ? "Task dismissed." : "Task updated." });
+  }
+  if (url.pathname === "/dismiss-orphaned-proposals") {
+    const r = await handleDismissOrphanedProposals();
+    return redirect(res, r.flash);
   }
   if (url.pathname === "/dismiss-stale-tasks") {
     const r = await handleDismissStaleTasks();
