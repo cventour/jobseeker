@@ -135,16 +135,32 @@ export async function ensureChrome({ timeoutMs = 180_000 } = {}) {
  *   2. It must never LAUNCH Chrome as a side effect, which a plain `tell application "Google
  *      Chrome"` would. pgrep cannot.
  *
- * The regex anchors on the main binary, so Chrome's helper processes (which all carry --type=)
- * cannot make a dead browser look alive.
+ * The pattern anchors on the main binary's PATH, which is what keeps helper processes from making a
+ * dead browser look alive — they live under Contents/Frameworks/.../Helpers/, so the leading ^ has
+ * always excluded them on its own.
+ *
+ * It must NOT also anchor the end. A trailing `$` means "the command line is exactly the binary and
+ * nothing else", which is true only of a Chrome launched with zero arguments — and a real Chrome
+ * essentially never is. Measured on this machine, the live browser reads:
+ *
+ *   /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --origin-trial-disabled-features=… --restart
+ *
+ * so the check returned FALSE while Chrome was plainly running, every single time. Everything
+ * downstream then behaved exactly as designed on top of a false premise: ensureChrome() called
+ * `open` (a no-op on a running Chrome), polled this function for 180 seconds, never saw it flip,
+ * and reported "Chrome was launched but never became scriptable". The probe skips Apple Events
+ * entirely when Chrome looks down, so apple_events stayed "unknown", tabs_open 0, and the digest
+ * said WhatsApp and LinkedIn could not be read — for days, on a machine where Chrome was open the
+ * whole time. `( |$)` accepts arguments while still requiring the binary itself.
  */
+// Exported so it can be tested against real command lines instead of only being exercised when a
+// browser happens to be open — this bug was invisible precisely because nothing checked it.
+export const CHROME_PROC_PATTERN = "^/Applications/Google Chrome.app/Contents/MacOS/Google Chrome( |$)";
+
 export async function chromeRunning() {
   return new Promise((resolve) => {
-    execFile(
-      "/usr/bin/pgrep",
-      ["-f", "^/Applications/Google Chrome.app/Contents/MacOS/Google Chrome$"],
-      { timeout: 10_000 },
-      (err, stdout) => resolve(!err && String(stdout).trim().length > 0)
+    execFile("/usr/bin/pgrep", ["-f", CHROME_PROC_PATTERN], { timeout: 10_000 }, (err, stdout) =>
+      resolve(!err && String(stdout).trim().length > 0)
     );
   });
 }

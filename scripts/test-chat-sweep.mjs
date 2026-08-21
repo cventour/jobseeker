@@ -58,6 +58,28 @@ async function main() {
   check("real conversations -> swept", good.swept === true && good.chats.length === 2);
   check("unread count is preserved for the digest", good.chats.filter((c) => c.unread > 0).length === 1);
 
+  // Chrome liveness detection. This is not a sweep behaviour, but it is the gate in front of every
+  // sweep: when it answers wrongly, nothing downstream can work and the failure presents as "Chrome
+  // was launched but never became scriptable" — which reads like a slow machine or a permissions
+  // problem, so it went undiagnosed for days while Chrome was open the entire time.
+  //
+  // The pattern is checked against REAL command lines rather than by starting a browser, because a
+  // test that only passes when a browser happens to be running is exactly what failed to exist here.
+  const { CHROME_PROC_PATTERN } = await import("./browser.mjs");
+  const re = new RegExp(CHROME_PROC_PATTERN);
+  const MAIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  const HELPERS =
+    "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/151.0.7922.138/Helpers";
+  // The real one from this machine — the case the old `$`-anchored pattern missed.
+  check(
+    "Chrome WITH launch arguments is detected",
+    re.test(`${MAIN} --origin-trial-disabled-features=CanvasTextNg --restart`)
+  );
+  check("Chrome with no arguments is detected", re.test(MAIN));
+  check("renderer helper does NOT count as a running browser", !re.test(`${HELPERS}/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer`));
+  check("crashpad handler does NOT count as a running browser", !re.test(`${HELPERS}/chrome_crashpad_handler --monitor-self`));
+  check("a lookalike path elsewhere does NOT match", !re.test("/Users/someone/Google Chrome.app/Contents/MacOS/Google Chrome"));
+
   console.log(failures === 0 ? "\nPASS\n" : `\nFAIL — ${failures} check(s) failed\n`);
   process.exit(failures === 0 ? 0 : 1);
 }

@@ -105,7 +105,9 @@ async function main() {
   }
 
   const chromePid = await sh(
-    "pgrep -f '^/Applications/Google Chrome.app/Contents/MacOS/Google Chrome$' | head -1"
+    // See chromeRunning() in browser.mjs: the trailing `$` matched only an argument-less Chrome,
+    // so this reported "not running" against a browser that was open the whole time.
+    "pgrep -f '^/Applications/Google Chrome.app/Contents/MacOS/Google Chrome( |$)' | head -1"
   );
   const chromeRunning = Boolean(chromePid);
 
