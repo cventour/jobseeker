@@ -1839,6 +1839,7 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
     <button class="mclose" onclick="closeDismiss()" aria-label="Close">×</button>
     <h3>Dismiss lead</h3>
     <p class="muted" id="dismissWhat" style="margin:0 0 10px"></p>
+    <div id="dismissImpact" class="impact" hidden></div>
     <form method="POST" action="/set-app-status">
       <input type="hidden" name="id" id="dismissId">
       <input type="hidden" name="status" value="Dismissed">
@@ -2012,6 +2013,10 @@ nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel .secbody .scroll tr:last-child td{border-bottom:0}
 th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
+/* Blast radius of a dismissal, shown before you confirm it. */
+.impact{background:rgba(214,138,0,.10);border-left:3px solid #d68a00;border-radius:0 8px 8px 0;
+  padding:9px 12px;margin:0 0 12px;font-size:12.5px;line-height:1.5}
+
 /* Overdue age. A date does not read as urgent; "21d overdue" does. */
 .odue{font-size:11px;color:#d68a00;font-weight:650;margin-top:2px;white-space:nowrap}
 .odue-stale{color:#f85149}
@@ -2533,9 +2538,36 @@ window.openDismiss = function(id, label){
   document.getElementById('dismissId').value = id;
   document.getElementById('dismissWhat').textContent = label || '';
   document.getElementById('dismissReason').value = '';
+  var imp = document.getElementById('dismissImpact');
+  imp.hidden = true; imp.innerHTML = '';
   document.getElementById('dismissOverlay').style.display = 'flex';
   document.body.style.overflow = 'hidden';
   setTimeout(function(){ document.getElementById('dismissReason').focus(); }, 40);
+
+  // Say what else goes with it, BEFORE the click. A job is rarely alone — it has follow-ups you
+  // promised yourself, messages, people. Dismissing it silently left those follow-ups open against
+  // a dead job, which is how a to-do list fills with things that cannot be done.
+  //
+  // Fetched per-record rather than estimated, and the dialog stays usable if the lookup fails —
+  // a preview must never block the action it precedes.
+  fetch('/dismiss-impact?id=' + encodeURIComponent(id))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if (!d) return;
+      var bits = [];
+      if (d.tasks) bits.push('<b>' + d.tasks + ' open task' + (d.tasks === 1 ? '' : 's') + '</b> will be dismissed too');
+      var kept = [];
+      if (d.messages) kept.push(d.messages + ' message' + (d.messages === 1 ? '' : 's'));
+      if (d.contacts) kept.push(d.contacts + ' contact' + (d.contacts === 1 ? '' : 's') + ' at this company');
+      // Naming what is KEPT matters as much as what is removed: it is a deliberate choice, not an
+      // oversight. A message still happened, and a person you met through a role you passed on is
+      // still in your network.
+      if (kept.length) bits.push(kept.join(' and ') + ' stay, as history');
+      if (!bits.length) return;
+      imp.innerHTML = bits.join('. ') + '.';
+      imp.hidden = false;
+    })
+    .catch(function(){ /* preview unavailable — the dismissal itself still works */ });
 };
 window.closeDismiss = function(){
   document.getElementById('dismissOverlay').style.display = 'none';
@@ -3361,6 +3393,51 @@ async function handleAddTaskNL(form) {
   await logActivity("task-add-nl", `NL task → [${p.type}${p.due_date ? " " + p.due_date : ""}${p.who ? " @" + p.who : ""}] ${sanitizeCell(p.detail)}`);
 }
 
+/**
+ * What else is attached to a job — used both to warn BEFORE dismissing and to cascade after.
+ *
+ * The three are treated differently on purpose, because they are different kinds of thing:
+ *
+ *   tasks     — open commitments. If the job is dead the follow-up is dead, so these cascade.
+ *   messages  — a record of what happened. Dismissing the job does not un-send the email, and the
+ *               reconciler reads comms as evidence to close OTHER tasks, so deleting them would
+ *               damage unrelated bookkeeping. Counted and kept.
+ *   contacts  — people. Someone who came up through a role you passed on is still in your network
+ *               and may refer you elsewhere; they also have no status column to dismiss into.
+ *               Counted and kept.
+ *
+ * The counts are still surfaced for all three, so "kept" is a visible decision rather than a
+ * silent omission.
+ */
+async function dismissImpact(id) {
+  const tasks = await readTable(path.join(DATA, "tasks.md"));
+  const comms = await readTable(path.join(DATA, "communications.md"));
+  const openTasks = tasks.rows.filter((t) => t.related_id === id && t.status === "open");
+  const linkedComms = comms.rows.filter((c) => c.related_application_id === id);
+  // Contacts carry no job id, so they are matched by company — the same loose join the People tab
+  // uses. Reported as "at this company", never as "belonging to this job".
+  let contactsAtCompany = 0;
+  let company = "";
+  const recs = await readRecordDir(path.join(DATA, "applications"));
+  const rec = recs.find((r) => r.data.id === id || r.id === id);
+  if (rec) {
+    company = rec.data.company || "";
+    const key = boardKey(company);
+    if (key) {
+      const contacts = await readTable(path.join(DATA, "contacts.md"));
+      contactsAtCompany = contacts.rows.filter((c) => boardKey(c.company) === key).length;
+    }
+  }
+  return {
+    company,
+    role: rec?.data.role || "",
+    tasks: openTasks.length,
+    taskIds: openTasks.map((t) => t.id),
+    messages: linkedComms.length,
+    contacts: contactsAtCompany,
+  };
+}
+
 async function handleSetAppStatus(form) {
   const id = (form.id ?? "").trim();
   const status = (form.status ?? "").trim();
@@ -3375,6 +3452,15 @@ async function handleSetAppStatus(form) {
   else delete data.dismiss_reason; // clear on restore
   await writeFileAtomic(path.join(dir, rec.file), stringifyFrontmatter(data, rec.body, Object.keys(data)));
   await logActivity("lead-" + status.toLowerCase(), `${data.company} — ${data.role} → ${status}${reason ? " (" + sanitizeCell(reason) + ")" : ""}`);
+
+  // Cascade. Leaving a follow-up open against a job you just killed is how the 20-overdue backlog
+  // built up in the first place — the task outlives the reason it existed.
+  if (status === "Dismissed") {
+    const impact = await dismissImpact(id);
+    if (impact.taskIds.length) {
+      await setTaskStatusFor(impact.taskIds, "dismissed", `job dismissed: ${data.company} — ${data.role}`);
+    }
+  }
 }
 
 // One-click "Advance": apply the detected pending_stage to status (forward-only), fold pending_note
@@ -3612,6 +3698,19 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
       return;
+    }
+    // What a dismissal would take with it. A GET so the dialog can ask before anything is written,
+    // and so it costs nothing if the user backs out.
+    if (req.method === "GET" && url.pathname === "/dismiss-impact") {
+      const id = String(url.searchParams.get("id") || "").trim();
+      let out = { tasks: 0, messages: 0, contacts: 0 };
+      try {
+        if (id) out = await dismissImpact(id);
+      } catch {
+        /* a preview must never block the action it precedes */
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(out));
     }
     if (req.method === "GET" && ASSETS.has(url.pathname)) {
       const [file, type] = ASSETS.get(url.pathname);

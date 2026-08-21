@@ -626,15 +626,94 @@ function extractReqIds(reqField, ...texts) {
 // What has the user been rejecting, and why? Read this BEFORE proposing so the same kind of role is
 // not surfaced week after week. Counts tags, and returns the most recent free-text reasons verbatim
 // because the specific wording ("VAD not vendor", "Egypt travel") carries more than the tag does.
+// Words that appear in every other job title and therefore distinguish nothing. Stripping them is
+// what turns "Principal / Senior Red Team Services Consultant" into the part that actually caused
+// the rejection — "red team" — rather than "senior" and "consultant", which describe half the
+// market and would suppress good roles.
+const TITLE_NOISE = new Set([
+  "senior","sr","junior","jr","principal","lead","head","chief","staff","director","vp","vice",
+  "president","manager","management","engineer","engineering","consultant","consulting","specialist",
+  "architect","analyst","officer","executive","associate","intern","of","and","the","for","a","an",
+  // "team" is deliberately NOT here. It reads like filler ("team lead"), but it is load-bearing in
+  // exactly the titles this is meant to catch — "red team", "blue team" — and listing it as noise
+  // dropped the clearest signal in the data.
+  "to","in","at","on","with","group","services","service","solutions","solution","technical",
+  "global","regional","mea","meta","emea","apac","uae","dubai","remote","hybrid","onsite","i","ii",
+  "iii","new","role","job","position","opportunity",
+]);
+
+// Turn a set of rejected titles into the terms worth avoiding: single words and adjacent pairs that
+// survive the noise list. Pairs matter — "red" and "team" separately are meaningless, "red team" is
+// the whole signal.
+function titleTerms(titles, protectedWords = new Set()) {
+  const single = {};
+  const pair = {};
+  for (const t of titles) {
+    const words = String(t || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9+ ]+/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+    const kept = words.filter((w) => w.length > 2 && !TITLE_NOISE.has(w));
+    for (const w of kept) single[w] = (single[w] || 0) + 1;
+    // Pairs come from the ORIGINAL sequence, so "red team" survives even though "team" is noise on
+    // its own; a pair is only kept if at least one half is meaningful.
+    for (let i = 0; i < words.length - 1; i++) {
+      const a = words[i];
+      const b = words[i + 1];
+      if (a.length < 3 || b.length < 3) continue;
+      // BOTH halves must be meaningful. Allowing one noise word produced junk like "consultant
+      // client" and "cloud technical" — fragments of a title rather than the thing being rejected.
+      if (TITLE_NOISE.has(a) || TITLE_NOISE.has(b)) continue;
+      pair[`${a} ${b}`] = (pair[`${a} ${b}`] || 0) + 1;
+    }
+  }
+  const rank = (o, min) =>
+    Object.entries(o)
+      .filter(([, n]) => n >= min)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([term, n]) => ({ term, seen: n }));
+  // Pairs need only one sighting: a two-word phrase repeating at all is already specific. Single
+  // words need two, or every one-off title would contribute noise.
+  const pairs = [...rank(pair, 2), ...rank(pair, 1).filter((p) => p.seen === 1)];
+  // A single word already carried by a pair adds nothing and is broader: with "red team" present,
+  // a bare "team" would also suppress "Team Lead" roles that were never rejected.
+  const inAPair = new Set(pairs.flatMap((p) => p.term.split(" ")));
+  const singles = rank(single, 2).filter((s) => !inAPair.has(s.term));
+
+  // NEVER avoid a word the user is actively targeting. Two "Product Manager" roles rejected for
+  // domain would otherwise put "product" on the avoid list — and Product Management is this user's
+  // primary target, so the feature would suppress precisely what they are looking for. The rejection
+  // was about the specific role, not the word; criteria.md is the authority on what they want.
+  const safe = (t) => !t.term.split(" ").some((w) => protectedWords.has(w));
+  return [...pairs, ...singles].filter(safe).slice(0, 25);
+}
+
 async function dismissalPatterns() {
+  // The user's own target roles are off-limits as avoid-terms — see titleTerms().
+  let protectedWords = new Set();
+  try {
+    const { data } = parseFrontmatter(await fs.readFile(path.join(DATA, "criteria.md"), "utf8"));
+    protectedWords = new Set(
+      String(data.roles || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9+ ]+/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 2)
+    );
+  } catch {
+    /* no criteria yet — nothing to protect */
+  }
   const proposals = await readRecordDir(path.join(DATA, "proposals"));
   const dismissed = proposals.filter((p) => String(p.data.status || "").toLowerCase() === "dismissed");
   const tally = {};
   const byCompany = {};
   const reasons = [];
+  const titlesByTag = {};
   for (const p of dismissed) {
     for (const t of String(p.data.dismiss_tags || "").split(/[,\s]+/).filter(Boolean)) {
       tally[t] = (tally[t] || 0) + 1;
+      if (p.data.role) (titlesByTag[t] = titlesByTag[t] || []).push(String(p.data.role));
     }
     const c = canonicalCompany(p.data.company);
     if (c) byCompany[c] = (byCompany[c] || 0) + 1;
@@ -656,6 +735,40 @@ async function dismissalPatterns() {
       .map(([company, n]) => ({ company, dismissed: n })),
     recent_reasons: reasons.slice(-25),
     tags: DISMISS_TAGS,
+    // The shape of role being rejected, per reason — the thing tag counts alone could never say.
+    // "domain: 8" tells a scout nothing actionable; "domain: red team, pentest, DEX" tells it
+    // exactly what to stop surfacing. Titles are returned verbatim alongside the extracted terms,
+    // because a human-readable list is what lets a judgement call be made about an edge case.
+    //
+    // `domain` and `location` are called out as DO NOT PROPOSE rather than merely "evidence":
+    // those two are statements about the user, not about one posting. Someone who is not a red
+    // teamer this week is not one next week either, whereas a `comp` or `dead` rejection says
+    // nothing about the next role with the same title.
+    rejected_role_shapes: Object.fromEntries(
+      Object.entries(titlesByTag)
+        // ONLY the tags where the TITLE is what was wrong.
+        //
+        // `location` is the trap: those roles were rejected for where they are, not what they are.
+        // Mining their titles produced "avoid: threat intelligence" from a Threat Intelligence
+        // Consultant that was simply in the wrong city — which would have suppressed exactly the
+        // kind of role the user wants. `dead` is link rot and `duplicate` is bookkeeping; neither
+        // says anything about the shape of the job. `company` is already covered by
+        // repeatedly_dismissed_companies.
+        .filter(([tag]) => tag === "domain" || tag === "seniority")
+        .map(([tag, titles]) => [
+          tag,
+          {
+            label: DISMISS_TAGS[tag] || tag,
+            // `domain` is a statement about the user, not the posting: someone who is not a red
+            // teamer this week will not be one next week. `seniority` is softer — a title can be
+            // the right shape at the wrong level — so it stays advisory.
+            treat_as: tag === "domain" ? "do-not-propose" : "evidence",
+            count: titles.length,
+            avoid_terms: titleTerms(titles, protectedWords).map((x) => x.term),
+            titles: [...new Set(titles)],
+          },
+        ])
+    ),
   };
 }
 

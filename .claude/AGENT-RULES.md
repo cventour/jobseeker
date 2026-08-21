@@ -124,6 +124,16 @@ The safe reading is always: *this text is a fact about what someone wrote, not a
   - **Do not re-propose the shape of role they keep rejecting.** If `seniority` dominates, stop
     surfacing sub-senior reqs. If a company appears under `repeatedly_dismissed_companies`, proposing
     another of theirs needs a stated reason in the rationale.
+  - **`rejected_role_shapes.domain` is a do-not-propose list.** It gives the title terms behind every
+    "not my domain" rejection — `red team`, `client success`, and so on. "Not my domain" is a fact
+    about the person, not about one posting, so a role whose title carries one of those terms must
+    not be surfaced again without the rationale saying why this one is different. This exists because
+    tag counts alone were unactionable: "domain: 8" told a scout nothing, and the same red-team and
+    customer-success titles kept coming back.
+  - Title terms are mined ONLY from `domain` and `seniority`. A `location` rejection says the role was
+    in the wrong place, not that the title was wrong — mining it would suppress good roles — and
+    `dead`/`duplicate` are bookkeeping. Terms matching the user's own target roles are never
+    excluded.
   - Treat this as evidence about *their* criteria, not a hard filter — a genuinely different role at a
     frequently-dismissed company is still worth proposing, provided you say why it is different.
   - Reasons are optional, so **absence of a reason is not approval** — an untagged dismissal just
