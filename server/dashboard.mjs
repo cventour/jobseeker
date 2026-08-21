@@ -1235,14 +1235,83 @@ const isOn = (v, dflt = true) => {
   return !/^(false|no|off|0)$/i.test(s);
 };
 
-function criteriaFormHTML(criteria) {
+/**
+ * A comma-separated setting, edited as a list instead of a string.
+ *
+ * These were plain text boxes. Nothing told you the separator, "Cybersecurity - Israel" contains a
+ * hyphen that reads like one, and free text constrains nothing — which is why this tracker ended up
+ * with "Fintech" and "fintech" as two separate markets, each carrying its own proposals. A list
+ * makes each value a discrete thing you can see and remove, and the control refuses a duplicate
+ * that differs only by case or punctuation.
+ *
+ * Storage is unchanged: a hidden input carries the same comma-joined string the form always posted,
+ * so criteria.md, the config file, and every agent that reads them are untouched. This is purely
+ * the input control.
+ *
+ * `suggestions` renders a native <datalist>, which is a dropdown you can also type past — the exact
+ * "pick one or add your own" behaviour wanted, with no library and no custom popup to get wrong.
+ */
+function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = "", hint = "" } = {}) {
+  // Which character separates entries is a property of the DATA, not a global choice. `locations`
+  // is stored as "Dubai, UAE; Remote" — semicolons separate, and the comma is part of a single
+  // place name. Splitting that on commas would turn one location into two ("Dubai" and "UAE") and
+  // quietly change what the scout searches for. So: if a semicolon is present it is the separator,
+  // otherwise commas are. The same character is used to re-join, so the stored string keeps its
+  // existing shape and no agent reading it sees a difference.
+  const sep = String(value || "").includes(";") ? ";" : ",";
+  const values = String(value || "")
+    .split(sep)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const listId = `dl_${name}`;
+  const chips = values
+    .map(
+      (v) => `<span class="chip" data-v="${esc(v)}">${esc(v)}<button type="button" class="chipx"
+        aria-label="Remove ${esc(v)}" tabindex="-1">×</button></span>`
+    )
+    .join("");
+  // Only offer a suggestion that is not already chosen.
+  const chosen = new Set(values.map((v) => v.toLowerCase().replace(/[^a-z0-9]+/g, "")));
+  const opts = suggestions
+    .filter((s) => !chosen.has(String(s).toLowerCase().replace(/[^a-z0-9]+/g, "")))
+    .map((s) => `<option value="${esc(s)}"></option>`)
+    .join("");
+  return `<div class="chipfield" data-name="${esc(name)}" data-sep="${sep}">
+    <label class="chiplabel">${label}${hint ? `<span class="muted chiphint">${hint}</span>` : ""}</label>
+    <div class="chipbox">
+      ${chips}
+      <input type="text" class="chipin" ${suggestions.length ? `list="${listId}"` : ""}
+             placeholder="${esc(placeholder)}" autocomplete="off" aria-label="${esc(label)}">
+    </div>
+    ${suggestions.length ? `<datalist id="${listId}">${opts}</datalist>` : ""}
+    <input type="hidden" name="${esc(name)}" value="${esc(values.join(sep + " "))}">
+  </div>`;
+}
+
+function criteriaFormHTML(criteria, marketNames = []) {
   const d = criteria.data ?? {};
   const val = (k) => esc(d[k] ?? "");
-  return `<form method="POST" action="/save-criteria" class="grid" id="criteriaform">
-    <label>Markets (comma-separated)<input name="markets" value="${val("markets")}"></label>
-    <label>Target roles<input name="roles" value="${val("roles")}"></label>
-    <label>Locations<input name="locations" value="${val("locations")}"></label>
-    <label>Seniority<input name="seniority" value="${val("seniority")}"></label>
+  const raw = (k) => d[k] ?? "";
+  return `<form method="POST" action="/save-criteria" class="grid chipgrid" id="criteriaform">
+    ${chipsFieldHTML("markets", "Markets", raw("markets"), {
+      // The market files on disk ARE the valid options, so the dropdown cannot drift from reality.
+      // Picking rather than typing is what stops a second "fintech" appearing beside "Fintech".
+      suggestions: marketNames,
+      placeholder: "pick or type a market…",
+      hint: "— from your market lists; typing a new one creates it on the next /markets run",
+    })}
+    ${chipsFieldHTML("roles", "Target roles", raw("roles"), {
+      suggestions: ["Product Management", "Solution Architect", "Solutions Engineer", "VP Product", "System Engineer", "Presales Engineer", "Technical Account Manager"],
+      placeholder: "add a role title…",
+    })}
+    ${chipsFieldHTML("locations", "Locations", raw("locations"), {
+      suggestions: ["Dubai, UAE", "Abu Dhabi, UAE", "Remote", "Saudi Arabia", "Qatar"],
+      placeholder: "add a location…",
+    })}
+    ${chipsFieldHTML("seniority", "Seniority", raw("seniority"), {
+      suggestions: ["Senior", "Principal", "Director", "VP", "Head of", "Lead"],
+      placeholder: "add a level…",
+    })}
     <div class="actions"><button type="submit">Save</button></div>
     ${/* The three scoring weights live in Advanced, but they must still POST from THIS form —
          /save-criteria writes all of criteria.md, so omitting them here would blank them on every
@@ -1368,7 +1437,7 @@ function tabStrip(tabs, activeId) {
 // The Setup page. Three jobs: let the user set what is settable, show honestly what is working, and
 // for the handful of things a web page CANNOT do (macOS permissions, Chrome's own setting, the
 // Claude Code connections) say so plainly and give the steps rather than pretending.
-function setupHTML(st, criteria) {
+function setupHTML(st, criteria, marketNames = []) {
   if (!st) return `<p class="empty">Status unavailable.</p>`;
   const cfg = st.config || {};
   const b = st.browser;
@@ -1461,7 +1530,7 @@ function setupHTML(st, criteria) {
 
   return `
   <p class="th">What you are looking for</p>
-  ${criteriaFormHTML(criteria)}
+  ${criteriaFormHTML(criteria, marketNames)}
 
   <form method="POST" action="/save-config" class="cfgform">${hidden}
     <p class="th">Spend</p>
@@ -1480,7 +1549,10 @@ function setupHTML(st, criteria) {
       ${toggleHTML("linkedin_open_tab", "Open a LinkedIn messaging tab", isOn(cfg.linkedin_open_tab, false), "Off: only reads a tab you leave open. On: opens one, which can mark the first conversation read.")}
     </div>
     <div class="cfggrid">
-      <label>Where to send approvals<input name="approval_channels" value="${esc(cfg.approval_channels ?? "")}" placeholder="whatsapp, chat"></label>
+      ${chipsFieldHTML("approval_channels", "Where to send approvals", cfg.approval_channels ?? "", {
+        suggestions: ["whatsapp", "chat"],
+        placeholder: "add a channel…",
+      })}
       <label>Your WhatsApp number<input name="whatsapp_owner_jid" value="${esc(cfg.whatsapp_owner_jid ?? "")}" placeholder="971xxxxxxxxx@s.whatsapp.net"></label>
     </div>
 
@@ -1494,13 +1566,19 @@ function setupHTML(st, criteria) {
 
       <p class="th">Privacy</p>
       <div class="cfggrid">
-        <label>Chats never to log<input name="ignored_chats" value="${esc(cfg.ignored_chats ?? "")}" placeholder="comma list, prefix match"></label>
+        ${chipsFieldHTML("ignored_chats", "Chats never to log", cfg.ignored_chats ?? "", {
+          placeholder: "add a chat name…",
+          hint: "— matched as a case-insensitive prefix",
+        })}
         <label>Company aliases<input name="company_aliases" value="${esc(cfg.company_aliases ?? "")}" placeholder="oldname=New Name"></label>
       </div>
 
       <p class="th">Applying</p>
       <div class="cfggrid">
-        <label>Pause applying before<input name="apply_stop_before" value="${esc(cfg.apply_stop_before ?? "")}" placeholder="unknown_question, submit"></label>
+        ${chipsFieldHTML("apply_stop_before", "Pause applying before", cfg.apply_stop_before ?? "", {
+          suggestions: ["each_section", "file_upload", "unknown_question", "submit"],
+          placeholder: "add a checkpoint…",
+        })}
       </div>
       <p class="muted">Checkpoints where an application pauses for you. Removing <code>submit</code>
         does <b>not</b> let anything be sent without approval — that gate is in the agent rules, not here.</p>
@@ -1918,7 +1996,7 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
-${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, setupHTML(all.status, all.criteria)))}
+${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label))))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
@@ -2032,6 +2110,22 @@ nav.tabs .tab[data-tab="cv"]{--h:296}
 .tabpanel .secbody .scroll tr:last-child td{border-bottom:0}
 th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
+/* Chip fields. The box looks and focuses like one input; the chips live inside it. */
+.chipgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px 18px}
+.chipfield{display:flex;flex-direction:column;gap:5px;min-width:0}
+.chiplabel{font-size:12.5px;color:var(--mut)}
+.chiphint{font-size:11px;margin-left:5px}
+.chipbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;min-height:38px;
+  border:1px solid var(--line);border-radius:8px;background:var(--bg);cursor:text}
+.chipbox:focus-within{border-color:var(--acc)}
+.chip{display:inline-flex;align-items:center;gap:5px;background:var(--card);border:1px solid var(--line);
+  border-radius:99px;padding:3px 4px 3px 10px;font-size:12.5px;max-width:100%;overflow-wrap:anywhere}
+.chipx{background:none;border:0;color:var(--mut);cursor:pointer;font-size:15px;line-height:1;
+  padding:0 5px;border-radius:99px}
+.chipx:hover{color:var(--fg);background:var(--line);filter:none}
+.chipin{flex:1;min-width:120px;border:0;background:transparent;color:var(--fg);font:inherit;
+  padding:3px 2px;outline:none}
+
 /* Blast radius of a dismissal, shown before you confirm it. */
 .impact{background:rgba(214,138,0,.10);border-left:3px solid #d68a00;border-radius:0 8px 8px 0;
   padding:9px 12px;margin:0 0 12px;font-size:12.5px;line-height:1.5}
@@ -2712,6 +2806,82 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   var s=sec.querySelector('.asearch');
   if(s) s.addEventListener('input', function(){ q=s.value.toLowerCase().trim(); apply(); });
   apply();
+})();
+
+// Chip fields: edit a comma-separated setting as a list of discrete values.
+//
+// The hidden input is the only thing that posts, and it holds exactly the string the form always
+// held — so nothing downstream knows this changed. Everything here is about making the value
+// visible and hard to corrupt.
+(function(){
+  var fields = Array.prototype.slice.call(document.querySelectorAll('.chipfield'));
+  if (!fields.length) return;
+
+  // Same normalisation the rest of the app uses to decide two names are the same thing. It is what
+  // stops "Fintech" and "fintech" both being added — the exact split this tracker already has in
+  // its data, where each spelling accumulated its own proposals.
+  function key(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+
+  fields.forEach(function(field){
+    var box = field.querySelector('.chipbox');
+    var input = field.querySelector('.chipin');
+    var hidden = field.querySelector('input[type=hidden]');
+    // Per-field, decided server-side from the stored value — see chipsFieldHTML. Locations use
+    // semicolons because a single entry ("Dubai, UAE") contains a comma.
+    var SEP = field.getAttribute('data-sep') || ',';
+
+    function values(){
+      return Array.prototype.slice.call(box.querySelectorAll('.chip')).map(function(c){
+        return c.getAttribute('data-v');
+      });
+    }
+    function sync(){ hidden.value = values().join(SEP + ' '); }
+
+    function add(raw){
+      // A pasted "a, b, c" becomes three chips rather than one nonsense value — pasting a list into
+      // a list field is the obvious thing to try.
+      var parts = String(raw).split(SEP).map(function(s){ return s.trim(); }).filter(Boolean);
+      var existing = values().map(key);
+      parts.forEach(function(p){
+        if (existing.indexOf(key(p)) !== -1) return;   // already there, in some spelling
+        existing.push(key(p));
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.setAttribute('data-v', p);
+        chip.textContent = p;
+        var x = document.createElement('button');
+        x.type = 'button'; x.className = 'chipx'; x.textContent = '×';
+        x.setAttribute('aria-label', 'Remove ' + p);
+        x.tabIndex = -1;
+        chip.appendChild(x);
+        box.insertBefore(chip, input);
+      });
+      input.value = '';
+      sync();
+    }
+
+    input.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === SEP) { e.preventDefault(); if (input.value.trim()) add(input.value); }
+      // Backspace on an empty box removes the last chip — standard for this control, and quicker
+      // than aiming for a small ×.
+      else if (e.key === 'Backspace' && !input.value) {
+        var last = box.querySelectorAll('.chip');
+        if (last.length) { last[last.length - 1].remove(); sync(); }
+      }
+    });
+    // Picking from the datalist fires input, not keydown, so commit on that too.
+    input.addEventListener('input', function(){
+      if (input.value.indexOf(SEP) !== -1) add(input.value);
+    });
+    input.addEventListener('change', function(){ if (input.value.trim()) add(input.value); });
+    // Losing focus with text still typed must not silently discard it.
+    input.addEventListener('blur', function(){ if (input.value.trim()) add(input.value); });
+    box.addEventListener('click', function(e){
+      if (e.target.classList.contains('chipx')) { e.target.parentNode.remove(); sync(); }
+      else if (e.target === box) input.focus();
+    });
+    sync();
+  });
 })();
 
 // Dropping a target market: confirm, with the count, before it takes anything with it.
