@@ -26,10 +26,14 @@ There are two ways to read these chats, and which one you get depends on the run
 `capabilities.read_mechanism` tells you which of the two you have, or `null` if neither. Never
 conclude "no Chrome" from the shape of the run — that inference has been wrong in both directions.
 
-**The unattended sweep is LIST-ONLY, and that is deliberate.** It reads conversation lists and never
-opens a thread, because opening one MARKS IT READ on the user's real account — an overnight job that
-quietly cleared 11 unread badges would destroy the user's own signal about what still needs them.
-If a thread needs full history, flag it for an interactive pass rather than opening it.
+**The unattended sweep NEVER OPENS AN UNREAD THREAD, and that is deliberate.** Opening one MARKS IT
+READ on the user's real account — an overnight job that quietly cleared 11 unread badges would
+destroy the user's own signal about what still needs them. Unread threads keep their list preview
+only; flag one for an interactive pass rather than opening it.
+
+Already-read threads carry no such cost, so `chat-sweep.mjs` does open those and store the actual
+conversation — but only the ones it is going to log anyway (not in `ignored_chats`, newer than the
+watermark, job-related). A thread the tracker will not record is a thread it does not open.
 
 **Never advance a watermark for a channel that did not actually complete** — including when the
 extraction returns zero conversations, which usually means a selector drifted rather than an empty

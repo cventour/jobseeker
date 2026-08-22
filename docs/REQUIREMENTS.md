@@ -154,6 +154,13 @@ previously drove the machine into an out-of-memory kill.
 Channel reads are low-volume, human-paced, read-only, and run from the user's own residential
 connection. If a service challenges the session, stop and report rather than work around it.
 
+"Read-only" here means **leaves no trace on the user's account**, not merely "sends nothing". The
+operative rule is that an **unread thread is never opened**, because opening one marks it read and
+silently destroys the user's own record of what still needs them. An already-read thread carries no
+such cost and may be opened and read in full — but only when the sweep is going to log it anyway.
+The browser layer holds up its end structurally: it exposes exactly one click, targeting a row
+inside a known conversation list, and that click cannot reach a button, input, textarea or form.
+
 ### NFR-7 — No dependencies
 `package.json` declares no `dependencies` and no `devDependencies`. Every runtime component —
 dashboard, writers, audit, browser access, the sweeps — uses only Node built-ins and shell. There is

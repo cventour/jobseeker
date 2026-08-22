@@ -1589,8 +1589,8 @@ function setupHTML(st, criteria, marketNames = []) {
     <p class="th">Channels</p>
     <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled,linkedin_open_tab">
     <div class="tglgrid">
-      ${toggleHTML("whatsapp_web_enabled", "Read WhatsApp Web", isOn(cfg.whatsapp_web_enabled), "Message list only — never opens a chat.")}
-      ${toggleHTML("linkedin_enabled", "Read LinkedIn", isOn(cfg.linkedin_enabled), "Message list only, through your logged-in Chrome.")}
+      ${toggleHTML("whatsapp_web_enabled", "Read WhatsApp Web", isOn(cfg.whatsapp_web_enabled), "Reads threads you have already read; never opens an unread chat.")}
+      ${toggleHTML("linkedin_enabled", "Read LinkedIn", isOn(cfg.linkedin_enabled), "Same rule, through your logged-in Chrome.")}
       ${toggleHTML("linkedin_open_tab", "Open a LinkedIn messaging tab", isOn(cfg.linkedin_open_tab, false), "Off: only reads a tab you leave open. On: opens one, which can mark the first conversation read.")}
     </div>
     <div class="cfggrid">

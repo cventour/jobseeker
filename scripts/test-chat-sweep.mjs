@@ -12,7 +12,7 @@
 //
 //   npm run test:sweep
 
-import { sweepChannel } from "./chat-sweep.mjs";
+import { sweepChannel, readThreads } from "./chat-sweep.mjs";
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -79,6 +79,41 @@ async function main() {
   check("renderer helper does NOT count as a running browser", !re.test(`${HELPERS}/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer`));
   check("crashpad handler does NOT count as a running browser", !re.test(`${HELPERS}/chrome_crashpad_handler --monitor-self`));
   check("a lookalike path elsewhere does NOT match", !re.test("/Users/someone/Google Chrome.app/Contents/MacOS/Google Chrome"));
+
+  // Opening an unread thread marks it read on the real account and destroys the user's own signal
+  // about what still needs them. That is the one property of this sweep that cannot regress
+  // quietly, so it is asserted here rather than left to the comment that explains it.
+  {
+    const opened = [];
+    const ctx = {
+      openConversation: async (_tab, opts) => {
+        opened.push(opts.name);
+        return { messages: 3, text: "line one\nline two" };
+      },
+    };
+    const chats = [
+      { idx: 0, name: "Read Recruiter", unread: 0, preview: "hi" },
+      { idx: 1, name: "Unread Recruiter", unread: 2, preview: "hi" },
+      { idx: 2, name: "Also Read", unread: 0, preview: "hi" },
+    ];
+    const res = await readThreads({ ctx, source: "WhatsApp", tab: { id: 1 }, chats });
+    check("unread threads are never opened", !opened.includes("Unread Recruiter"), opened.join(", "));
+    check("already-read threads ARE opened", opened.length === 2, `opened ${opened.length}`);
+    check("skipped unread threads are counted, not hidden", res.skippedUnread === 1, String(res.skippedUnread));
+    check("an unread thread keeps its preview and gains no thread text", !chats[1].thread_text);
+    check("a read thread gains its thread text", chats[0].thread_text === "line one\nline two");
+    check("the thread is matched by NAME, not by array position", opened[1] === "Also Read", opened[1]);
+  }
+
+  // An unknown surface must read nothing rather than guess a selector and click something arbitrary.
+  {
+    let called = false;
+    const ctx = { openConversation: async () => ((called = true), null) };
+    const res = await readThreads({
+      ctx, source: "Telegram", tab: {}, chats: [{ idx: 0, name: "x", unread: 0 }],
+    });
+    check("an unknown channel reads nothing and clicks nothing", !called && res.read === 0);
+  }
 
   console.log(failures === 0 ? "\nPASS\n" : `\nFAIL — ${failures} check(s) failed\n`);
   process.exit(failures === 0 ? 0 : 1);

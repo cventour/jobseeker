@@ -62,9 +62,13 @@ modify your job search. The startup warning says so; do not ignore it.
 
 **The browser agent holds a standing macOS Automation grant.** While installed, it can read any page
 open in your Chrome, including authenticated ones. That is inherent to reading WhatsApp Web at all.
-What bounds it is that the browser API exposes only navigation and extraction — never clicking,
-typing or form submission — and that the chat sweep records message content only for threads
-carrying a job-search signal.
+What bounds it is that the browser API exposes navigation, extraction, and exactly one narrow click:
+`openConversation`, which selects the Nth row of a named conversation list and refuses to click a
+`BUTTON`, an `INPUT`, or anything inside a `<form>`. There is no general click, no typing and no form
+submission, so nothing can be sent or posted through it. The chat sweep uses that click to read a
+thread's actual contents rather than the one-line preview, and opens a thread only when it is both
+already read — an unread one is never touched, so no badge is ever cleared — and about to be logged
+for carrying a job-search signal. Threads this system will not record are also never opened.
 
 **Agents read attacker-controllable text.** Job adverts, recruiter email and chat messages are
 written by other people. §0 is the mitigation; it is a rule followed by a model, not an enforced

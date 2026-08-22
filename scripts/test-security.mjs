@@ -171,6 +171,19 @@ async function main() {
   }
   check("inline dashboard JS parses", scriptOk, scriptErr);
 
+  // browser.mjs flattens each injected page script to a single line before handing it to
+  // AppleScript, so a `//` comment inside one comments out everything that follows it. That failed
+  // silently — openConversation returned "no error" and simply never clicked — which is the worst
+  // possible shape for a bug in a script that touches someone's real messages.
+  const browserSrc = await fs.readFile(new URL("./browser.mjs", import.meta.url), "utf8");
+  const flattened = browserSrc.match(/`\n\(function\(\)\{[\s\S]*?`\.replace\(\/\\n\/g, " "\)/g) || [];
+  const withLineComments = flattened.filter((b) => b.split("\n").some((l) => /^\s*\/\//.test(l)));
+  check(
+    "injected browser scripts use block comments only",
+    flattened.length > 0 && withLineComments.length === 0,
+    flattened.length === 0 ? "found no injected scripts to check — the matcher has drifted" : `${withLineComments.length} script(s) contain a line comment`
+  );
+
   child.kill();
   await fs.rm(tmp, { recursive: true, force: true });
 

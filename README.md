@@ -96,8 +96,10 @@ queued for you to approve.
 
 - **Never applies to a job** without you approving that exact application.
 - **Never sends a message** — email, LinkedIn or WhatsApp — without you approving that exact message.
-- **Never opens your chat threads.** Opening a conversation marks it read, which would destroy your
-  own sense of what still needs attention. It reads only the conversation list.
+- **Never opens an unread chat.** Opening a conversation marks it read, which would destroy your own
+  sense of what still needs attention — so unread threads are left strictly alone and only their
+  list preview is kept. Threads you have already read cost nothing to open, so those it does open and
+  read properly, because "Sure, I will text you next week" is not a record of what was agreed.
 - **Never logs your private conversations.** Most of a personal WhatsApp is family and friends. Only
   threads with a job-search signal are recorded; the rest are counted and left alone.
 - **Never sends your data anywhere.** Everything stays in files on your own machine.

@@ -5,21 +5,30 @@
 //   node scripts/chat-sweep.mjs                # write comms rows + advance the watermark
 //   node scripts/chat-sweep.mjs --linkedin     # also sweep LinkedIn messaging (see the warning)
 //
-// LIST-ONLY, ON PURPOSE — this is the important design decision here.
+// NEVER OPENS AN UNREAD THREAD — this is the important design decision here.
 //
-// It reads the conversation list (name, preview, timestamp, unread badge) and never opens a chat.
-// Opening a WhatsApp or LinkedIn thread MARKS IT READ on the user's real account: an unattended
-// job that "just reads" would silently clear 11 unread badges overnight and destroy the user's own
+// Opening a WhatsApp or LinkedIn thread MARKS IT READ on the user's real account: an unattended job
+// that "just reads" would silently clear 11 unread badges overnight and destroy the user's own
 // signal about what they still need to look at. AGENT-RULES §4 makes external channels read-only,
 // and on a live logged-in session "read-only" has to mean *leaves no trace*, not merely "sends
-// nothing". The list carries enough to flag a thread for attention, which is this sweep's job; the
-// user (or an interactive run) opens the ones that matter.
+// nothing".
+//
+// That cost is specific to UNREAD threads. An already-read one is not changed by being opened, and
+// this sweep was list-only for a while, which turned out to log rows like "oh well that's ok" —
+// proof a conversation happened, no record of what was said. So the line is drawn at the cost, not
+// at the click: an already-read thread that is going to be logged anyway gets opened and read in
+// full; an unread one is never touched and keeps its preview. Nothing else is ever clicked — see
+// `openConversation` in browser.mjs, which refuses buttons, inputs and anything inside a form.
+//
+// Threads are only opened when they pass the same filter as the write: not ignored by rule, newer
+// than the watermark, and job-related. A private conversation this system will not record is also
+// a private conversation it does not open.
 //
 // LinkedIn needs one extra decision. Reading a messaging tab the user already has open is free, so
 // that always happens when `linkedin_enabled`. OPENING one is not free — the messaging view
 // auto-selects the first conversation, which marks it read — so it is gated separately behind
-// `linkedin_open_tab` (or `--linkedin` for a one-off). Note this only ever affects the FIRST
-// conversation; the sweep still never opens a thread itself.
+// `linkedin_open_tab` (or `--linkedin` for a one-off). Note this cost is about which conversation
+// LinkedIn picks for you, not about the sweep: whatever the sweep opens itself is already read.
 
 import { execFile } from "child_process";
 import { realpathSync } from "fs";
@@ -104,6 +113,9 @@ const WHATSAPP_JS = `
         return x !== name && !/^\\d+$/.test(x) && !/^\\d+ unread/i.test(x);
       });
       out.push({
+        /* DOM index, so a later click targets the right row: this loop skips items without a name,
+           so an array position is not a list position. */
+        idx: i,
         name: name,
         preview: (body.length ? body[body.length - 1] : '').slice(0, 300),
         unread: unread,
@@ -129,7 +141,7 @@ const LINKEDIN_JS = `
       var name = nameEl ? (nameEl.textContent || '').trim() : '';
       if (!name) continue;
       var unread = /unread/i.test(el.className) || !!el.querySelector('[class*="unread"]');
-      out.push({ name: name, preview: snipEl ? (snipEl.textContent || '').trim().slice(0, 300) : '', unread: unread ? 1 : 0, time: timeEl ? (timeEl.textContent || '').trim() : '' });
+      out.push({ idx: i, name: name, preview: snipEl ? (snipEl.textContent || '').trim().slice(0, 300) : '', unread: unread ? 1 : 0, time: timeEl ? (timeEl.textContent || '').trim() : '' });
     }
     return JSON.stringify({ chats: out });
   } catch (e) { return JSON.stringify({ error: String(e && e.message || e) }); }
@@ -313,6 +325,66 @@ export async function sweepChannel({ ctx, source, host, js, tab }) {
   return { source, swept: true, reason: "", chats: data.chats, tab_unread: tab.unread ?? null };
 }
 
+// Which DOM to click and which nodes hold the messages, per surface. Kept here rather than in
+// browser.mjs so the browser layer stays generic and knows nothing about either site.
+// `.message-in`/`.message-out` are listed last on purpose: measured 2026-08-22 they match nothing on
+// the current WhatsApp, where the open thread is `#main div[role="row"]`. They stay because these
+// selectors get rotated, and a list of generations costs nothing while a single one silently breaks.
+const THREAD_DOM = {
+  WhatsApp: {
+    listSelector: '#pane-side [role="row"], #pane-side [role="listitem"]',
+    nameSelector: "span[title]",
+    messageSelector: ['#main div[role="row"]', '#main [data-testid="msg-container"]', "#main .message-in, #main .message-out"],
+  },
+  LinkedIn: {
+    listSelector: 'li.msg-conversation-listitem, li[class*="conversation-listitem"]',
+    nameSelector: '.msg-conversation-listitem__participant-names, [class*="participant-names"]',
+    messageSelector: [".msg-s-event-listitem", '[class*="event-listitem"]'],
+  },
+};
+
+/**
+ * Read the actual conversation for threads worth logging.
+ *
+ * The sweep used to record a one-line preview, which in practice meant rows like "oh well that's
+ * ok" and "Let's see :)" — technically a log, useless as a record of what was agreed. This opens
+ * the thread and reads it.
+ *
+ * UNREAD THREADS ARE NEVER OPENED. Opening one marks it read on the real account and destroys the
+ * user's own signal about what still needs them, which is why this sweep was list-only in the first
+ * place. That cost applies only to unread threads — an already-read one is unchanged by being
+ * opened — so the rule is simply to skip the unread ones and read the rest. Their preview still
+ * gets logged, so nothing disappears; it is only thinner, and the digest can say which.
+ */
+export async function readThreads({ ctx, source, tab, chats, limit = 12 }) {
+  const dom = THREAD_DOM[source];
+  if (!dom) return { read: 0, skippedUnread: 0 };
+  let read = 0;
+  let skippedUnread = 0;
+  for (const c of chats.slice(0, limit)) {
+    if (c.unread > 0) { skippedUnread++; continue; }        // never spend an unread badge
+    // `idx` is the position in the live list, recorded by the extraction. An array position would
+    // be wrong: both extractions skip rows without a name.
+    const idx = Number.isInteger(c.idx) ? c.idx : -1;
+    if (idx < 0) continue;
+    // Name first, index as the fallback — the lists virtualise (see openConversation).
+    // `max` is set to just under what the comms row stores. Letting the browser return 8000 chars
+    // and trimming here would trim the WRONG end — the store-side slice cuts from the front, so the
+    // most recent messages, the ones that say what was agreed, are exactly what would be lost.
+    const body = await ctx
+      .openConversation(tab, { ...dom, name: c.name, index: idx, max: 1300 })
+      .catch(() => null);
+    if (body && body.text) {
+      c.thread_text = body.text;
+      c.thread_messages = body.messages;
+      read++;
+    }
+    // Human-paced: this is someone's real account, not a scraping target (AGENT-RULES §7).
+    await new Promise((r) => setTimeout(r, 900));
+  }
+  return { read, skippedUnread };
+}
+
 async function main() {
   const day = new Date().toISOString().slice(0, 10);
 
@@ -337,6 +409,8 @@ async function main() {
     linkedin: await channelEnabled("linkedin"),
   };
   const DO_LINKEDIN = OPEN_LINKEDIN_ARG || (await configFlag("linkedin_open_tab", false));
+  // Needed INSIDE the browser block now, to decide which threads are worth opening.
+  const known = await knownEntities();
 
   const results = await withBrowser(async (ctx) => {
     // A cold Chrome at 08:00 sits on the New Tab Page with nothing scriptable open — and this sweep
@@ -350,13 +424,42 @@ async function main() {
     const waTab = ctx.findTab("web.whatsapp.com");
     const liTab = ctx.findTab("linkedin.com/messaging");
 
+    // Open exactly the threads whose contents will be kept — no more. Anything ignored by rule,
+    // older than the watermark, or not job-related is none of this system's business, and opening
+    // it would be reading a private conversation for nothing. Unread threads are excluded here as
+    // well as inside readThreads, because the cost of getting that wrong is the user's own inbox.
+    const worthReading = (res) => {
+      const raw = sinceFor[res.source.toLowerCase()];
+      const since = raw ? new Date(raw) : null;
+      return res.chats.filter((c) => {
+        if (isIgnored(c.name) || c.unread > 0) return false;
+        const at = parseListTime(c.time);
+        if (since && at && at < since) return false;
+        return looksJobRelated(c, known);
+      });
+    };
+
+    // Sweep the list, then read the threads that survived that filter. Mutates the chat objects in
+    // place, so the write loop below picks up `thread_text` with no extra plumbing.
+    const sweep = async (opts) => {
+      const res = await sweepChannel(opts);
+      if (!res.swept) return res;
+      const picked = worthReading(res);
+      if (picked.length) {
+        const got = await readThreads({ ctx, source: res.source, tab: opts.tab, chats: picked });
+        res.threads_read = got.read;
+        res.threads_wanted = picked.length;
+      }
+      return res;
+    };
+
     const out = [];
     if (!enabled.whatsapp) {
       out.push({ source: "WhatsApp", swept: false, reason: "disabled in config (whatsapp_web_enabled)", chats: [] });
     } else if (waTab) {
       // Reuse the user's own tab and never close it: WhatsApp Web is single-session, so a second
       // tab shows "WhatsApp is open in another window" and steals the session from them.
-      out.push(await sweepChannel({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab: waTab }));
+      out.push(await sweep({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab: waTab }));
     } else {
       // No tab open — typical right after we launched Chrome ourselves, since it starts on the New
       // Tab Page. Safe to open one here precisely BECAUSE none exists, so there is no session to
@@ -364,7 +467,7 @@ async function main() {
       out.push(
         await ctx.withOwnedTab("https://web.whatsapp.com/", async (tab) => {
           await ctx.waitForSelector(tab, '#pane-side, canvas[aria-label*="scan"]', { timeoutMs: 90_000 });
-          return sweepChannel({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab });
+          return sweep({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab });
         })
       );
     }
@@ -372,11 +475,11 @@ async function main() {
     if (!enabled.linkedin) {
       out.push({ source: "LinkedIn", swept: false, reason: "disabled in config (linkedin_enabled)", chats: [] });
     } else if (liTab) {
-      out.push(await sweepChannel({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab: liTab }));
+      out.push(await sweep({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab: liTab }));
     } else if (DO_LINKEDIN) {
       const res = await ctx.withOwnedTab("https://www.linkedin.com/messaging/", async (tab) => {
         await ctx.waitForSelector(tab, 'li[class*="conversation-listitem"]', { timeoutMs: 45_000 });
-        return sweepChannel({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab });
+        return sweep({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab });
       });
       out.push(res);
     } else {
@@ -401,7 +504,6 @@ async function main() {
   });
 
   for (const r of results) r.since = sinceFor[r.source.toLowerCase()] || null;
-  const known = await knownEntities();
 
   for (const r of results) {
     const since = r.since ? new Date(r.since) : null;
@@ -427,7 +529,12 @@ async function main() {
           ? "LOG (job-related)"
           : "skip — not job-related, counted only";
       const tag = c.unread > 0 ? `${c.unread} unread` : `read, active ${c.time || "?"}`;
-      process.stdout.write(`  [${tag}] ${c.name} — ${verdict}\n        ${c.preview.slice(0, 80)}\n`);
+      // Show which of the two bodies would actually be stored, so a dry run does not imply a full
+      // thread where only a preview was obtainable.
+      const body = c.thread_text
+        ? `thread (${c.thread_messages} msgs): ${c.thread_text.replace(/\n+/g, " / ").slice(0, 160)}`
+        : `preview only: ${c.preview.slice(0, 80)}`;
+      process.stdout.write(`  [${tag}] ${c.name} — ${verdict}\n        ${body}\n`);
     }
   }
 
@@ -470,7 +577,13 @@ async function main() {
           // Many WhatsApp entries are bare phone numbers; that IS the identifier, leave it alone.
           from: c.name,
           subject: `${r.source}: ${c.name}`,
-          summary: `${c.unread} unread. Latest preview: ${c.preview}`.slice(0, 500),
+          // The thread itself when it could be read; the one-line preview only as a fallback.
+          // A preview is what the list shows, which for a real exchange is the last few words of
+          // it ("Sure , I will text you next week") — enough to know a conversation happened, not
+          // enough to know what was agreed, which is the entire point of logging it.
+          summary: `${c.unread} unread. ${
+            c.thread_text ? `Thread (${c.thread_messages} msgs): ${c.thread_text}` : `Latest preview: ${c.preview}`
+          }`.slice(0, 1500),
           thread_url: threadKey(r.source.toLowerCase(), c.name, day),
         }),
       ]);
@@ -478,6 +591,9 @@ async function main() {
     }
     process.stdout.write(
       `${r.source}: ${written} active thread(s) logged` +
+        (r.threads_wanted
+          ? `, ${r.threads_read || 0}/${r.threads_wanted} read in full (the rest kept their preview)`
+          : "") +
         (redacted ? `, ${redacted} active but not job-related (counted, not recorded)` : "") +
         (ignored ? `, ${ignored} ignored by rule` : "") +
         "\n"

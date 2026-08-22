@@ -271,6 +271,7 @@ A run that cannot read pages is **not** a failed run. It completes, records the 
 
 These grants are real: Automation access to Chrome means JobSeeker can read any page you have open,
 including authenticated ones. That is inherent to reading WhatsApp Web and LinkedIn at all. What
-bounds it is that the browser API exposes only navigation and extraction — never clicking, typing or
+bounds it is that the browser API exposes navigation, extraction, and one narrow conversation-row
+click that cannot reach a button, input or form — never general clicking, typing or
 submitting — and that the sweep records message content **only** for threads carrying a job-search
 signal. Everything else is counted and left alone.
