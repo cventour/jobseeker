@@ -11,6 +11,10 @@ node_modules/
 data/*
 !data/.example/
 config/job-seeker.config.md
+config/*.bak*
+config/*.backup*
+config/*.orig
 templates/cv/
 templates/answers.md
+templates/*.bak*
 
