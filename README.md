@@ -168,7 +168,19 @@ Start manual. Add the schedule later, in one command, once it has earned some tr
 npm run schedule -- 08:00
 ```
 
-Then open Claude Code inside the folder and introduce yourself:
+Then open the dashboard and introduce yourself:
+
+```bash
+npm run dashboard
+```
+
+A machine with nothing set up opens straight into a short wizard: what you are looking for, your CV,
+the markets to hunt in, the answers every application form asks, which channels it may read, and
+when it should run. Three of those steps can be skipped — Settings offers each one again on its own,
+and says what skipping costs. Nothing runs and nothing is spent while you set up; when you finish,
+Today asks whether to research your first market.
+
+Prefer to type? Everything the wizard writes, `/onboard` writes too:
 
 ```bash
 claude
@@ -177,8 +189,8 @@ claude
 /onboard
 ```
 
-`/onboard` asks what you are looking for — markets, roles, locations, seniority — reads your CV, and
-saves your answers. Once a day after that:
+The two are interchangeable — same questions, same files — so you can start in one and finish in the
+other. Once a day after that:
 
 ```text
 /job-run
@@ -212,7 +224,7 @@ There are also direct commands when you know exactly what you want:
 | `/apply <id>` | Prepare an application — **pauses for your approval before submitting** |
 | `/followup` | Draft a follow-up — **pauses for your approval before sending** |
 | `/markets` | Build or refresh the ranked company list for a market |
-| `/onboard` · `/parse-cv` | First-run setup and CV parsing |
+| `/onboard` · `/parse-cv` | First-run setup and CV parsing — the terminal version of the dashboard wizard |
 
 And two things you run in the terminal:
 

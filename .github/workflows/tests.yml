@@ -21,3 +21,7 @@ jobs:
       - run: npm run test:concurrency
       - run: npm run test:sweep
       - run: npm run test:security
+      # The wizard suite builds a throwaway copy of the repo with a fake HOME and stubbed
+      # launchctl/claude, because the steps it exercises write to config/ and templates/ (resolved
+      # from the repo root, NOT from JOBSEEKER_DATA_DIR) and install a launch agent.
+      - run: npm run test:welcome

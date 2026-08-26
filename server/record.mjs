@@ -14,6 +14,8 @@
 //   node server/record.mjs approve <id>                 -> mark an approval approved
 //   node server/record.mjs reject  <id>                 -> mark an approval rejected
 //   node server/record.mjs edit-approval <id> <text...> -> mark edited + replace the preview
+//   node server/record.mjs approval-dispatch <id> <queued|running|sent|failed> [note]
+//                                                       -> track the SEND of an approved approval
 //   node server/record.mjs log <type> <detail...>
 //   node server/record.mjs dismissal-patterns          -> why roles get rejected, so scouts stop repeating them
 //   node server/record.mjs list-keys                    -> dedupe keys, skip flags, seen_req_ids, repost_of
@@ -587,6 +589,46 @@ async function setApprovalStatus(id, status, newPreview) {
   await writeFileAtomic(file, stringifyFrontmatter(data, finalBody, Object.keys(data)));
   await logActivity("approval-" + status, `${data.kind || "action"} ${status}: ${data.summary || id} (${id})`);
   return { action: status, id };
+}
+
+// The SEND half of an approval, tracked separately from the DECISION half.
+//
+// `status` stays approved/edited once you have said yes — that is the permission, and the
+// comms-agent refuses to send without it. Whether the send has actually HAPPENED is a different
+// fact, and folding the two into one field would either lose the permission (status: "sent" reads
+// as un-approved to the agent) or lose the outcome. So the outcome lives in `dispatch`:
+//
+//   (absent) -> queued -> running -> sent | failed
+//
+// It is also the double-send guard. data/approvals/appr_gwrlzf.md is the case this prevents: a
+// message that had already gone out sat `pending` for 15 days, and the only reason it was not sent
+// twice is that a human noticed. A record with dispatch already set is never dispatched again.
+const DISPATCH_STATES = new Set(["queued", "running", "sent", "failed"]);
+
+async function setApprovalDispatch(id, state, note) {
+  assertSafeId(id);
+  if (!DISPATCH_STATES.has(state)) {
+    throw new Error(`Unknown dispatch state ${JSON.stringify(state)} — expected one of ${[...DISPATCH_STATES].join(", ")}`);
+  }
+  const file = path.join(DATA, "approvals", `${id}.md`);
+  let text;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch {
+    throw new Error(`Approval not found: ${id}`);
+  }
+  const { data, body } = parseFrontmatter(text);
+  if (state !== "failed" && !["approved", "edited"].includes(String(data.status))) {
+    throw new Error(`Refusing to dispatch ${id}: status is ${data.status || "unset"}, not approved/edited`);
+  }
+  if (data.dispatch === "sent") throw new Error(`Refusing to dispatch ${id}: already sent at ${data.dispatched || "?"}`);
+  data.dispatch = state;
+  data.dispatched = nowISO();
+  if (note) data.dispatch_note = sanitizeCell(note);
+  const order = Object.keys(data);
+  await writeFileAtomic(file, stringifyFrontmatter(data, body, order));
+  await logActivity("approval-dispatch", `${data.kind || "action"} ${state}: ${data.summary || id} (${id})${note ? " — " + note : ""}`);
+  return { action: "dispatch", state, id };
 }
 
 // Everything already proposed or applied to, as ONE JSON blob. role-scout used to read every
@@ -1215,6 +1257,9 @@ async function dispatch(cmd, rest) {
       break;
     case "edit-approval":
       result = await setApprovalStatus(rest[0], "edited", rest.slice(1).join(" "));
+      break;
+    case "approval-dispatch":
+      result = await setApprovalDispatch(rest[0], rest[1], rest.slice(2).join(" "));
       break;
     case "log":
       await logActivity(rest[0] || "note", rest.slice(1).join(" "));

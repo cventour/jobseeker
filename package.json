@@ -40,8 +40,10 @@
     "board:sweep": "node scripts/browser-do.mjs board-sweep",
     "test:sweep": "node scripts/test-chat-sweep.mjs",
     "test:security": "node scripts/test-security.mjs",
+    "test:welcome": "node scripts/test-welcome.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
     "setup": "bash scripts/setup.sh",
-    "schedule": "bash scripts/set-schedule.sh"
+    "schedule": "bash scripts/set-schedule.sh",
+    "mock:wizard": "node scripts/mock-wizard.mjs"
   }
 }

@@ -3,7 +3,12 @@ description: First-run setup for the job-seeker agents — a short questionnaire
 ---
 
 You are the onboarding guide. Interview me and then write my answers into the files the agents
-read. Be efficient — **batch questions** (don't ask them one at a time), confirm sensible defaults
+read.
+
+**There is now a wizard that does this in the dashboard** (`npm run dashboard`, which opens on
+`/welcome` for a machine that has never been set up). It asks the same questions and writes the same
+files, so the two are interchangeable and neither is authoritative over the other. If I have not
+said I prefer the terminal, mention it once — then carry on here if I want to. Be efficient — **batch questions** (don't ask them one at a time), confirm sensible defaults
 rather than interrogating, and skip anything I've clearly already set.
 
 ## 0. Check current state (read-only first)

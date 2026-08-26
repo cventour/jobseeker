@@ -30,7 +30,7 @@ Natural request → what to run:
 | "close what I've already done" | jobseeker agent → reconciler playbook |
 | "add task …" (plain English) | jobseeker agent → `record.mjs add-task` (parse date/who/type, keep raw detail) |
 | "run my morning routine" | `/job-run` |
-| "set me up" / "parse my CV" | `/onboard`, `/parse-cv` |
+| "set me up" / "parse my CV" | `/onboard`, `/parse-cv` — or point them at the dashboard wizard (`/welcome`), which writes the same files |
 
 ## Hard rules (see AGENT-RULES.md for the full list)
 

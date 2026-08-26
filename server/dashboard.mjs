@@ -151,6 +151,7 @@ async function loadAll() {
     readTable(BOARDS_FILE),
   ]);
   const markets = await loadMarkets();
+  const marketAskDismissed = await readMarketAskDismissed();
   // Roles left behind by a vertical dropped from criteria. Computed here because page() is
   // synchronous and this needs to read the proposal records.
   const orphans = await orphanedProposals().catch(() => ({ count: 0, ids: [], byMarket: {} }));
@@ -160,6 +161,34 @@ async function loadAll() {
     lastRun = JSON.parse(await fs.readFile(path.join(DATA, ".job-run.status.json"), "utf8"));
   } catch {
     /* never run, or the file predates the status machinery */
+  }
+  // The Run now buttons. Two separate facts, and the page needs both: whether something is running
+  // RIGHT NOW (the lock file, which carries the live pid), and how the last one you started ended.
+  // Without the first, the buttons invite a second run that scripts/run-now.sh would only refuse
+  // after the click; without the second, a run that failed at 08:03 looks exactly like one that
+  // worked.
+  let runNow = null;
+  try {
+    const raw = await fs.readFile(path.join(DATA, ".run-now.lock"), "utf8");
+    const [pid, slug, started] = raw.trim().split(/\s+/);
+    // A lock whose process is gone is stale — a crashed run must not wedge the button forever.
+    // process.kill(pid, 0) throws ESRCH when there is no such process; it sends no signal.
+    let alive = false;
+    try {
+      process.kill(Number(pid), 0);
+      alive = true;
+    } catch {
+      alive = false;
+    }
+    if (alive) runNow = { pid: Number(pid), slug, started };
+  } catch {
+    /* nothing running */
+  }
+  let lastRunNow = null;
+  try {
+    lastRunNow = JSON.parse(await fs.readFile(path.join(DATA, ".run-now.status.json"), "utf8"));
+  } catch {
+    /* nothing has been run from the dashboard yet */
   }
   // scripts/browser-probe.mjs writes this before every run. Surfaced because browser-only work
   // fails QUIETLY: WhatsApp and LinkedIn simply go unread and the run still reports success.
@@ -196,9 +225,12 @@ async function loadAll() {
     contacts,
     activity,
     markets,
+    marketAskDismissed,
     boards,
     orphans,
     lastRun,
+    runNow,
+    lastRunNow,
     browser,
     status: await systemStatus(),
     lastDigest,
@@ -1407,13 +1439,12 @@ function profileHTML(profile) {
   const status = parsed
     ? `<span class="pill s-offer">CV parsed ${esc(parsed)}</span>`
     : `<span class="pill s-rejected">No CV parsed</span>`;
+  // The upload form that used to live here left you to run /parse-cv yourself, and a PDF uploaded
+  // but never read is indistinguishable from no CV at all. One page now does both.
   return `<p>${status} ${profile.data?.source_cv ? esc(profile.data.source_cv) : ""}</p>
-    <form id="cvform" class="inline">
-      <input type="file" id="cvfile" accept="application/pdf" required>
-      <button type="submit">Upload CV (PDF)</button>
-      <span id="cvmsg" class="muted"></span>
-    </form>
-    <p class="muted">After uploading, run <code>/parse-cv</code> in Claude Code to build <code>data/profile.md</code>.</p>`;
+    <p><a class="btn-small linkbtn" href="/setup-step?step=cv&back=cv">${parsed ? "Replace my CV" : "Add my CV"}</a></p>
+    <p class="muted">Uploading it also reads it — Claude turns the PDF into <code>data/profile.md</code>,
+      which is what roles are scored against. <code>/parse-cv</code> in Claude Code does the same thing.</p>`;
 }
 
 function addTaskFormHTML() {
@@ -1482,6 +1513,55 @@ function tabStrip(tabs, activeId) {
 // The Setup page. Three jobs: let the user set what is settable, show honestly what is working, and
 // for the handful of things a web page CANNOT do (macOS permissions, Chrome's own setting, the
 // Claude Code connections) say so plainly and give the steps rather than pretending.
+// What setup did not finish, derived from the files rather than from a progress counter — so it is
+// equally right for someone who skipped a step in the wizard, someone who never ran it, and someone
+// who set everything up with /onboard.
+function unfinishedHTML(w, markets) {
+  if (!w) return "";
+  const rows = [];
+  const row = (state, cls, title, why, action) =>
+    `<div class="titem"><span class="ti-co"><span class="${cls}">${esc(state)}</span></span>
+      <span class="ti-tx"><b>${esc(title)}</b><div class="ti-sub">${why}</div></span>
+      <span class="ti-acts">${action}</span></div>`;
+
+  if (!w.profileParsed) {
+    rows.push(
+      row(
+        w.cvFiles.length ? "unread" : "missing",
+        "bad-pill",
+        "Your CV",
+        w.cvFiles.length
+          ? "A PDF is uploaded but nothing has been read out of it, so roles are not scored against your experience."
+          : "Roles cannot be scored against your experience without it, and the summary JobSeeker drafts for you stays empty.",
+        `<a class="btn-small linkbtn" href="/setup-step?step=cv&back=settings">${w.cvFiles.length ? "Read it now" : "Add my CV"}</a>`
+      )
+    );
+  }
+  const unresearched = (markets || []).filter((m) => !m.table.rows.length);
+  if (!String(w.criteria.markets || "").trim()) {
+    rows.push(row("none yet", "bad-pill", "Markets",
+      "A market is an industry to research. Without one there is nowhere to hunt, and Today stays empty.",
+      `<a class="btn-small linkbtn" href="/setup-step?step=markets&back=settings">Add a market</a>`));
+  } else if (unresearched.length) {
+    rows.push(row("unresearched", "bad-pill", `Markets — ${esc(unresearched.map((m) => m.label).join(", "))}`,
+      "Added, but never researched, so they have no company list yet.",
+      `<a class="btn-small linkbtn" href="/">Research from Today</a>`));
+  }
+  if (!w.answered) {
+    rows.push(row(w.skipped.includes("answers") ? "skipped" : "empty", "ok-pill", "Application answers",
+      "The handful of questions every form asks. Nothing depends on them — it just saves you looking them up.",
+      `<a class="btn-small linkbtn" href="/setup-step?step=answers&back=settings">Fill them in</a>`));
+  }
+  if (!rows.length) return "";
+  return `<div class="tblock">
+      <p class="th">Unfinished setup <span class="muted">— each one runs on its own; nothing else has to be redone</span></p>
+      ${rows.join("")}
+      <p class="tiny muted" style="margin-top:10px">Prefer the terminal? <code>/onboard</code> in Claude
+        Code asks the same questions and writes the same files. Or
+        <a href="/welcome">run the whole wizard again</a>.</p>
+    </div>`;
+}
+
 function setupHTML(st, criteria, marketNames = []) {
   if (!st) return `<p class="empty">Status unavailable.</p>`;
   const cfg = st.config || {};
@@ -1820,15 +1900,125 @@ function todayHTML(all, dueToday, appTok, appIds) {
       </div>`
     : "";
 
+  // The approval loop, closed. This block used to be a read-only list: it told you a message was
+  // waiting and gave you nowhere to say yes, so the decision happened in Claude Code or on WhatsApp
+  // and the dashboard — the screen you actually live in — could not do the one thing the product
+  // promises. data/approvals/appr_gwrlzf.md is what that cost: an approval nobody could act on
+  // here sat pending for fifteen days while the message it gated had already gone out by hand.
+  //
+  // So: the full text is readable without leaving the page, the decision is two clicks, and
+  // approving DISPATCHES the send (scripts/send-approval.sh) rather than leaving an approved
+  // record for a future run to notice. Edit is not a separate state to manage — you edit and
+  // approve in one move, because an edited draft you did not then approve helps nobody.
+  const approvalItem = (a) => {
+    const d = a.data;
+    const kind = String(d.kind || "message");
+    const isApply = kind === "apply";
+    const days = d.created ? Math.max(0, Math.round((Date.now() - Date.parse(d.created)) / 86400000)) : null;
+    const stale = days != null && days >= 3;
+    const preview = String(a.body || "").trim();
+    const hidden = `<input type="hidden" name="_tab" value="today"><input type="hidden" name="id" value="${esc(d.id)}">`;
+    // An application approval cannot be "sent" — it is a form half-filled in a browser session that
+    // /apply is holding open. Saying "Approve & send" on one would be a lie, so it says what it
+    // does: it records your yes, and /apply does the submitting.
+    const approveLabel = isApply ? "Approve" : "Approve &amp; send";
+    return `<div class="titem">
+      <span class="ti-co">${esc(kind)}</span>
+      <span class="ti-tx">${esc(d.summary || d.title || d.id)}
+        <div class="ti-sub">${esc(d.channels || "")}${d.channels ? " · " : ""}<code>${esc(d.id)}</code></div>
+        ${days != null ? `<div class="ti-age${stale ? " stale" : ""}">waiting ${days === 0 ? "since today" : `${days} day${days === 1 ? "" : "s"}`}${stale ? " — it will read as late" : ""}</div>` : ""}
+        ${preview ? `<details class="apprev"><summary>Show the full text</summary><pre class="digest">${esc(preview)}</pre></details>` : `<div class="ti-sub muted">No preview was recorded.</div>`}
+        ${isApply ? `<div class="ti-sub muted">Approving records your decision. The submit itself happens in the <code>/apply</code> session that opened this.</div>` : ""}
+      </span>
+      <span class="ti-acts">
+        <form method="POST" action="/decide-approval" class="inline">${hidden}
+          <input type="hidden" name="decision" value="approve">
+          <button type="submit">${approveLabel}</button></form>
+        ${isApply ? "" : `<span class="popwrap">
+          <button type="button" class="btn-small" aria-haspopup="dialog" aria-expanded="false"
+            onclick="popToggle('edit_${esc(d.id)}', this)">Edit…</button>
+          <div id="edit_${esc(d.id)}" class="pop pop-wide hide" role="dialog" aria-label="Edit and approve ${esc(d.summary || d.id)}">
+            <form method="POST" action="/decide-approval">${hidden}
+              <input type="hidden" name="decision" value="edit">
+              <p class="pop-h">Edit, then send</p>
+              <p class="pop-sub">Your wording replaces the draft. Keep the <code>channel:</code> and <code>to:</code> lines — they are how the sender knows where this goes.</p>
+              <textarea name="text" rows="12" spellcheck="true">${esc(preview)}</textarea>
+              <div class="pop-acts">
+                <button type="button" class="btn-secondary" onclick="popClose('edit_${esc(d.id)}')">Cancel</button>
+                <button type="submit">Save &amp; send</button>
+              </div>
+            </form>
+          </div>
+        </span>`}
+        <span class="popwrap">
+          <button type="button" class="dismbtn" aria-haspopup="dialog" aria-expanded="false"
+            onclick="popToggle('rej_${esc(d.id)}', this)">Reject</button>
+          <div id="rej_${esc(d.id)}" class="pop hide" role="dialog" aria-label="Reject ${esc(d.summary || d.id)}">
+            <form method="POST" action="/decide-approval">${hidden}
+              <input type="hidden" name="decision" value="reject">
+              <p class="pop-h">Reject this</p>
+              <p class="pop-sub">Nothing is sent. The record stays, so the agent that drafted it does not draft it again tomorrow.</p>
+              <textarea name="note" rows="3" placeholder="Why? Optional." autocomplete="off"></textarea>
+              <div class="pop-acts">
+                <button type="button" class="btn-secondary" onclick="popClose('rej_${esc(d.id)}')">Cancel</button>
+                <button type="submit">Reject</button>
+              </div>
+            </form>
+          </div>
+        </span>
+      </span>
+    </div>`;
+  };
+
   const approvalsBlock = pendingApprovals.length
     ? `<div class="tblock">
         <p class="th">Approvals waiting <span class="muted">— nothing is sent until you approve it</span></p>
-        ${pendingApprovals
-          .map(
-            (a) => `<div class="titem"><span class="ti-co">${esc(a.data.kind || "message")}</span>
-              <span class="ti-tx">${esc(a.data.summary || a.data.title || a.data.id)}
-              <div class="ti-sub">created ${esc(a.data.created || "?")} · <code>${esc(a.data.id)}</code></div></span></div>`
-          )
+        ${pendingApprovals.map(approvalItem).join("")}
+      </div>`
+    : "";
+
+  // What happened after you decided. Without this the loop still feels open: you press "Approve &
+  // send", the row vanishes, and the page has told you nothing about whether the message left the
+  // building. A send that failed is the case that matters, so it is not hidden behind a tab.
+  const recentlyDecided = all.approvals
+    .filter((a) => a.data.status && a.data.status !== "pending" && a.data.decided)
+    .filter((a) => Date.now() - Date.parse(a.data.decided) < 7 * 86400000)
+    .sort((x, y) => String(y.data.decided).localeCompare(String(x.data.decided)))
+    .slice(0, 5);
+
+  const DISPATCH_TEXT = {
+    queued: ["warn", "queued to send"],
+    running: ["warn", "sending now"],
+    sent: ["ok", "sent"],
+    failed: ["bad", "SEND FAILED — see data/.approvals.log"],
+  };
+
+  const decidedBlock = recentlyDecided.length
+    ? `<div class="tblock">
+        <p class="th">Recently decided <span class="muted">— the last 7 days</span></p>
+        ${recentlyDecided
+          .map((a) => {
+            const d = a.data;
+            const dis = DISPATCH_TEXT[String(d.dispatch || "")];
+            const st = String(d.status);
+            const stCls = st === "rejected" ? "bad-pill" : "ok-pill";
+            return `<div class="titem">
+              <span class="ti-co"><span class="${stCls}">${esc(st)}</span></span>
+              <span class="ti-tx">${esc(d.summary || d.id)}
+                <div class="ti-sub">${esc(String(d.decided).slice(0, 16).replace("T", " "))} · <code>${esc(d.id)}</code>
+                  ${dis ? ` · <span class="${dis[0] === "ok" ? "ok-pill" : dis[0] === "bad" ? "bad-pill" : "warn-pill"}">${esc(dis[1])}</span>` : ""}</div>
+              </span>
+              <span class="ti-acts">${
+                d.dispatch === "failed"
+                  ? `<form method="POST" action="/decide-approval" class="inline">
+                       <input type="hidden" name="_tab" value="today">
+                       <input type="hidden" name="id" value="${esc(d.id)}">
+                       <input type="hidden" name="decision" value="retry">
+                       <button type="submit" class="btn-small">Try sending again</button></form>`
+                  : ""
+              }</span>
+            </div>`;
+          })
           .join("")}
       </div>`
     : "";
@@ -1841,6 +2031,99 @@ function todayHTML(all, dueToday, appTok, appIds) {
       : "",
   ].filter(Boolean);
 
+  // Run now.
+  //
+  // Until this existed, everything the product does was behind a terminal: `claude`, then a slash
+  // command. The dashboard could set the 08:00 schedule but not run the thing it schedules — so on
+  // any day you wanted an answer before tomorrow morning, the answer was "open a terminal".
+  //
+  // Each button is one command, spending real money, so it says what it costs you in time and it
+  // is honest about what it will not do: nothing here applies to anything or sends anything, the
+  // same guarantee the scheduled run gives. While one is running the whole strip is disabled —
+  // Chrome is serial (AGENT-RULES §13), and two runs reading WhatsApp at once read each other's
+  // tabs. run-now.sh refuses a second run anyway; disabling is so the refusal is never a surprise.
+  const RUNS = [
+    ["track", "Read my channels", "Gmail, Calendar, WhatsApp and LinkedIn — 2–5 min"],
+    ["curate", "Find new roles", "Scores openings at your target companies — 3–8 min"],
+    ["followup", "Draft follow-ups", "Writes what is due, for you to approve above — 1–3 min"],
+    ["job-run", "Everything", "The full daily pipeline — 10–40 min"],
+  ];
+  const busy = all.runNow;
+  const lastNow = all.lastRunNow;
+  const runNowBlock = `<div class="tblock runnow">
+      <p class="th">Run now <span class="muted">— nothing here applies or sends; it queues approvals for you</span></p>
+      ${
+        busy
+          ? `<div class="alert warn"><strong>${esc(RUNS.find((r) => r[0] === busy.slug)?.[1] || busy.slug)} is running.</strong>
+               Started ${esc(String(busy.started).slice(0, 16).replace("T", " "))} · pid ${esc(String(busy.pid))}.
+               <span class="muted">Only one run at a time — Chrome cannot be driven by two.</span></div>`
+          : ""
+      }
+      <div class="runbtns">
+        ${RUNS.map(
+          ([slug, label, sub]) => `<form method="POST" action="/run-now" class="inline">
+            <input type="hidden" name="_tab" value="today">
+            <input type="hidden" name="slug" value="${esc(slug)}">
+            <button type="submit" class="${slug === "job-run" ? "btn-secondary" : ""}"${busy ? " disabled" : ""} title="${esc(sub)}">${esc(label)}</button>
+          </form>`
+        ).join("")}
+      </div>
+      ${
+        lastNow && !busy
+          ? `<div class="ti-sub">Last run from here: <b>${esc(lastNow.label || lastNow.slug)}</b> —
+               ${
+                 lastNow.state === "ok"
+                   ? `<span class="ok-pill">finished</span>`
+                   : `<span class="bad-pill">${esc(lastNow.state)}</span> ${esc(lastNow.detail || "")}`
+               }
+               <span class="muted">${esc(String(lastNow.finished || "").slice(0, 16).replace("T", " "))}</span></div>`
+          : ""
+      }
+    </div>`;
+
+  // The one question setup deliberately did not ask. A market with an empty table has never been
+  // researched, and until it is there is nothing for anything else to work with — so this is asked
+  // where the answer has a visible consequence (this screen, empty) rather than in a wizard where
+  // it is one more thing to click past.
+  //
+  // "Not now" is honoured but not forgotten: it becomes one amber line instead of a card. Hiding it
+  // entirely would leave Today permanently empty with no explanation of why.
+  const unresearched = (all.markets || []).filter((m) => !m.table.rows.length);
+  const askable = unresearched.filter((m) => !(all.marketAskDismissed || []).includes(m.name));
+  const deferred = unresearched.filter((m) => (all.marketAskDismissed || []).includes(m.name));
+  const askMarket = askable[0];
+
+  const marketAskBlock = askMarket
+    ? `<div class="tblock askblock">
+        <p class="th">One thing before you start</p>
+        <p class="askh">Shall I research ${esc(askMarket.label)} now?</p>
+        <p class="asksub">You picked it as a market, but nothing has been looked at yet. Researching it
+          means finding the companies in it, ranking them against what you are after, and starting to
+          watch their careers pages. Until that happens there is nothing to hunt through — this screen
+          stays empty.</p>
+        <div class="askacts">
+          <form method="POST" action="/research-market" class="inline">
+            <input type="hidden" name="_tab" value="today">
+            <input type="hidden" name="market" value="${esc(askMarket.label)}">
+            <button type="submit">Yes — research it now</button></form>
+          <form method="POST" action="/defer-market-ask" class="inline">
+            <input type="hidden" name="_tab" value="today">
+            <input type="hidden" name="market" value="${esc(askMarket.name)}">
+            <button type="submit" class="btn-secondary">Not now</button></form>
+        </div>
+        <p class="tiny muted">A few minutes and about a dollar. Not now is fine: it happens on your
+          first scheduled run, or whenever you press <b>Run now</b> below.</p>
+      </div>`
+    : deferred.length
+      ? `<div class="alert warn"><strong>${esc(deferred.map((m) => m.label).join(", "))}
+           ${deferred.length === 1 ? "has" : "have"} not been researched.</strong>
+           Until then there are no companies to watch and no roles to find.
+           <form method="POST" action="/research-market" class="inline">
+             <input type="hidden" name="_tab" value="today">
+             <input type="hidden" name="market" value="${esc(deferred[0].label)}">
+             <button type="submit" class="btn-small">Research ${esc(deferred[0].label)} now</button></form></div>`
+      : "";
+
   const boardsBlock = boardsNeeding
     ? `<div class="alert warn"><strong>${boardsNeeding} careers boards have no readable URL.</strong>
          Agents cannot fix these by trying harder — paste the real careers page and the next scout run
@@ -1851,9 +2134,12 @@ function todayHTML(all, dueToday, appTok, appIds) {
     ${runBanner}
     ${digestBlock}
     ${queues.length ? `<div class="tsummary">${queues.join(" · ")}</div>` : ""}
+    ${marketAskBlock}
     ${advancesBlock}
     ${approvalsBlock}
+    ${decidedBlock}
     ${boardsBlock}
+    ${runNowBlock}
     <div class="tblock taskblock">
       <p class="th">Follow-ups <span class="muted">— due on or before today; switch to All for the rest</span></p>
       ${/* The Tasks tab was this same table with the same five columns, filtered differently — so it
@@ -2041,7 +2327,7 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
-${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label))))}
+${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label))))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
@@ -2235,6 +2521,23 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .wpct{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-size:12.5px}
 .ok-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(46,160,67,.16);color:#3fb950}
 .bad-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
+/* A send that is on its way is neither good news nor bad — it is unfinished, and reads as amber. */
+.warn-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(88,120,200,.18);color:#8fa6e8}
+/* The message itself, collapsed by default: Today is a list of decisions, and five open drafts
+   would bury the other four things that need you. One click reveals the exact text that will go. */
+.askblock{border:1px solid var(--acc);border-radius:12px;padding:14px 16px;background:var(--card)}
+.askh{font-size:16px;font-weight:700;margin:2px 0 6px;letter-spacing:-.01em}
+.asksub{color:var(--mut);font-size:13px;margin:0 0 12px;max-width:64ch;line-height:1.6}
+.askacts{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+.runbtns{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 2px}
+.runbtns button[disabled]{opacity:.45;cursor:not-allowed}
+.apprev{margin-top:6px}
+.apprev summary{cursor:pointer;font-size:12px;color:var(--mut);width:max-content}
+.apprev summary:hover{color:var(--fg)}
+.apprev pre.digest{margin-top:6px;max-height:320px;overflow:auto}
+/* Editing a message needs room to see it. The narrow popover is right for a one-line reason and
+   wrong for the paragraph you are about to send under your own name. */
+.pop.pop-wide{width:min(560px,calc(100vw - 48px))}
 form.inline{display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0}
 /* The row actions sit on one line: search the company, paste a URL, or remove it for good. */
 .bacts{display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
@@ -3522,6 +3825,1045 @@ async function handleSaveConfig(form) {
   await logActivity("config-edit", `Updated settings: ${touched.join(", ")}`);
 }
 
+// =================================================================================================
+// THE WELCOME WIZARD
+// =================================================================================================
+//
+// Everything JobSeeker does used to be behind a terminal: clone, `npm run setup`, `claude`, then a
+// slash command. This is the same setup with a face on it — seven steps, three of them skippable,
+// each writing the SAME files /onboard writes. It is a face, not a new source of truth: criteria,
+// the answer library and the config remain the only record of what you chose, so the wizard and
+// /onboard can be used interchangeably and neither can drift from the other.
+//
+// Deliberately server-rendered, one form POST per step. A client-side wizard would hold your
+// answers in memory until a final Save, which means closing the window at step 5 loses steps 1-4.
+// Here each step is written the moment you leave it, so a wizard abandoned halfway is simply a
+// setup that is halfway done — which is exactly what Settings then offers to finish.
+
+const WELCOME_STEPS = [
+  { key: "start",    label: "Start" },
+  { key: "cv",       label: "CV",        skippable: true },
+  { key: "targets",  label: "Targets" },
+  { key: "markets",  label: "Markets",   skippable: true },
+  { key: "answers",  label: "Answers",   skippable: true },
+  { key: "channels", label: "Channels" },
+  { key: "schedule", label: "Schedule" },
+];
+
+const ANSWERS_FILE = path.join(ROOT, "templates", "answers.md");
+const CV_STATUS_FILE = path.join(DATA, ".cv-parse.status.json");
+
+// The lists behind step 5. These questions are asked from a fixed set by every form that asks them
+// at all, so they are lists to pick from — typing them invites typos an agent must then interpret.
+// Every list ends in an escape hatch: a closed list you cannot get out of is software telling
+// someone their situation is invalid.
+const ANSWER_FIELDS = [
+  {
+    key: "visa",
+    row: "work authorization / visa",
+    label: "Work authorisation",
+    opts: [
+      "Citizen — no sponsorship needed",
+      "Permanent resident",
+      "Residence visa — transferable",
+      "Residence visa — not transferable",
+      "Would need sponsorship",
+      "Student or graduate visa",
+    ],
+  },
+  {
+    key: "notice",
+    row: "notice period",
+    label: "Notice period",
+    opts: ["Available immediately", "2 weeks", "1 month", "2 months", "3 months", "Longer — negotiable"],
+  },
+  {
+    key: "relocate",
+    row: "willing to relocate",
+    label: "Willing to relocate",
+    opts: ["Yes — anywhere", "Yes — within the region", "Yes, for the right role", "No — remote or local only"],
+  },
+  {
+    key: "heard",
+    row: "how did you hear about us",
+    label: "How did you hear about us",
+    opts: ["LinkedIn", "The company website", "A referral", "A job board", "A recruiter"],
+  },
+];
+
+// Salary is the one answer nobody else can shape for you: a list of bands would either anchor you
+// low or make you commit to a number you have not decided on. It stays a blank line, and so does
+// the summary, which goes out in your name.
+const ANSWER_FREE = [
+  { key: "salary", row: "salary expectation", label: "Salary expectation", placeholder: "open — happy to discuss" },
+];
+
+async function readAnswers() {
+  const text = await safeRead(ANSWERS_FILE);
+  const out = { pitch: "" };
+  for (const f of [...ANSWER_FIELDS, ...ANSWER_FREE]) {
+    const re = new RegExp(`^\\|\\s*${f.row.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\|\\s*(.*?)\\s*\\|`, "im");
+    const m = re.exec(text);
+    out[f.key] = m ? m[1].trim() : "";
+  }
+  // The pitch is whatever prose follows the table.
+  const after = text.split(/\n\s*\n/).filter((b) => !b.includes("|") && !b.startsWith("#"));
+  out.pitch = (after.pop() || "").trim();
+  return out;
+}
+
+async function writeAnswers(form) {
+  const rows = [];
+  for (const f of [...ANSWER_FIELDS, ...ANSWER_FREE]) {
+    // "Something else" swaps the list for a free field; the typed value is the answer, and which
+    // control produced it is not worth recording.
+    const raw = String(form[f.key] ?? "").trim();
+    const val = raw === "__other" ? String(form[`${f.key}_other`] ?? "").trim() : raw;
+    if (val) rows.push(`| ${f.row} | ${sanitizeCell(val)} |`);
+  }
+  const pitch = String(form.pitch ?? "").trim();
+  const text =
+    "# Application answer library\n\n" +
+    "| question_pattern | answer |\n|------------------|--------|\n" +
+    (rows.length ? rows.join("\n") + "\n" : "") +
+    (pitch ? `\n${pitch}\n` : "");
+  await fs.mkdir(path.dirname(ANSWERS_FILE), { recursive: true });
+  await writeFileAtomic(ANSWERS_FILE, text);
+  await logActivity("onboard", `Answer library saved (${rows.length} answer${rows.length === 1 ? "" : "s"})`);
+}
+
+// Merge a few keys into criteria.md, leaving the rest — and the notes body — exactly as they were.
+// handleSaveCriteria rewrites the whole frontmatter from one big form; the wizard fills it in over
+// two separate steps, so a whole-file write from either would blank what the other had just saved.
+async function mergeCriteria(fields) {
+  const file = path.join(DATA, "criteria.md");
+  const { data, body } = parseFrontmatter(await safeRead(file));
+  const keys = ["markets", "roles", "locations", "seniority", "weight_market", "weight_role", "weight_cv"];
+  const merged = { ...data, ...fields };
+  // Weights are never asked for during setup — nobody can tune them before seeing a single score —
+  // so the documented defaults are seeded once and Settings owns them from then on.
+  if (!merged.weight_market) merged.weight_market = "0.4";
+  if (!merged.weight_role) merged.weight_role = "0.35";
+  if (!merged.weight_cv) merged.weight_cv = "0.25";
+  const out = {};
+  for (const k of keys) out[k] = String(merged[k] ?? "").trim();
+  await fs.mkdir(DATA, { recursive: true });
+  await writeFileAtomic(file, stringifyFrontmatter(out, body || "# Notes\n", keys));
+  return out;
+}
+
+// Run a command and hand back its stdout. systemStatus() has had its own copy of this since before
+// there was a second caller; this one is module-level so the wizard can read the schedule back
+// without duplicating it a third time.
+const shOut = (cmd, args, timeout = 8000) =>
+  new Promise((resolve) =>
+    execFile(cmd, args, { cwd: ROOT, timeout }, (err, stdout) =>
+      resolve({ ok: !err, out: String(stdout || "").trim() })
+    )
+  );
+
+async function readConfigRaw() {
+  const file = path.join(ROOT, "config", "job-seeker.config.md");
+  const existing = await safeRead(file);
+  return { file, existing, data: parseFrontmatter(existing).data || {} };
+}
+
+// Write config keys the settings form does not own (the wizard's own bookkeeping), preserving the
+// comments that document the file.
+async function mergeConfig(fields) {
+  const { file, existing, data } = await readConfigRaw();
+  const merged = { ...data };
+  for (const [k, v] of Object.entries(fields)) merged[k] = sanitizeCell(String(v ?? "").trim());
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await writeFileAtomic(file, rewriteConfigPreservingComments(existing, merged));
+  return merged;
+}
+
+// What is actually set up, read from the files themselves rather than from a progress counter.
+// A wizard that remembered "you did step 3" would disagree with the files the moment anything was
+// edited elsewhere — and /onboard, the dashboard and a text editor can all edit them.
+async function welcomeState({ schedule = false } = {}) {
+  const { data: cfg } = await readConfigRaw();
+  const criteria = parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {};
+  const profileText = await safeRead(path.join(DATA, "profile.md"));
+  const profile = parseFrontmatter(profileText).data || {};
+  let cvFiles = [];
+  try {
+    cvFiles = (await fs.readdir(CV_DIR)).filter((f) => f.toLowerCase().endsWith(".pdf"));
+  } catch {
+    /* nothing uploaded yet */
+  }
+  let cvStatus = null;
+  try {
+    cvStatus = JSON.parse(await fs.readFile(CV_STATUS_FILE, "utf8"));
+  } catch {
+    /* never parsed */
+  }
+  const answers = await readAnswers();
+  // Reading the schedule means running launchctl's plist reader, so it happens only on the step
+  // that shows it — not on every dashboard load.
+  const sched = schedule ? await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--show"]) : { out: "" };
+  const schedRaw = (sched.out || "").trim();
+  const [schedTime, schedDays] = schedRaw.split(/\s+/);
+  return {
+    cfg,
+    criteria,
+    profileParsed: Boolean(String(profile.titles || "").trim()) && !/No CV parsed yet/i.test(profileText),
+    cvFiles,
+    cvStatus,
+    answers,
+    answered: Boolean(answers.visa || answers.notice || answers.relocate || answers.salary || answers.pitch),
+    scheduled: /^\d\d:\d\d$/.test(schedTime || ""),
+    schedTime: /^\d\d:\d\d$/.test(schedTime || "") ? schedTime : "08:00",
+    schedDays: schedDays || "",
+    skipped: String(cfg.welcome_skipped || "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+    done: Boolean(String(cfg.welcome_done || "").trim()),
+  };
+}
+
+// Someone who has never been set up should not land on an empty dashboard and be left to find the
+// wizard. Someone who HAS — including every existing install, which predates the wizard entirely —
+// must never be redirected away from their own data, so an existing criteria file counts as done.
+function needsWelcome(st) {
+  if (st.done || String(st.cfg.welcome_left || "").trim()) return false;
+  return !String(st.criteria.markets || "").trim() && !String(st.criteria.roles || "").trim();
+}
+
+// ---- rendering -----------------------------------------------------------------------------
+
+function welcomeStepper(ix, st) {
+  return `<div class="wsteps">${WELCOME_STEPS.map((step, i) => {
+    const skipped = st.skipped.includes(step.key);
+    const cls = i === ix ? "on" : i < ix ? (skipped ? "past skip" : "past") : "";
+    const n = i < ix ? (skipped ? "–" : "✓") : String(i + 1);
+    return `<span class="wstep ${cls}"><span class="wn">${n}</span><span class="wt">${esc(step.label)}</span></span>`;
+  }).join('<span class="wbar"></span>')}</div>`;
+}
+
+// Every step ends the same way, so the way out is always in the same place: continue, back, skip
+// where skipping is allowed, and leave. Leaving is never punished and never hidden.
+function welcomeFoot(ix, { nextLabel = "Continue", disable = "", skipLabel = "", skipNote = "", extra = "" } = {}) {
+  const step = WELCOME_STEPS[ix];
+  return `<div class="wacts">
+      <button type="submit" name="action" value="next"${disable ? ` disabled title="${esc(disable)}"` : ""}>${esc(nextLabel)}</button>
+      ${ix > 0 ? `<button type="submit" name="action" value="back" class="btn-secondary" formnovalidate>Back</button>` : ""}
+      ${step.skippable && !extra ? `<button type="submit" name="action" value="skip" class="btn-small" formnovalidate>${esc(skipLabel || "Skip for now")}</button>` : ""}
+      ${extra}
+      <span class="wspacer"></span>
+      <button type="submit" name="action" value="leave" class="btn-small" formnovalidate>Leave setup</button>
+    </div>
+    ${skipNote ? `<p class="wnote">${skipNote}</p>` : ""}`;
+}
+
+function answerPick(f, current) {
+  const known = f.opts.includes(current);
+  const other = Boolean(current) && !known;
+  return `<label class="wfield">
+    <span class="lbl">${esc(f.label)}</span>
+    <select name="${esc(f.key)}" class="winput" data-other="${esc(f.key)}_other">
+      <option value=""${current ? "" : " selected"}>Choose…</option>
+      ${f.opts.map((o) => `<option${o === current ? " selected" : ""}>${esc(o)}</option>`).join("")}
+      <option value="__other"${other ? " selected" : ""}>Something else…</option>
+    </select>
+    <input type="text" name="${esc(f.key)}_other" class="winput wother${other ? "" : " hide"}"
+           value="${esc(other ? current : "")}" placeholder="In your own words">
+  </label>`;
+}
+
+// The CV card, which is really three cards: nothing yet, working, and a result. The two phases are
+// separated because they cost wildly different things — saving the file is instant and local, and
+// understanding it is a Claude call that leaves the machine. Collapsing them into one spinner would
+// hide both facts.
+function welcomeCVCard(st) {
+  const running = st.cvStatus?.state === "running";
+  const failed = st.cvStatus?.state === "failed";
+  const parsed = st.profileParsed;
+  const newest = st.cvFiles.length ? st.cvFiles[st.cvFiles.length - 1] : "";
+
+  if (!st.cvFiles.length) {
+    return `<div class="wdrop" id="wdrop">
+        <div class="wdrop-big">Drop your CV here</div>
+        <div class="muted">PDF · <button type="button" class="linkbtn" id="wpick">or choose a file</button></div>
+        <input type="file" id="wfile" accept="application/pdf" class="hide">
+        <div class="wprog hide" id="wupprog"><i></i></div>
+      </div>`;
+  }
+
+  if (failed) {
+    return `<div class="alert bad"><strong>That file could not be read.</strong>
+        ${esc(st.cvStatus.detail || "")}</div>
+      <div class="wcard">
+        <div class="wrow"><span class="wok">✓</span><span>Saved on this Mac<em>templates/cv/${esc(newest)}</em></span></div>
+        <div class="wrow"><span class="wbad">!</span><span>Claude could not read it<em>${esc(st.cvStatus.detail || "")}</em></span></div>
+      </div>
+      <p class="wnote"><button type="button" class="linkbtn" id="wreplace">Try another file</button></p>
+      <input type="file" id="wfile" accept="application/pdf" class="hide">`;
+  }
+
+  return `<div class="wcard">
+      <div class="wrow"><span class="wok">✓</span><span>Saved on this Mac
+        <em>templates/cv/${esc(newest)} — the file itself stays here.</em></span></div>
+      <div class="wrow"><span class="${running ? "wwait" : "wok"}">${running ? "…" : "✓"}</span><span>
+        ${running ? "Claude is reading it" : "Read by Claude"}
+        <em>${running
+          ? "Half a minute or so. This is the one step that leaves your Mac — your CV is sent to Claude to be understood, the same way everything else here works."
+          : "Read by Claude, stored on this Mac. You can change any of it later."}</em>
+        ${parsed ? welcomeProfileRows(st) : running ? `<div class="wprog"><i class="anim"></i></div>` : ""}
+      </span></div>
+    </div>
+    ${running ? `<p class="wnote">Nothing here needs you. Walk on and it will be waiting, already filled in, by the time you reach the questions that use it.</p>` : ""}
+    <p class="wnote"><button type="button" class="linkbtn" id="wreplace">Use a different file</button> — or fix any line of it in Settings later.</p>
+    <input type="file" id="wfile" accept="application/pdf" class="hide">`;
+}
+
+function welcomeProfileRows(st) {
+  const p = st.profile || {};
+  const row = (k, v) => (v ? `<div class="wprow"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>` : "");
+  return `<div class="wprofile">
+    ${row("Titles", p.titles)}
+    ${row("Seniority", p.seniority)}
+    ${row("Domains", p.domains)}
+    ${row("Skills", String(p.skills || "").split(",").slice(0, 8).join(", "))}
+  </div>`;
+}
+
+function welcomeStepHTML(ix, st, mode = {}) {
+  const key = WELCOME_STEPS[ix].key;
+  const c = st.criteria;
+  const solo = Boolean(mode.standalone);
+
+  if (key === "start") {
+    return `<h1 class="wh1">JobSeeker remembers your job search.</h1>
+      <p class="wsub">It reads the channels you already use, keeps one honest picture of where
+        everything stands, and each morning tells you the few things that need you. Three things it
+        will never do:</p>
+      <div class="wcard">
+        <div class="wrow"><span class="pill">never</span><span>Acts for you. It finds, tracks and reminds — applying is yours, and always will be your decision to make.</span></div>
+        <div class="wrow"><span class="pill">never</span><span>Sends a message — email, LinkedIn or WhatsApp — without you approving that exact message.</span></div>
+        <div class="wrow"><span class="pill">never</span><span>Opens an unread chat, or logs a conversation that has nothing to do with your job search.</span></div>
+      </div>
+      <p class="wsub">Everything it learns is kept in plain text files on this Mac — no JobSeeker
+        account, no JobSeeker server, delete the folder and it is gone. The reading and the judgement
+        are done by Claude, so what it reads — your CV, your job-related mail and messages — goes to
+        Claude, and nowhere else.</p>
+      <div class="wacts">
+        <button type="submit" name="action" value="next">Start — about four minutes</button>
+        <span class="popwrap">
+          <button type="button" class="btn-small" aria-haspopup="dialog" aria-expanded="false"
+            onclick="popToggle('w_adv', this)">I would rather use the terminal</button>
+          <div id="w_adv" class="pop hide" role="dialog" aria-label="Set up in the terminal instead">
+            <p class="pop-h">Set up in the terminal instead</p>
+            <p class="pop-sub">Open Claude Code in this folder and run <code>/onboard</code>. It asks
+              the same questions in chat and writes the same files, so you can move between the two
+              freely. The wizard stays the default; <code>/onboard</code> is for people who would
+              rather type.</p>
+            <div class="pop-acts"><button type="button" class="btn-secondary" onclick="popClose('w_adv')">Back to the wizard</button></div>
+          </div>
+        </span>
+        <span class="wspacer"></span>
+        <button type="submit" name="action" value="leave" class="btn-small" formnovalidate>Leave setup</button>
+      </div>`;
+  }
+
+  if (key === "cv") {
+    const have = st.cvFiles.length > 0;
+    const running = st.cvStatus?.state === "running";
+    // Replacing a CV that already worked is a different act from adding the first one, and the
+    // things it quietly invalidates are worth saying BEFORE the upload, not discovering later.
+    const replacing = solo && st.profileParsed && !st.cvPrevious;
+    if (solo) {
+      return `<h1 class="wh1">${replacing ? "Replace your CV" : st.profileParsed ? "Your CV" : "Add your CV"}</h1>
+        <p class="wsub">${
+          replacing
+            ? "The new file is read by Claude and replaces what JobSeeker knows about your experience."
+            : "The file is saved on this Mac; Claude reads it to work out what it says."
+        }</p>
+        ${replacing ? `<div class="wcard" style="margin-bottom:12px">
+            <p class="th">What JobSeeker knows now <span class="muted">— from ${esc((st.profile || {}).source_cv || "your CV")}</span></p>
+            ${welcomeProfileRows(st)}
+            <p class="wnote">Reading a new one overwrites this. Two things it does not do:
+              roles already proposed keep the score they were given — only future hunts use the new
+              CV${st.answers.pitch ? "; and your two-line summary in the answer library was drafted from the OLD CV, so it may now describe a job you have left" : ""}.</p>
+          </div>` : ""}
+        ${welcomeCVCard(st)}
+        ${cvComparisonHTML(st)}
+        ${st.cvPrevious && st.answers.pitch ? `<div class="alert warn" style="margin-top:12px">
+            <strong>Your two-line summary still describes the old CV.</strong>
+            It is used when a form wants a summary about you —
+            <a href="/setup-step?step=answers&back=${esc(mode.back || "settings")}">check it now</a>.</div>` : ""}
+        ${standaloneFoot(key, mode.back, {
+          saveLabel: "Done",
+          // A comparison you have seen is a comparison that should stop appearing. Done is how you
+          // say so; without it, "what changed" and the stale-summary warning would greet you on
+          // every visit for the rest of the year.
+          canSave: Boolean(st.cvPrevious),
+        })}`;
+    }
+    return `<h1 class="wh1">${have && st.profileParsed ? "Is this right?" : "Your CV"}</h1>
+      <p class="wsub">${
+        have
+          ? st.profileParsed
+            ? "This drives how every role is scored from now on, so it is worth ten seconds."
+            : "Saving it is instant. Understanding it is a Claude call — that is the part worth waiting on."
+          : "Everything else here can be filled in from it — so this is the one step worth doing now. The file is saved on this Mac; Claude reads it to work out what it says."
+      }</p>
+      ${welcomeCVCard(st)}
+      ${welcomeFoot(ix, {
+        nextLabel: st.profileParsed ? "That is right" : running ? "Continue — finish this in the background" : "Continue",
+        disable: have ? "" : "Drop a CV in first, or skip this step",
+        skipLabel: "Skip — I will add it later",
+        // Skipping is the one decision here whose cost lands on screens you have not reached yet, so
+        // it is spelled out before the skip rather than discovered later. The app's own dialog, not a
+        // browser confirm(): that cannot carry a list and reads like the page is broken.
+        extra: `<span class="popwrap">
+            <button type="button" class="btn-small" aria-haspopup="dialog" aria-expanded="false"
+              onclick="popToggle('w_skipcv', this)">Skip — I will add it later</button>
+            <div id="w_skipcv" class="pop pop-wide hide" role="dialog" aria-label="Skip your CV">
+              <p class="pop-h">Skip your CV?</p>
+              <p class="pop-sub">Without it, here is what I will not be able to do:</p>
+              <ul class="impact">
+                <li>Judge how well a posting matches your experience. Roles are still found and ranked, but on the job title alone, so the ranking is blunter.</li>
+                <li>Tell you why a role fits, or where the gap is — the part worth reading before you spend an evening on it.</li>
+                <li>Draft the "two lines about you" that most forms ask for.</li>
+                <li>Keep your CV to hand, so it is one click away when you sit down to apply.</li>
+              </ul>
+              <p class="pop-sub">It takes half a minute, and you can add it later from
+                <b>Settings ▸ Your CV</b>.</p>
+              <div class="pop-acts">
+                <button type="button" class="btn-secondary" onclick="popClose('w_skipcv')">Add my CV</button>
+                <button type="submit" name="action" value="skip" formnovalidate>Skip anyway</button>
+              </div>
+            </div>
+          </span>`,
+      })}`;
+  }
+
+  if (key === "targets") {
+    return `<h1 class="wh1">What are you looking for?</h1>
+      <p class="wsub">${
+        st.profileParsed
+          ? "Suggestions come from your CV. Keep what fits, drop what does not."
+          : st.cvStatus?.state === "running"
+            ? "Your CV is still being read — its suggestions appear here when it lands."
+            : "No CV, so there is nothing to suggest from. These are yours to write."
+      }</p>
+      <div class="wcard wstack">
+        ${chipsFieldHTML("roles", "Roles", c.roles ?? "", {
+          suggestions: String((st.profile || {}).titles || "").split(",").map((x) => x.trim()).filter(Boolean),
+          placeholder: "add a role…",
+        })}
+        ${chipsFieldHTML("locations", "Locations", c.locations ?? "", {
+          suggestions: (() => {
+            const raw = String((st.profile || {}).locations || "");
+            return raw.split(raw.includes(";") ? ";" : ",").map((x) => x.trim()).filter(Boolean);
+          })(),
+          placeholder: "add a location…",
+        })}
+        ${chipsFieldHTML("seniority", "Seniority", c.seniority ?? "", {
+          suggestions: String((st.profile || {}).seniority || "").split(",").map((x) => x.trim()).filter(Boolean),
+          placeholder: "add a level…",
+        })}
+      </div>
+      <p class="wnote">How roles get scored — market 0.40, role 0.35, CV match 0.25. Sensible
+        defaults; change them in Settings once you have seen a few.</p>
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix)}`;
+  }
+
+  if (key === "markets") {
+    return `<h1 class="wh1">Which markets should it hunt in?</h1>
+      <p class="wsub">A market is an industry to research. JobSeeker builds a ranked list of the
+        companies in it worth your time, then watches their careers pages.</p>
+      <div class="wcard">
+        ${chipsFieldHTML("markets", "Markets", c.markets ?? "", {
+          suggestions: String((st.profile || {}).domains || "").split(",").map((x) => x.trim()).filter(Boolean),
+          placeholder: "add a market…",
+        })}
+      </div>
+      <p class="wnote">Adding a market costs nothing. Researching it — ranking the companies in it —
+        is a few minutes of work, so JobSeeker asks you about that once you are inside, rather than
+        holding up setup for it.</p>
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix, {
+        skipLabel: "Skip markets entirely",
+        skipNote:
+          "Skipping means no company list yet, so role hunting has nowhere to look — Today stays empty " +
+          "until you add one. Settings ▸ Markets runs this same step whenever you are ready.",
+      })}`;
+  }
+
+  if (key === "answers") {
+    const a = st.answers;
+    return `<h1 class="wh1">The questions every application form asks</h1>
+      <p class="wsub">Write them down once, and stop looking them up. They are kept with everything
+        else on this Mac, and JobSeeker brings them out when you are working on an application.</p>
+      <div class="wcard wstack">
+        <div class="wtwo">${answerPick(ANSWER_FIELDS[0], a.visa)}${answerPick(ANSWER_FIELDS[1], a.notice)}</div>
+        <div class="wtwo">${answerPick(ANSWER_FIELDS[2], a.relocate)}${answerPick(ANSWER_FIELDS[3], a.heard)}</div>
+        <label class="wfield"><span class="lbl">Salary expectation</span>
+          <input type="text" name="salary" class="winput" value="${esc(a.salary)}" placeholder="open — happy to discuss">
+          <span class="wnote">In your own words. Leaving it open is a perfectly good answer, and the one most people give.</span>
+        </label>
+        <label class="wfield"><span class="lbl">Two lines about you — for when a form wants a summary</span>
+          <textarea name="pitch" class="winput" rows="4">${esc(a.pitch)}</textarea>
+          <span class="wnote">${
+            st.profileParsed
+              ? "Your CV is read, so there is something to draft from — write it in your own words; it goes out under your name."
+              : "No CV, so nothing to draft from — this one is on you."
+          }</span>
+        </label>
+      </div>
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix, {
+        skipLabel: "Skip for now",
+        skipNote:
+          "Nothing else depends on these — skipping costs you nothing but the looking-up. Settings keeps " +
+          "the same list whenever you want to fill it in.",
+      })}`;
+  }
+
+  if (key === "channels") {
+    const cfg = st.cfg;
+    const on = (k, dflt = true) => (cfg[k] === undefined ? dflt : String(cfg[k]) !== "false");
+    const b = st.browser;
+    const canRead = Boolean(b?.capabilities?.read_page_content);
+    return `<h1 class="wh1">What may it read?</h1>
+      <p class="wsub">Each of these can be turned off again in Settings, at any time.</p>
+      <div class="wcard">
+        <div class="wrow"><span class="pill ok-pill">always on</span><span><b>Gmail &amp; Calendar</b>
+          <em>Recruiter mail, ATS updates, interview invitations. Read-only, through Claude Code's own
+          connector — there is nothing to switch on here.</em></span></div>
+        <label class="wrow wpick"><input type="checkbox" name="whatsapp_web_enabled" ${on("whatsapp_web_enabled") ? "checked" : ""}>
+          <span><b>WhatsApp Web</b>
+          <em>Only threads with a job-search signal are recorded. Unread chats are never opened —
+          opening one marks it read and destroys your own sense of what still needs you.</em></span></label>
+        <div class="wrow"><span class="wsub2">${chipsFieldHTML("ignored_chats", "Never log these chats", cfg.ignored_chats ?? "", {
+          placeholder: "chat name…",
+          hint: "matched on the start of the chat name",
+        })}</span></div>
+        <label class="wrow wpick"><input type="checkbox" name="linkedin_enabled" ${on("linkedin_enabled") ? "checked" : ""}>
+          <span><b>LinkedIn</b>
+          <em>${canRead
+            ? "Read from the LinkedIn you are already logged into."
+            : "Chrome cannot be read on this Mac yet, so this will do nothing until that is fixed — everything else still works. <a href=\"/settings?tab=setup\">Show me the steps</a>"}</em></span></label>
+      </div>
+      <div class="wcard wstack" style="margin-top:12px">
+        <label class="wfield"><span class="lbl">Where should approvals and the daily digest reach you?</span>
+          ${chipsFieldHTML("approval_channels", "", cfg.approval_channels ?? "chat", {
+            suggestions: ["chat", "whatsapp"],
+            placeholder: "chat, whatsapp…",
+          })}
+        </label>
+        <label class="wfield"><span class="lbl">WhatsApp number for the digest <span class="muted">— optional</span></span>
+          <input type="text" name="whatsapp_owner_jid" class="winput" value="${esc(cfg.whatsapp_owner_jid ?? "")}"
+                 placeholder="971500000000@s.whatsapp.net">
+          <span class="wnote">Blank is fine. Without it the digest waits for you on Today.</span>
+        </label>
+      </div>
+      <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled">
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix)}`;
+  }
+
+  // schedule
+  const daily = st.scheduled;
+  const days = (st.schedDays || "").split(",").filter(Boolean);
+  const DAYNAMES = [["Mon", 1], ["Tue", 2], ["Wed", 3], ["Thu", 4], ["Fri", 5], ["Sat", 6], ["Sun", 0]];
+  return `<h1 class="wh1">When should it run?</h1>
+    <p class="wsub">A run is a Claude session, so it costs real money — usually a few dollars a day.</p>
+    <div class="wcard">
+      <label class="wrow wpick"><input type="radio" name="mode" value="manual" ${daily ? "" : "checked"}>
+        <span><b>Only when I ask</b><em>Nothing runs on its own; you press <b>Run now</b> on Today.
+        Start here, and add a schedule once it has earned some trust.</em></span></label>
+      <label class="wrow wpick"><input type="radio" name="mode" value="daily" ${daily ? "checked" : ""}>
+        <span><b>On a schedule</b><em>Reads your channels while you are elsewhere, with the summary
+        waiting when you get back. Needs one more macOS permission, which JobSeeker will ask for.</em>
+        <div class="wsched">
+          <span class="lbl">Which days</span>
+          <div class="wdays">${DAYNAMES.map(([label, n]) => {
+            const chosen = days.length ? days.includes(String(n)) : [1, 2, 3, 4, 5].includes(n);
+            return `<label class="wday"><input type="checkbox" name="day" value="${n}" ${chosen ? "checked" : ""}><span>${label}</span></label>`;
+          }).join("")}</div>
+          <div class="wpresets">
+            <button type="button" class="btn-small" data-preset="1,2,3,4,5">Weekdays</button>
+            <button type="button" class="btn-small" data-preset="0,1,2,3,4,5,6">Every day</button>
+            <button type="button" class="btn-small" data-preset="0,6">Weekends</button>
+          </div>
+          <span class="lbl" style="margin-top:10px">At what time</span>
+          <input type="time" name="time" class="winput wtime" value="${esc(st.schedTime)}">
+        </div></span></label>
+    </div>
+    <p class="wnote">Sensible spending limits are already in place, and every run is checked against
+      them before it starts. You can see what runs have actually cost, and change the limits, in
+      <b>Settings ▸ Spending</b> — once you have a few real runs to judge by.</p>
+    ${solo ? standaloneFoot("schedule", mode.back) : welcomeFoot(ix, { nextLabel: "Finish — take me to Today" })}`;
+}
+
+// The same step, outside the flow.
+//
+// Changing your CV — or your markets, or your answers — months later is MAINTENANCE, not setup, and
+// the two want opposite things. Setup is a corridor: finish this, go to the next. Maintenance is an
+// errand: change one thing and go back where you came from. Dropping someone into the wizard at
+// step 2 gives them a stepper promising five more steps and a Continue that walks them into
+// Targets, which is why every entry point outside the wizard lands here instead.
+//
+// `back` is an allow-list, never a URL from the query string: a page that redirects wherever it is
+// told is a redirect anyone can aim.
+const BACK_TO = new Map([
+  ["settings", { url: "/settings?tab=setup", label: "Settings" }],
+  ["cv", { url: "/settings?tab=cv", label: "Settings" }],
+  ["today", { url: "/", label: "Today" }],
+]);
+
+function standaloneFoot(key, back, { saveLabel = "Save", canSave = true } = {}) {
+  const b = BACK_TO.get(back) || BACK_TO.get("settings");
+  return `<div class="wacts">
+      ${canSave ? `<button type="submit" name="action" value="next">${esc(saveLabel)}</button>` : ""}
+      <a class="btn-small linkbtn" href="${esc(b.url)}">${canSave ? "Cancel" : `Back to ${esc(b.label)}`}</a>
+    </div>`;
+}
+
+function welcomeStandalonePage(st, ix, back, flash) {
+  const step = WELCOME_STEPS[ix];
+  const b = BACK_TO.get(back) || BACK_TO.get("settings");
+  return `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(step.label)} — JobSeeker</title>
+${HEAD_ICONS}
+<style>${CSS}${WELCOME_CSS}</style>
+</head><body class="wbody">
+<header>${BRAND("Job Seeker")}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a></header>
+${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
+<main class="wwrap">
+  <form method="POST" action="/welcome-step" class="wform">
+    <input type="hidden" name="step" value="${esc(step.key)}">
+    <input type="hidden" name="return" value="standalone">
+    <input type="hidden" name="back" value="${esc(back)}">
+    ${welcomeStepHTML(ix, st, { standalone: true, back })}
+  </form>
+</main>
+<script>${JS}${WELCOME_JS}</script>
+</body></html>`;
+}
+
+// What is about to be replaced, next to what the new file says. "Is this better than what I had?"
+// is the only question that matters when re-reading a CV, and it cannot be answered from a screen
+// that shows one of the two.
+function cvComparisonHTML(st) {
+  const prev = st.cvPrevious;
+  if (!prev || !prev.titles) return "";
+  const now = st.profile || {};
+  const same = String(prev.titles || "") === String(now.titles || "") && String(prev.seniority || "") === String(now.seniority || "");
+  const row = (k, a, bb) =>
+    a || bb
+      ? `<div class="wprow"><span class="k">${esc(k)}</span>
+          <span class="v"><span class="was">${esc(a || "—")}</span>
+          <span class="arrow">→</span> ${esc(bb || "—")}</span></div>`
+      : "";
+  return `<div class="wcard" style="margin-top:12px">
+      <p class="th">${same ? "Nothing changed" : "What changed"}
+        <span class="muted">— was ${esc(prev.source_cv || "your previous CV")}</span></p>
+      <div class="wprofile">
+        ${row("Titles", prev.titles, now.titles)}
+        ${row("Seniority", prev.seniority, now.seniority)}
+        ${row("Domains", prev.domains, now.domains)}
+      </div>
+      <p class="wnote">Roles already proposed keep the score they were given — only future hunts use
+        the new CV.</p>
+    </div>`;
+}
+
+function welcomePage(st, ix, flash) {
+  return `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welcome to JobSeeker</title>
+${HEAD_ICONS}
+<style>${CSS}${WELCOME_CSS}</style>
+</head><body class="wbody">
+<header>${BRAND("Job Seeker")}</header>
+${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
+<main class="wwrap">
+  ${welcomeStepper(ix, st)}
+  ${welcomeRibbon(st, ix)}
+  <form method="POST" action="/welcome-step" class="wform" enctype="application/x-www-form-urlencoded">
+    <input type="hidden" name="step" value="${esc(WELCOME_STEPS[ix].key)}">
+    ${welcomeStepHTML(ix, st)}
+  </form>
+</main>
+<script>${JS}${WELCOME_JS}</script>
+</body></html>`;
+}
+
+// Whether you waited on the CV or walked on, the answer to "did it read my CV?" is on screen. A
+// parse that finishes silently two steps later is indistinguishable from one that died.
+function welcomeRibbon(st, ix) {
+  if (WELCOME_STEPS[ix].key === "cv") return "";
+  const s = st.cvStatus?.state;
+  if (s === "running") {
+    return `<div class="alert">Claude is still reading your CV. The questions further on fill
+      themselves in the moment it lands.</div>`;
+  }
+  if (s === "failed") {
+    return `<div class="alert warn"><strong>Your CV could not be read.</strong>
+      ${esc(st.cvStatus.detail || "")} Nothing is scored against your experience until it is —
+      <a href="/setup-step?step=cv&back=today">try another file</a>.</div>`;
+  }
+  return "";
+}
+
+const WELCOME_CSS = `
+.wbody{background:var(--bg)}
+.wwrap{max-width:760px;margin:0 auto;padding:26px clamp(16px,4vw,28px) 80px}
+.wh1{font-size:23px;font-weight:700;letter-spacing:-.015em;margin:0 0 6px}
+.wsub{color:var(--mut);font-size:13.5px;margin:0 0 16px;max-width:64ch}
+.wsub2{flex:1;min-width:0}
+.wnote{font-size:11.5px;color:var(--mut);margin:9px 0 0;max-width:64ch;line-height:1.6}
+.wcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.wstack{display:flex;flex-direction:column;gap:14px}
+.wtwo{display:flex;gap:13px;flex-wrap:wrap}.wtwo>*{flex:1;min-width:200px}
+.wrow{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+.wrow:last-child{border-bottom:0}
+.wrow em{font-style:normal;color:var(--mut);font-size:12.5px;display:block;margin-top:3px;line-height:1.55}
+.wrow.wpick{cursor:pointer;border-radius:9px;padding:11px 9px;margin:0 -9px}
+.wrow.wpick:hover{background:var(--bg)}
+.wrow.wpick input{margin-top:3px;flex:0 0 auto;accent-color:var(--acc);width:16px;height:16px}
+.wok,.wbad,.wwait{width:21px;height:21px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;
+  font-size:11px;font-weight:700;margin-top:1px}
+.wok{background:rgba(46,160,67,.16);color:#3fb950}
+.wbad{background:rgba(214,138,0,.16);color:#d68a00}
+.wwait{background:var(--line);color:var(--mut)}
+.wfield{display:flex;flex-direction:column;gap:5px;min-width:0}
+.winput{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  color:var(--fg);font:inherit;font-size:13.5px}
+.winput:focus{outline:2px solid var(--acc);outline-offset:-1px;border-color:transparent}
+textarea.winput{line-height:1.55;resize:vertical}
+select.winput{cursor:pointer}
+.wother.hide{display:none}
+.wtime{max-width:150px}
+/* stepper */
+.wsteps{display:flex;align-items:center;flex-wrap:wrap;margin-bottom:20px}
+.wstep{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
+.wstep .wn{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;
+  font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.wstep.on{color:var(--fg);font-weight:600}
+.wstep.on .wn{background:var(--acc);border-color:var(--acc);color:#fff}
+.wstep.past .wn{background:var(--line);color:var(--fg)}
+.wstep.skip .wn{border-style:dashed;background:transparent}
+.wbar{width:18px;height:1px;background:var(--line);margin:0 7px;flex:0 0 auto}
+@media (max-width:660px){.wstep .wt{display:none}.wbar{width:9px;margin:0 4px}}
+/* actions */
+.wacts{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px}
+.wspacer{flex:1}
+.wacts button[disabled]{opacity:.42;cursor:not-allowed}
+.linkbtn{background:transparent;border:0;color:var(--acc);font:inherit;font-size:inherit;cursor:pointer;
+  padding:0;text-decoration:none}
+a.linkbtn.btn-small{border:1px solid var(--line);color:var(--mut);padding:6px 11px;border-radius:8px}
+a.linkbtn.btn-small:hover{color:var(--fg);background:var(--line)}
+/* drop zone */
+.wdrop{border:1.6px dashed var(--line);border-radius:12px;padding:32px 18px;text-align:center;
+  background:var(--card);cursor:pointer}
+.wdrop:hover,.wdrop.over{border-color:var(--acc)}
+.wdrop-big{font-size:15px;font-weight:600;margin-bottom:5px}
+.wprog{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:11px}
+.wprog i{display:block;height:100%;background:var(--acc);border-radius:99px;width:20%;transition:width .3s ease}
+.wprog i.anim{width:40%;animation:wslide 1.4s ease-in-out infinite}
+@keyframes wslide{0%{margin-left:-40%}100%{margin-left:100%}}
+@media (prefers-reduced-motion:reduce){.wprog i.anim{animation:none;width:100%;opacity:.5}}
+/* parsed profile */
+.wprofile{margin-top:11px;display:flex;flex-direction:column;gap:6px}
+.wprow{display:flex;gap:12px;align-items:baseline;font-size:13px}
+.wprow .k{width:78px;flex:0 0 auto;color:var(--mut);font-size:12px}
+.wprow .v{flex:1;min-width:0}
+.wprow .was{color:var(--mut);text-decoration:line-through;text-decoration-color:var(--line)}
+.wprow .arrow{color:var(--mut);padding:0 4px}
+/* schedule */
+.wsched{margin-top:11px;padding-top:11px;border-top:1px solid var(--line)}
+.wdays{display:flex;flex-wrap:wrap;gap:6px}
+.wday input{position:absolute;opacity:0;pointer-events:none}
+.wday span{display:block;border:1px solid var(--line);background:var(--bg);color:var(--mut);border-radius:8px;
+  padding:7px 11px;font-size:12.5px;font-weight:600;cursor:pointer;min-width:48px;text-align:center}
+.wday input:checked+span{background:var(--acc);border-color:var(--acc);color:#fff}
+.wday input:focus-visible+span{outline:2px solid var(--acc);outline-offset:2px}
+.wpresets{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+/* the skip dialog's list */
+.pop ul.impact{margin:0 0 12px;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.pop ul.impact li{position:relative;padding-left:18px;font-size:12.5px;line-height:1.5}
+.pop ul.impact li::before{content:"";position:absolute;left:3px;top:7px;width:5px;height:5px;border-radius:50%;
+  background:#d68a00}
+.hide{display:none}
+`;
+
+const WELCOME_JS = `
+(function(){
+  // "Something else" swaps the list for a plain field. Done here rather than by reloading the step,
+  // because a round-trip to reveal one input would lose everything else typed on the page.
+  document.querySelectorAll('select[data-other]').forEach(function(sel){
+    sel.addEventListener('change', function(){
+      var other = document.getElementsByName(sel.dataset.other)[0];
+      if(!other) return;
+      var on = sel.value === '__other';
+      other.classList.toggle('hide', !on);
+      if(on) other.focus();
+    });
+  });
+
+  // Day presets.
+  document.querySelectorAll('[data-preset]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var want = b.dataset.preset.split(',');
+      document.querySelectorAll('input[name="day"]').forEach(function(d){
+        d.checked = want.indexOf(d.value) !== -1;
+      });
+      var radio = document.querySelector('input[name="mode"][value="daily"]');
+      if(radio) radio.checked = true;   // choosing days IS choosing a schedule
+    });
+  });
+  document.querySelectorAll('.wsched input, .wsched button').forEach(function(el){
+    el.addEventListener('click', function(){
+      var radio = document.querySelector('input[name="mode"][value="daily"]');
+      if(radio) radio.checked = true;
+    });
+  });
+
+  // The CV upload. Sends the file, starts the parse, then reloads so the page renders from the
+  // status file rather than from anything this script believes.
+  var drop = document.getElementById('wdrop');
+  var file = document.getElementById('wfile');
+  var pick = document.getElementById('wpick');
+  var replace = document.getElementById('wreplace');
+
+  function upload(f){
+    if(!f) return;
+    if(f.type !== 'application/pdf' && !/\\.pdf$/i.test(f.name)){
+      alertRow('That is not a PDF. Export your CV as a PDF and try again.');
+      return;
+    }
+    if(drop){
+      drop.innerHTML = '<div class="wdrop-big">Saving ' + f.name.replace(/[<>&]/g,'') + '…</div>' +
+        '<div class="wprog"><i class="anim"></i></div>';
+    }
+    fetch('/upload-cv?name=' + encodeURIComponent(f.name), { method:'POST', body:f })
+      .then(function(r){ if(!r.ok) throw new Error('upload failed'); return fetch('/welcome-parse', {method:'POST', body:''}); })
+      .then(function(){ location.reload(); })
+      .catch(function(){ alertRow('That file could not be saved. Try again, or copy it into templates/cv/ yourself.'); });
+  }
+  function alertRow(msg){
+    var box = document.createElement('div');
+    box.className = 'alert bad';
+    box.textContent = msg;
+    var form = document.querySelector('.wform');
+    if(form) form.insertBefore(box, form.firstChild);
+  }
+
+  if(pick && file) pick.addEventListener('click', function(){ file.click(); });
+  if(replace && file) replace.addEventListener('click', function(){ file.click(); });
+  if(file) file.addEventListener('change', function(){ upload(file.files[0]); });
+  if(drop){
+    drop.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON' && file) file.click(); });
+    ['dragenter','dragover'].forEach(function(ev){
+      drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); });
+    });
+    ['dragleave','drop'].forEach(function(ev){
+      drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove('over'); });
+    });
+    drop.addEventListener('drop', function(e){
+      if(e.dataTransfer && e.dataTransfer.files) upload(e.dataTransfer.files[0]);
+    });
+  }
+
+  // While a parse is running, come back and look. A reload is enough: this step holds nothing the
+  // reader has typed, and rendering from the status file keeps one source of truth for the answer.
+  if(document.querySelector('.wprog i.anim') && !drop){
+    setTimeout(function(){ location.reload(); }, 4000);
+  }
+})();
+`;
+
+// ---- the POST side ---------------------------------------------------------------------------
+
+// One step at a time, written the moment you leave it. `action` decides where you go; the fields
+// decide what is saved. A skip saves nothing and records that you skipped, so Settings can offer
+// the step again without nagging about it.
+async function handleWelcomeStep(form) {
+  const key = String(form.step || "");
+  const ix = WELCOME_STEPS.findIndex((x) => x.key === key);
+  if (ix === -1) return { redirect: "/welcome", flash: { kind: "bad", msg: "Unknown step — nothing changed." } };
+  const action = String(form.action || "next");
+  // Outside the wizard there is no "next": you came from somewhere and you go back to it.
+  const solo = String(form.return || "") === "standalone";
+  const backKey = BACK_TO.has(String(form.back || "")) ? String(form.back) : "settings";
+  const backUrl = BACK_TO.get(backKey).url;
+  // Leaving is recorded, not just obeyed. Without that, someone who chose to set up later would be
+  // thrown back into the wizard on every single visit — which teaches them the button is a lie.
+  if (action === "leave") {
+    await mergeConfig({ welcome_left: nowISO() });
+    await logActivity("onboard", "Setup left unfinished — Settings will offer to pick it up");
+    return { redirect: "/", flash: { kind: "ok", msg: "Setup left as it is. Settings ▸ Finish setup picks up where you stopped." } };
+  }
+  if (!["next", "back", "skip"].includes(action)) {
+    return { redirect: "/welcome?step=" + key, flash: { kind: "bad", msg: "Unknown action — nothing changed." } };
+  }
+
+  if (action === "back") return { redirect: `/welcome?step=${WELCOME_STEPS[Math.max(0, ix - 1)].key}` };
+  if (solo && action === "skip") return { redirect: backUrl };
+  // The CV step has nothing to save — the parse already wrote data/profile.md — so its button means
+  // "I have read what changed", and clearing the snapshot is what that does.
+  if (solo && key === "cv" && action === "next") {
+    await fs.rm(CV_PREVIOUS_FILE, { force: true }).catch(() => {});
+    return { redirect: backUrl, flash: { kind: "ok", msg: "Your CV is in. Roles found from now on are scored against it." } };
+  }
+
+  const st = await welcomeState({ schedule: true });
+
+  if (action === "skip") {
+    const skipped = [...new Set([...st.skipped, key])];
+    await mergeConfig({ welcome_skipped: skipped.join(", ") });
+    await logActivity("onboard", `Setup step skipped: ${key}`);
+    return nextWelcome(ix, st, { kind: "ok", msg: "Skipped — Settings will offer it again whenever you want it." });
+  }
+
+  // Un-skip on the way forward: doing a step you once skipped should stop Settings asking for it.
+  if (st.skipped.includes(key)) {
+    await mergeConfig({ welcome_skipped: st.skipped.filter((x) => x !== key).join(", ") });
+  }
+
+  if (key === "targets") {
+    await mergeCriteria({
+      roles: String(form.roles ?? "").trim(),
+      locations: String(form.locations ?? "").trim(),
+      seniority: String(form.seniority ?? "").trim(),
+    });
+    await logActivity("onboard", `Targets saved: roles=[${form.roles ?? ""}] locations=[${form.locations ?? ""}]`);
+  }
+
+  if (key === "markets") {
+    const before = marketList(st.criteria.markets);
+    const beforeKeys = new Set(before.map(marketKey));
+    const wanted = marketList(form.markets ?? "");
+    await mergeCriteria({ markets: String(form.markets ?? "").trim() });
+    // A market with no file is a market nothing can research. setUpAddedMarkets is what the
+    // Settings form already calls, so a market added here and one added there are identical.
+    const added = wanted.filter((m) => !beforeKeys.has(marketKey(m)));
+    if (added.length) {
+      const setup = await setUpAddedMarkets(added);
+      if (setup.created.length) {
+        await logActivity("market-add", `Market file created for ${setup.created.join(", ")} — research it from Today`);
+      }
+    }
+  }
+
+  if (key === "answers") await writeAnswers(form);
+
+  if (key === "channels") {
+    const bools = ["whatsapp_web_enabled", "linkedin_enabled"];
+    const fields = {};
+    for (const k of bools) fields[k] = k in form ? "true" : "false";
+    fields.ignored_chats = String(form.ignored_chats ?? "").trim();
+    fields.approval_channels = String(form.approval_channels ?? "").trim() || "chat";
+    fields.whatsapp_owner_jid = String(form.whatsapp_owner_jid ?? "").trim();
+    await mergeConfig(fields);
+    await logActivity("onboard", `Channels saved: whatsapp=${fields.whatsapp_web_enabled} linkedin=${fields.linkedin_enabled}`);
+  }
+
+  if (key === "schedule") {
+    const mode = String(form.mode || "manual");
+    if (mode === "daily") {
+      const time = String(form.time || "").trim();
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+        return { redirect: "/welcome?step=schedule", flash: { kind: "bad", msg: `"${time}" is not a time — nothing was scheduled.` } };
+      }
+      // Checkboxes arrive as one value or several; normalise before validating, and refuse an empty
+      // set rather than installing a schedule that can never fire.
+      // parseForm joins repeated fields with commas (see its note), so a group of day checkboxes
+      // arrives as "1,2,3,4,5" — one string, not a list.
+      const days = [...new Set(String(form.day ?? "").split(",").map((d) => d.trim()))]
+        .filter((d) => /^[0-6]$/.test(d))
+        .sort();
+      if (!days.length) {
+        return { redirect: "/welcome?step=schedule", flash: { kind: "bad", msg: "Pick at least one day, or choose “Only when I ask”." } };
+      }
+      const r = await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), time, days.join(",")], 20000);
+      if (!r.ok) {
+        return { redirect: "/welcome?step=schedule", flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || "see docs/SCHEDULER.md"}` } };
+      }
+      await logActivity("onboard", `Scheduled: ${r.out}`);
+    } else if (st.scheduled) {
+      await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--remove"], 20000);
+      await logActivity("onboard", "Schedule removed — runs only when asked");
+    }
+    if (solo) return { redirect: backUrl, flash: { kind: "ok", msg: "Schedule saved." } };
+    await mergeConfig({ welcome_done: nowISO() });
+    await logActivity("onboard", "Setup finished from the wizard");
+    return { redirect: "/?welcome=done", flash: { kind: "ok", msg: "You are set up. Nothing has run yet." } };
+  }
+
+  if (solo) {
+    return { redirect: backUrl, flash: { kind: "ok", msg: `${WELCOME_STEPS[ix].label} saved.` } };
+  }
+  return nextWelcome(ix, st);
+}
+
+// Where "next" goes. The CV step is the only one that can be reached with work still in flight, and
+// walking on from it is deliberate — so nothing here waits for anything.
+function nextWelcome(ix, st, flash) {
+  const next = WELCOME_STEPS[Math.min(WELCOME_STEPS.length - 1, ix + 1)];
+  return { redirect: `/welcome?step=${next.key}`, flash };
+}
+
+// Which "shall I research this?" asks have been waved away. A dot-file rather than a config key:
+// it is transient bookkeeping about one screen, not a setting anybody would want to edit, and it is
+// keyed per market so adding a new one next month asks again.
+const MARKET_ASK_FILE = path.join(DATA, ".market-ask.json");
+
+// What data/profile.md said BEFORE the parse that is about to overwrite it. Taken at the moment the
+// parse starts, because by the time there is anything to compare against, the old values are gone.
+const CV_PREVIOUS_FILE = path.join(DATA, ".cv-parse.previous.json");
+
+async function snapshotProfile() {
+  const data = parseFrontmatter(await safeRead(path.join(DATA, "profile.md"))).data || {};
+  if (!String(data.titles || "").trim()) {
+    // Nothing worth comparing against — a first read has no "before", and writing an empty one
+    // would make the next screen claim a change that never happened.
+    await fs.rm(CV_PREVIOUS_FILE, { force: true }).catch(() => {});
+    return;
+  }
+  await writeFileAtomic(
+    CV_PREVIOUS_FILE,
+    JSON.stringify(
+      { titles: data.titles || "", seniority: data.seniority || "", domains: data.domains || "", source_cv: data.source_cv || "" },
+      null,
+      2
+    )
+  );
+}
+
+async function readCVPrevious() {
+  try {
+    return JSON.parse(await fs.readFile(CV_PREVIOUS_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function readMarketAskDismissed() {
+  try {
+    const j = JSON.parse(await fs.readFile(MARKET_ASK_FILE, "utf8"));
+    return Array.isArray(j.dismissed) ? j.dismissed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function handleDeferMarketAsk(form) {
+  const name = String(form.market || "").trim();
+  // The value is a market FILE name and is compared against the real list, never trusted as a path.
+  const known = (await loadMarkets()).some((m) => m.name === name);
+  if (!known) return { kind: "bad", msg: "Unknown market — nothing changed." };
+  const dismissed = [...new Set([...(await readMarketAskDismissed()), name])];
+  await writeFileAtomic(MARKET_ASK_FILE, JSON.stringify({ dismissed }, null, 2));
+  await logActivity("market-ask", `Deferred researching ${name} — it stays on Today as a reminder`);
+  return { kind: "ok", msg: "Left for later. It runs on your next scheduled run, or whenever you ask." };
+}
+
 // Actions the Setup page may run. An ALLOWLIST of named actions mapped to fixed scripts — never a
 // command from the request. This endpoint changes OS state (installs launch agents), so the set of
 // things it can do is closed and auditable, exactly as scripts/browser-agent.sh does.
@@ -3949,6 +5291,130 @@ async function setTaskStatusFor(ids, status, note = "") {
   return changed;
 }
 
+// Start one of the job-search commands from the dashboard.
+//
+// The slug is checked against the same closed list the script knows, not escaped and passed
+// through: this value comes from a browser and ends up on a command line, and an allow-list is the
+// only check that stays correct when the script grows a new argument.
+const RUN_SLUGS = new Map([
+  ["track", "Reading your channels"],
+  ["curate", "Looking for new roles"],
+  ["followup", "Drafting the follow-ups that are due"],
+  ["job-run", "Running the full daily pipeline"],
+]);
+
+async function handleRunNow(form) {
+  const slug = String(form.slug || "").trim();
+  const label = RUN_SLUGS.get(slug);
+  if (!label) return { kind: "bad", msg: `Unknown run ${JSON.stringify(slug).slice(0, 30)} — nothing started.` };
+
+  // Detached: these take minutes to tens of minutes. The page must come straight back, and the
+  // run's own log and status file are how it reports, not this response.
+  const child = spawn("bash", [path.join(ROOT, "scripts", "run-now.sh"), slug], {
+    cwd: ROOT,
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  await logActivity("run-now", `${slug} started from the dashboard`);
+  return {
+    kind: "ok",
+    msg: `${label} — it runs in the background. Reload to see what it found; progress is in data/.run-now.log.`,
+  };
+}
+
+// Decide one approval — and, when the decision is yes, actually send it.
+//
+// The write happens here rather than through record.mjs for the reason given above
+// handleSetProposalStatus: this POST already holds the data/ lock and record.mjs takes the same
+// lock, so shelling out would deadlock. The SEND is a different matter — it is minutes of work in
+// a `claude` session, so it is spawned detached, exactly like market research, and its result
+// comes back into the record as `dispatch:`.
+//
+// The permission is the record, never this click: scripts/send-approval.sh re-reads the file and
+// refuses anything not approved/edited. Two gates on the same fact is deliberate — this one can be
+// wrong (a stale page, a double click), and the one next to the send cannot.
+const APPROVAL_ID = /^appr_[A-Za-z0-9_-]{1,40}$/;
+
+async function handleDecideApproval(form) {
+  const id = String(form.id || "").trim();
+  const decision = String(form.decision || "").trim();
+  if (!APPROVAL_ID.test(id)) return { kind: "bad", msg: "That is not an approval id — nothing changed." };
+  if (!["approve", "edit", "reject", "retry"].includes(decision)) {
+    return { kind: "bad", msg: "Unknown decision — nothing changed." };
+  }
+
+  const file = path.join(DATA, "approvals", `${id}.md`);
+  let text;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch {
+    return { kind: "bad", msg: `Approval ${id} no longer exists.` };
+  }
+  const { data, body } = parseFrontmatter(text);
+  const kind = String(data.kind || "message");
+  const sendable = kind !== "apply";
+
+  // Retry is not a decision — it re-runs a send that failed, on a record already approved.
+  if (decision === "retry") {
+    if (!["approved", "edited"].includes(String(data.status))) {
+      return { kind: "bad", msg: `${id} is ${data.status || "undecided"} — there is nothing approved to send.` };
+    }
+    if (data.dispatch === "sent") return { kind: "bad", msg: `${id} was already sent.` };
+    dispatchApproval(id);
+    return { kind: "ok", msg: `Trying ${id} again — watch this page, or data/.approvals.log.` };
+  }
+
+  // Only a PENDING approval can be decided. Re-deciding is nearly always a stale page or a second
+  // click, and silently re-approving would send the same message twice. Deliberately no "cancel"
+  // for one already approved: the send is a detached session that may be mid-flight, and a button
+  // that promises to call it back when it cannot is worse than no button.
+  if (String(data.status) !== "pending") {
+    return { kind: "bad", msg: `${id} was already ${data.status} — reload the page to see where it got to.` };
+  }
+
+  let newBody = body;
+  if (decision === "edit") {
+    const edited = String(form.text ?? "").trim();
+    if (!edited) return { kind: "bad", msg: "The edited message was empty — nothing changed." };
+    newBody = edited.endsWith("\n") ? edited : edited + "\n";
+  }
+  if (decision === "reject") {
+    const note = String(form.note ?? "").trim();
+    if (note) newBody = `${body.trimEnd()}\n\n_Rejected from the dashboard: ${sanitizeCell(note)}_\n`;
+  }
+
+  data.status = decision === "approve" ? "approved" : decision === "edit" ? "edited" : "rejected";
+  data.decided = nowISO();
+  if (data.status !== "rejected" && sendable) data.dispatch = "queued";
+  // Assigning above already appended any new key in the right place; naming them explicitly here
+  // would write `dispatch:` with an empty value onto records that were never dispatched.
+  const order = Object.keys(data);
+  await writeFileAtomic(file, stringifyFrontmatter(data, newBody, order));
+  await logActivity(`approval-${data.status}`, `${kind} ${data.status} from the dashboard: ${data.summary || id} (${id})`);
+
+  if (data.status === "rejected") return { kind: "ok", msg: `Rejected. Nothing was sent.` };
+  if (!sendable) {
+    return { kind: "ok", msg: `Approved. Applications are submitted by the /apply session that opened this — nothing was sent from here.` };
+  }
+  dispatchApproval(id);
+  return {
+    kind: "ok",
+    msg: `Approved — sending now. Reload in a minute to see the outcome; the log is data/.approvals.log.`,
+  };
+}
+
+// Detached on purpose: a send is a whole `claude` session and the dashboard must never block on
+// one. Failures land in the record (`dispatch: failed`) and in the log, not in a lost HTTP response.
+function dispatchApproval(id) {
+  const child = spawn("bash", [path.join(ROOT, "scripts", "send-approval.sh"), id], {
+    cwd: ROOT,
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+}
+
 async function handleSetTaskStatus(form) {
   const id = (form.id ?? "").trim();
   const status = (form.status ?? "").trim();
@@ -4137,7 +5603,70 @@ const server = http.createServer(async (req, res) => {
         return res.end();
       }
     }
+    // The wizard. A GET renders one step from the files themselves; `leave` is the way out that
+    // does not pretend setup finished.
+    if (req.method === "GET" && url.pathname === "/welcome") {
+      const st = await welcomeState({ schedule: true });
+      st.profile = parseFrontmatter(await safeRead(path.join(DATA, "profile.md"))).data || {};
+      st.browser = null;
+      try {
+        st.browser = JSON.parse(await fs.readFile(path.join(DATA, ".browser-status.json"), "utf8"));
+      } catch {
+        /* the probe has not run here */
+      }
+      const want = url.searchParams.get("step");
+      const ix = Math.max(0, WELCOME_STEPS.findIndex((x) => x.key === want));
+      const flash = url.searchParams.get("flash")
+        ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
+        : null;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end(welcomePage(st, ix, flash));
+    }
+    // One step, on its own, for changing something long after setup.
+    if (req.method === "GET" && url.pathname === "/setup-step") {
+      const want = url.searchParams.get("step");
+      const ix = WELCOME_STEPS.findIndex((x) => x.key === want);
+      if (ix === -1) {
+        res.writeHead(303, { Location: "/settings?tab=setup" });
+        return res.end();
+      }
+      const st = await welcomeState({ schedule: WELCOME_STEPS[ix].key === "schedule" });
+      st.profile = parseFrontmatter(await safeRead(path.join(DATA, "profile.md"))).data || {};
+      st.cvPrevious = await readCVPrevious();
+      st.browser = null;
+      try {
+        st.browser = JSON.parse(await fs.readFile(path.join(DATA, ".browser-status.json"), "utf8"));
+      } catch {
+        /* the probe has not run here */
+      }
+      const back = BACK_TO.has(url.searchParams.get("back")) ? url.searchParams.get("back") : "settings";
+      const flash = url.searchParams.get("flash")
+        ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
+        : null;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end(welcomeStandalonePage(st, ix, back, flash));
+    }
+    if (req.method === "GET" && url.pathname === "/welcome-status") {
+      let st = null;
+      try {
+        st = JSON.parse(await fs.readFile(CV_STATUS_FILE, "utf8"));
+      } catch {
+        /* never parsed */
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(st || { state: "none" }));
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/settings")) {
+      // First run: nobody should have to discover the wizard. Existing installs are never bounced —
+      // an already-filled criteria file counts as set up, as does having left setup deliberately.
+      const w = await welcomeState();
+      if (needsWelcome(w) && !url.searchParams.get("flash")) {
+        res.writeHead(303, { Location: "/welcome" });
+        return res.end();
+      }
+      // Settings lists what setup did not finish, so the state it derives that from is loaded here
+      // rather than re-read inside a synchronous renderer.
+      res._welcome = w;
       const all = await loadAll();
       // The active tab is chosen server-side from ?tab= so there is no flash of the wrong pane, and
       // so a POST redirect can put you back where you were.
@@ -4148,6 +5677,7 @@ const server = http.createServer(async (req, res) => {
       // Render BEFORE writing headers. Doing it inside res.end() meant a template error left the
       // headers already sent, so the catch below could not send a 500 — it threw
       // ERR_HTTP_HEADERS_SENT and killed the whole process, taking the dashboard down.
+      all.welcome = res._welcome;
       const html = url.pathname === "/settings" ? settingsPage(all, flash) : page(all, flash);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
@@ -4215,6 +5745,20 @@ async function handlePost(req, res, url) {
     await handleUploadCV(req, url);
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("ok");
+    return;
+  }
+  // Starting the parse takes no fields, and must be handled before the body is parsed as a form.
+  if (url.pathname === "/welcome-parse") {
+    await snapshotProfile();
+    const child = spawn("bash", [path.join(ROOT, "scripts", "parse-cv.sh")], {
+      cwd: ROOT,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    await logActivity("cv-parse", "Reading the uploaded CV, started from the wizard");
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("started");
     return;
   }
   const form = parseForm(await readBody(req));
@@ -4288,6 +5832,21 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/advance-app-stage") {
     await handleAdvanceAppStage(form);
     return redirect(res, { kind: "ok", msg: "Stage advanced." });
+  }
+  if (url.pathname === "/run-now") {
+    return redirect(res, await handleRunNow(form));
+  }
+  if (url.pathname === "/welcome-step") {
+    const r = await handleWelcomeStep(form);
+    const q = r.flash ? `${r.redirect.includes("?") ? "&" : "?"}flash=${encodeURIComponent(r.flash.kind)}&msg=${encodeURIComponent(r.flash.msg)}` : "";
+    res.writeHead(303, { Location: r.redirect + q });
+    return res.end();
+  }
+  if (url.pathname === "/defer-market-ask") {
+    return redirect(res, await handleDeferMarketAsk(form));
+  }
+  if (url.pathname === "/decide-approval") {
+    return redirect(res, await handleDecideApproval(form));
   }
   if (url.pathname === "/set-task-status") {
     await handleSetTaskStatus(form);
