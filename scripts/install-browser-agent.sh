@@ -5,6 +5,12 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 LABEL="com.jobseeker.browser"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
+# ~/Library/LaunchAgents is NOT created by macOS — it appears the first time something installs a
+# per-user agent. On a Mac that never has, this script failed at the redirect below with a bare
+# "No such file or directory", which the installer then reported as "browser agent did not install"
+# with no way to act on it. Found by unzip-testing a release on a clean home directory.
+mkdir -p "$(dirname "$PLIST")"
+
 cat > "$PLIST" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

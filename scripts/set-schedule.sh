@@ -113,6 +113,9 @@ if ! plutil -lint "$TMP" >/dev/null 2>&1; then
   rm -f "$TMP"; exit 65
 fi
 
+# Same gap as install-browser-agent.sh: ~/Library/LaunchAgents does not exist until something has
+# put an agent there, so scheduling on a clean Mac failed at this mv.
+mkdir -p "$(dirname "$PLIST")"
 mv "$TMP" "$PLIST"
 launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null
 if launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null; then
