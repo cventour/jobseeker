@@ -144,6 +144,22 @@ Then, inside Claude Code, pair it to your own WhatsApp:
 `config/job-seeker.config.md`. Skip all of this and JobSeeker still works exactly the same — the
 digest is written to `data/.last-digest.md` and shown in the dashboard either way.
 
+**The short way.** Download the latest release, unzip it, and double-click
+**`JobSeeker Setup.command`**.
+
+> The first time, macOS will refuse to open it — it was downloaded from the internet and is not
+> signed by a registered developer. **Right-click the file and choose Open**, then Open again in the
+> dialog. That is macOS asking you to confirm you meant it, and it only happens once.
+
+It checks this Mac, installs what it legitimately can, starts JobSeeker, and opens it in its own
+window — no address bar, no tabs. From there the setup wizard takes over. If Node or Chrome is
+missing it says so and points you at the download, rather than installing a runtime or a browser
+behind your back.
+
+Closing that Terminal window stops JobSeeker. That is the whole quit story.
+
+**The developer way**, which does the same thing with more output:
+
 ```bash
 git clone <this repo> && cd JobSeeker
 npm run setup
