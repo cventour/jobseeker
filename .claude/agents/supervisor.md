@@ -26,7 +26,9 @@ you never edit `data/`, never apply, never message. You produce a crisp report t
      proposals aging without action.
    - **Stale markets:** any market whose `stale` is true hasn't been re-researched in a week —
      recommend a `prioritization-agent` pass for it.
-   - **Silently failed runs:** if `last_scheduled_run.state` is `failed` (or its `finished` date is
+   - **Silently failed or half-done runs:** if `last_scheduled_run.state` is `failed` or `partial`
+     (a `partial` run finished but could not do part of the job — read its `gaps` array and say which
+     part, using `coverage.blockers` verbatim), or if its `finished` date is
      older than yesterday), say so **first**. A scheduled run that dies produces no digest and no
      error — nothing else in the system will surface it, so this is the one check the user cannot
      make for themselves.

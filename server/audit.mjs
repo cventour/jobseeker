@@ -139,11 +139,198 @@ async function browserDebt(today) {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// What a run actually managed to do, and what it should do next.
+//
+// Both of the functions below exist so that ONE place decides these questions. The shell, the
+// dashboard and the digest all need the same answers, and three implementations of "did this run
+// work?" would drift within a month — which is exactly how a run came to report `ok` while its own
+// coverage block recorded that it could not read a single page.
+// ---------------------------------------------------------------------------------------------
+
+// A run may complete without doing the job. `gaps` names what it could not do, in stable slugs the
+// dashboard and the digest can both branch on; prose could carry the same facts but could not be
+// tested, and would be re-worded slightly differently in every consumer.
+async function runGaps() {
+  const gaps = [];
+  const detail = {};
+
+  let browser = null;
+  try {
+    browser = JSON.parse(await fs.readFile(path.join(DATA, ".browser-status.json"), "utf8"));
+  } catch {
+    /* probe never ran here — treated as "cannot read", which is the safe reading */
+  }
+  const canRead = browser?.capabilities?.read_page_content === true;
+  if (!canRead) {
+    gaps.push("browser-read");
+    // The blockers are written by scripts/browser-probe.mjs as the exact one-time fix. Carried
+    // verbatim, never paraphrased: AGENT-RULES §10 exists because a real run reported a generic
+    // "Chrome unavailable" and the user had nothing to act on.
+    detail.browser_blockers = browser?.blockers ?? [];
+    detail.browser_mode = browser?.capabilities?.read_mechanism ?? "none";
+  }
+
+  // Queued boards are only a GAP when there was no mechanism to drain them. The sweep is capped at
+  // BOARD_SWEEP_MAX per run by design, so a non-zero queue is the normal healthy state — counting
+  // it unconditionally would pin every run to `partial` forever, and a state that never changes
+  // carries no information.
+  if (!canRead) {
+    let boards = [];
+    try {
+      boards = (await readTable(path.join(DATA, "boards.md"))).rows;
+    } catch {
+      /* registry not built yet */
+    }
+    const queued = boards.filter((b) => (b.access === "browser" || b.access === "blocked") && !String(b.dismissed || "").trim());
+    if (queued.length > 0) {
+      gaps.push("boards-queued");
+      detail.boards_queued = queued.length;
+    }
+  }
+
+  // The digest IS the deliverable of an unattended run. One that was written but never reached the
+  // user is a real gap — though a recoverable one, since the dashboard renders it.
+  try {
+    const digest = await fs.readFile(path.join(DATA, ".last-digest.md"), "utf8");
+    const m = /^(delivered|not-delivered):\s*(.*)$/m.exec(digest);
+    if (m && m[1] === "not-delivered") {
+      gaps.push("digest-undelivered");
+      detail.digest_reason = m[2].trim();
+    }
+    detail.digest_present = true;
+  } catch {
+    // Absent entirely is NOT a gap — it is a failure, and the shell decides that, because only the
+    // shell knows whether the run exited cleanly.
+    detail.digest_present = false;
+  }
+
+  return { gaps, detail, state_hint: gaps.length ? "partial" : "ok" };
+}
+
+// ---- the schedule ladder ----------------------------------------------------------------------
+//
+// A daily run that produces roles nobody looks at is spending money to fill a queue. Rather than
+// cap the spend, the cadence steps down until it matches how the system is actually used, and says
+// so before each step.
+//
+// Two different signals on purpose. Slowing down is driven by CURATION — the proposals half is the
+// expensive half and the one being ignored. Switching off entirely is driven by ANY activity,
+// because that step should need genuine abandonment, not merely disinterest in one half.
+const LADDER_DRY_DAYS = 3;          // consecutive days without curation before each step down
+const LADDER_ABANDONED_DAYS = 14;   // days without ANY user action before the schedule is removed
+
+// Activity types written by the dashboard and by record.mjs when a PERSON acts on the queue.
+const CURATION_ACTS = new Set(["proposal-dismissed", "proposals-seen", "proposal-proposed", "lead-dismissed"]);
+// Any deliberate human action anywhere in the product.
+const USER_ACTS = new Set([
+  ...CURATION_ACTS,
+  "task-done", "task-dismissed", "task-in-progress", "task-open", "task-add", "task-add-nl",
+  "stage-advance", "advance-dismissed", "board-dismissed", "criteria-edit", "config-edit",
+  "market-add", "approval-approved", "approval-edited", "approval-rejected", "run-now",
+]);
+
+const LADDER_TIERS = [
+  { tier: 1, days: "0,1,2,3,4,5,6", label: "every day" },
+  { tier: 2, days: "1,4", label: "Mondays and Thursdays" },
+  { tier: 3, days: "1", label: "Mondays only" },
+  { tier: 4, days: null, label: "not scheduled" },
+];
+
+async function lastActivity(types) {
+  // activity.md is newest-first (record.mjs appends "top"), so the first match is the latest.
+  let text = "";
+  try {
+    text = await fs.readFile(path.join(DATA, "activity.md"), "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of text.split("\n")) {
+    const m = /^\|\s*(\d{4}-\d{2}-\d{2})T[^|]*\|\s*([a-z0-9-]+)\s*\|/i.exec(line);
+    if (m && types.has(m[2])) return m[1];
+  }
+  return null;
+}
+
+async function scheduleLadder(today) {
+  let state = null;
+  try {
+    state = JSON.parse(await fs.readFile(path.join(DATA, ".schedule-tier.json"), "utf8"));
+  } catch {
+    /* never armed */
+  }
+  // Until the ladder is armed it reports the facts and recommends nothing. Arming is a WRITE, and
+  // audit.mjs never writes — scripts/job-run.sh arms it on its first run after this ships. That is
+  // also the day-one guard: without an `armed_on`, backdated inactivity can never step anyone down
+  // for evidence they were never shown a warning about.
+  const armedOn = state?.armed_on || null;
+  const tier = Number(state?.tier) || 1;
+
+  const lastCuration = await lastActivity(CURATION_ACTS);
+  const lastAny = await lastActivity(USER_ACTS);
+  // Days counted from the later of "last acted" and "armed", so history before arming never counts.
+  const since = (d) => {
+    const from = armedOn && (!d || armedOn > d) ? armedOn : d;
+    return from ? daysBetween(from, today) : null;
+  };
+  const dryDays = since(lastCuration);
+  const idleDays = since(lastAny);
+
+  const out = {
+    armed: Boolean(armedOn),
+    armed_on: armedOn,
+    tier,
+    schedule: LADDER_TIERS.find((t) => t.tier === tier)?.label ?? "every day",
+    last_curation: lastCuration,
+    last_activity: lastAny,
+    dry_days: dryDays,
+    idle_days: idleDays,
+    warned_at: state?.warned_at || null,
+    action: "none",
+    next_tier: null,
+    why: "",
+  };
+  if (!armedOn) {
+    out.why = "The schedule ladder is not armed yet; the next run arms it and starts the clock from that day.";
+    return out;
+  }
+
+  // Abandonment wins over the gentler ladder — it is the only step that turns the system off.
+  if (idleDays !== null && idleDays >= LADDER_ABANDONED_DAYS && tier < 4) {
+    out.action = state?.warned_at ? "step" : "warn";
+    out.next_tier = 4;
+    out.why = `No action of any kind for ${idleDays} days.`;
+    return out;
+  }
+  if (dryDays !== null && dryDays >= LADDER_DRY_DAYS && tier < 3) {
+    out.action = state?.warned_at ? "step" : "warn";
+    out.next_tier = tier + 1;
+    out.why = `No roles reviewed for ${dryDays} days.`;
+    return out;
+  }
+  // Curation resumed while stepped down: the dashboard offers to restore, and only the user
+  // presses it. Recovery is deliberately never automatic.
+  if (tier > 1 && dryDays !== null && dryDays < LADDER_DRY_DAYS) {
+    out.action = "offer-restore";
+    out.why = "You have started reviewing roles again.";
+  }
+  return out;
+}
+
 // Did the last scheduled run finish? A run that dies silently is the failure mode you never
 // notice — no digest arrives and nothing complains. scripts/job-run.sh writes this file.
 async function lastRun() {
   try {
     return JSON.parse(await fs.readFile(path.join(DATA, ".job-run.status.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Snapshotted by scripts/job-run.sh immediately before it stamps its own "running".
+async function previousRun() {
+  try {
+    return JSON.parse(await fs.readFile(path.join(DATA, ".job-run.last.json"), "utf8"));
   } catch {
     return null;
   }
@@ -156,11 +343,22 @@ async function main() {
   // stale. `npm run audit` passes no argument, so anyone running it by hand got that. Defaulting to
   // the real date makes the no-argument case correct; the argument stays for tests and for pinning
   // a run to a specific day.
-  const today = process.argv[2] || new Date().toISOString().slice(0, 10);
+  const today = process.argv.slice(2).find((a) => !a.startsWith("--")) || new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) {
-    console.error(`audit: expected YYYY-MM-DD, got ${JSON.stringify(process.argv[2])}`);
+    console.error(`audit: expected YYYY-MM-DD, got ${JSON.stringify(today)}`);
     process.exit(64);
   }
+
+  // `--gaps` answers only "what could this run not do, and what should the schedule be?" and
+  // returns before reading every application, proposal and approval on disk. scripts/job-run.sh
+  // calls it twice per run; making it pay for the full audit would add seconds to every run for
+  // two small facts.
+  if (process.argv.includes("--gaps")) {
+    const g = await runGaps();
+    process.stdout.write(JSON.stringify({ ...g, schedule_ladder: await scheduleLadder(today) }) + "\n");
+    return;
+  }
+
   const applications = await readRecordDir(path.join(DATA, "applications"));
   const proposals = await readRecordDir(path.join(DATA, "proposals"));
   const approvals = await readRecordDir(path.join(DATA, "approvals"));
@@ -285,6 +483,12 @@ async function main() {
     markets: await staleMarkets(today),
     browser_debt: await browserDebt(today),
     last_scheduled_run: await lastRun(),
+    // The run BEFORE this one. `last_scheduled_run` describes the run doing the reading while it is
+    // still in flight, and says "running" — which is how a digest came to report its own status
+    // file as stuck. Anything asking "did the previous run work?" must read this.
+    previous_scheduled_run: await previousRun(),
+    run_gaps: await runGaps(),
+    schedule_ladder: await scheduleLadder(today),
   };
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
 }

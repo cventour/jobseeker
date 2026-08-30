@@ -93,8 +93,19 @@ coverage_json() {
   ' 2>/dev/null || printf '{"browser_mode":"unknown"}'
 }
 
-write_status() { # state, attempts_used, detail
-  cat > "$STATUS" <<EOF
+# What this run could NOT do, as machine-readable slugs. Derived in server/audit.mjs so the shell,
+# the dashboard and the digest cannot drift on what "worked" means -- three implementations of that
+# question is how a run came to report `ok` while its own coverage said it read nothing.
+gaps_json() {
+  "${NODE_BIN:-node}" "$REPO/server/audit.mjs" --gaps 2>/dev/null \
+    | "${NODE_BIN:-node}" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+        try{ process.stdout.write(JSON.stringify(JSON.parse(s).gaps||[])); }
+        catch{ process.stdout.write("[]"); }})' 2>/dev/null \
+    || printf '[]'
+}
+
+write_status() { # state, attempts_used, detail, gaps_json
+  cat > "$STATUS.tmp" <<EOF
 {
   "state": "$1",
   "started": "$STARTED",
@@ -102,9 +113,13 @@ write_status() { # state, attempts_used, detail
   "attempts": $2,
   "timeout_secs": $TIMEOUT_SECS,
   "detail": "$(printf '%s' "$3" | sed 's/"/\\"/g')",
+  "gaps": ${4:-[]},
   "coverage": $(coverage_json)
 }
 EOF
+  # Atomic. A reader that catches this file half-written sees invalid JSON and reports nothing at
+  # all, which looks identical to a run that never happened.
+  mv "$STATUS.tmp" "$STATUS"
 }
 
 notify() { # title, message — best-effort desktop alert; never fatal.
@@ -217,6 +232,11 @@ if [ -n "$MONTH_CAP" ]; then
   fi
   echo "spend this month: \$$SPENT of \$$MONTH_CAP ceiling"
 fi
+
+# Keep the PREVIOUS run's verdict before overwriting it. Without this, anything asking "did the
+# last run work?" during a run reads a file describing the run doing the asking, and gets
+# "running" -- which is exactly how a digest reported its own status file as stuck.
+[ -r "$STATUS" ] && cp "$STATUS" "$LOG_DIR/.job-run.last.json" 2>/dev/null
 
 write_status "running" 0 "in progress"
 
@@ -371,15 +391,32 @@ write_status "running" 0 "in progress"
     esac
   else
     echo "WARNING: no data/.last-digest.md written — the run produced no digest"
+    DIGEST_MISSING=1
     [ $rc -eq 0 ] && notify "JobSeeker run finished with no digest" "Run reported success but wrote no digest file"
   fi
 
-  if [ $rc -eq 0 ]; then
-    write_status "ok" "$attempt" "completed on attempt $attempt of $ATTEMPTS"
-  else
-    write_status "failed" "$attempt" "exit code $rc after $attempt attempt(s) of $ATTEMPTS"
+  # ---- what state did this run actually earn? --------------------------------------------------
+  # Failure dominates coverage: a run that did not finish cannot be "partial", and a run that
+  # produced no digest did not deliver the one thing an unattended run exists to produce -- that
+  # used to be recorded as `ok` while the log line right above said the opposite.
+  GAPS="$(gaps_json)"
+  if [ $rc -ne 0 ]; then
+    write_status "failed" "$attempt" "exit code $rc after $attempt attempt(s) of $ATTEMPTS" "$GAPS"
     notify "JobSeeker daily run failed" "Exit $rc after $attempt attempt(s). See data/.job-run.log"
+  elif [ "${DIGEST_MISSING:-0}" = "1" ]; then
+    write_status "failed" "$attempt" "completed but produced no digest — the run's only deliverable is missing" "$GAPS"
+  elif [ "$GAPS" != "[]" ]; then
+    write_status "partial" "$attempt" "completed, but part of the pipeline could not run: $GAPS" "$GAPS"
+    notify "JobSeeker ran, but not fully" "$(printf '%s' "$GAPS" | tr -d '[]"' ) — see the dashboard"
+  else
+    write_status "ok" "$attempt" "completed on attempt $attempt of $ATTEMPTS" "[]"
   fi
+
+  # ---- the schedule ladder ----------------------------------------------------------------------
+  # Evaluated here because the run is the only thing guaranteed to execute on the current schedule;
+  # the dashboard is not always open. Arming on first sight starts the clock TODAY, so an install
+  # upgrading into this feature is never stepped down for inactivity it was never warned about.
+  bash "$REPO/scripts/schedule-ladder.sh" 2>&1 || echo "schedule ladder: skipped (non-fatal)"
 
   echo "==================== done $(date '+%Y-%m-%d %H:%M:%S') (exit $rc) ===================="
   exit $rc

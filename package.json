@@ -41,6 +41,7 @@
     "test:sweep": "node scripts/test-chat-sweep.mjs",
     "test:security": "node scripts/test-security.mjs",
     "test:welcome": "node scripts/test-welcome.mjs",
+    "test:runstate": "node scripts/test-run-state.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
     "setup": "bash scripts/setup.sh",
     "schedule": "bash scripts/set-schedule.sh",

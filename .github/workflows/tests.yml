@@ -25,3 +25,7 @@ jobs:
       # launchctl/claude, because the steps it exercises write to config/ and templates/ (resolved
       # from the repo root, NOT from JOBSEEKER_DATA_DIR) and install a launch agent.
       - run: npm run test:welcome
+      # Run state and the schedule ladder. Sandboxed with a fake HOME and stubbed launchctl,
+      # osascript, caffeinate and pgrep — job-run.sh kills WhatsApp processes and writes launch
+      # agents, neither of which may touch the machine running the tests.
+      - run: npm run test:runstate

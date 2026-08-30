@@ -156,6 +156,14 @@ async function loadAll() {
   // synchronous and this needs to read the proposal records.
   const orphans = await orphanedProposals().catch(() => ({ count: 0, ids: [], byMarket: {} }));
   // scripts/job-run.sh writes this. A failed scheduled run is otherwise invisible, so Today shows it.
+  // The schedule ladder's own state. scripts/schedule-ladder.sh owns the writes; this only reads,
+  // so the dashboard can say what is about to change and offer the way out.
+  let ladder = null;
+  try {
+    ladder = JSON.parse(await fs.readFile(path.join(DATA, ".schedule-tier.json"), "utf8"));
+  } catch {
+    /* not armed yet */
+  }
   let lastRun = null;
   try {
     lastRun = JSON.parse(await fs.readFile(path.join(DATA, ".job-run.status.json"), "utf8"));
@@ -229,6 +237,7 @@ async function loadAll() {
     boards,
     orphans,
     lastRun,
+    ladder,
     runNow,
     lastRunNow,
     browser,
@@ -1599,7 +1608,15 @@ function setupHTML(st, criteria, marketNames = []) {
          <input type="time" name="time" value="${esc(/^\d\d:\d\d$/.test(st.schedTime) ? st.schedTime : "08:00")}" required>
          <button type="submit" class="btn-small">Set</button></form>` +
         (st.schedInstalled ? actionBtn("remove-schedule", "Remove") : ""),
-      "Reads your channels each morning and sends the digest. It never applies or sends anything.",
+      "Reads your channels and sends the digest. It never applies or sends anything." +
+        // Without this, Settings shows a time and says nothing about the fact that the CADENCE was
+        // changed for you — so the one page that looks authoritative about the schedule would be
+        // the one page that omits half of it.
+        (st.ladderTier > 1
+          ? ` <b>Currently ${esc(
+              { 2: "Mondays and Thursdays", 3: "Mondays only", 4: "not running" }[st.ladderTier] || "reduced"
+            )}</b> — JobSeeker stepped this down because roles were not being reviewed. Setting a time here puts it back to every day.`
+          : ""),
     ],
   ];
 
@@ -1792,6 +1809,15 @@ async function systemStatus() {
     agentInstalled: agent.ok,
     schedInstalled: sched.ok,
     schedTime: schedTime.out || "not scheduled",
+    // The tier is a fact ABOUT the schedule, so it travels with it. Read straight from the ladder's
+    // own state file rather than recomputed, so Settings and the Today banner cannot disagree.
+    ladderTier: await (async () => {
+      try {
+        return Number(JSON.parse(await fs.readFile(path.join(DATA, ".schedule-tier.json"), "utf8")).tier) || 1;
+      } catch {
+        return 1;
+      }
+    })(),
     spend,
     channels: {
       gmail: ageDays(wm.gmail),
@@ -1838,20 +1864,80 @@ function todayHTML(all, dueToday, appTok, appIds) {
   // (AGENT-RULES §10). The blockers array carries the specific one-time fix, so it is shown verbatim
   // rather than paraphrased into "Chrome unavailable".
   const b = all.browser;
+  // Suppressed when the run banner is already reporting `browser-read` — the two say the same thing,
+  // and the run banner says it better because it names the run and when it happened.
+  const runCoversBrowser = run?.state === "partial" && (run.gaps || []).includes("browser-read");
   const browserBanner =
-    b && b.capabilities && !b.capabilities.read_page_content
+    !runCoversBrowser && b && b.capabilities && !b.capabilities.read_page_content
       ? `<div class="alert warn"><strong>WhatsApp Web and LinkedIn messages cannot be READ.</strong>
            ${b.whatsapp?.unread ? `<strong>${b.whatsapp.unread} unread</strong> waiting on WhatsApp Web. ` : ""}
            ${b.blockers?.length ? esc(b.blockers[0]) : "No mechanism available."}
            <span class="muted">Sending still works — the digest goes over the WhatsApp API, which needs no browser.</span></div>`
       : "";
 
-  const runBanner =
-    run && run.state === "failed"
-      ? `<div class="alert bad"><strong>The last scheduled run failed.</strong>
+  // What a run could not do, in the user's words rather than the slugs the machine passes around.
+  // The blocker text underneath is reproduced verbatim (AGENT-RULES §10) — each one is written as
+  // the exact one-time fix, and paraphrasing it leaves the reader with nothing to act on.
+  const GAP_SAYS = {
+    "browser-read":
+      "WhatsApp Web and LinkedIn messages were not read, and no LinkedIn role search ran — Chrome could not be read.",
+    "boards-queued": "Careers boards that need a browser were left unread for the same reason.",
+    "digest-undelivered": "Your digest was written but never reached you.",
+  };
+
+  const runBanner = (() => {
+    if (!run) return "";
+    if (run.state === "failed") {
+      return `<div class="alert bad"><strong>The last scheduled run failed.</strong>
            ${esc(run.detail || "")} <span class="muted">(started ${esc(run.started || "?")})</span>
-           — check <code>data/.job-run.log</code>.</div>`
-      : "";
+           — check <code>data/.job-run.log</code>.</div>`;
+    }
+    // A run that finished but could not do half the job used to render as an unqualified success:
+    // no banner at all, because only `failed` was handled. That is the whole reason `partial`
+    // exists, so it gets a banner of its own rather than sharing the red one.
+    if (run.state === "partial") {
+      const gaps = Array.isArray(run.gaps) ? run.gaps : [];
+      const blockers = run.coverage?.blockers ?? [];
+      return `<div class="alert warn"><strong>The last run finished, but not all of it ran.</strong>
+          <ul class="gaplist">${gaps.map((g) => `<li>${esc(GAP_SAYS[g] || g)}</li>`).join("")}</ul>
+          ${blockers.length ? `<div class="ti-sub">${esc(String(blockers[0]).slice(0, 400))}</div>` : ""}
+          <span class="muted">Started ${esc(String(run.started || "?").slice(0, 16).replace("T", " "))}.</span></div>`;
+    }
+    return "";
+  })();
+
+  // The ladder speaks before it acts, and again after. Both states link to the one place the
+  // schedule can be changed by hand.
+  const ladderBanner = (() => {
+    const l = all.ladder;
+    if (!l) return "";
+    const tier = Number(l.tier) || 1;
+    const SCHEDULE = { 1: "every day", 2: "Mondays and Thursdays", 3: "Mondays only", 4: "not at all" };
+    const NEXT = { 1: "Mondays and Thursdays", 2: "Mondays only", 3: "not at all" };
+    if (l.warned_at) {
+      return `<div class="alert warn"><strong>JobSeeker is about to run less often.</strong>
+          ${esc(l.why || "")} On its next run it will drop from <b>${esc(SCHEDULE[tier])}</b> to
+          <b>${esc(NEXT[tier] || "not at all")}</b>.
+          <span class="muted">Review a few roles on the Jobs tab and it stays as it is</span> —
+          or <a href="/settings?tab=setup">set the schedule yourself</a>.</div>`;
+    }
+    if (tier >= 4) {
+      return `<div class="alert bad"><strong>The daily run is switched off.</strong>
+          ${esc(l.why || "")} Nothing is being read and nothing new will appear here until you turn it
+          back on.
+          <form method="POST" action="/restore-schedule" class="inline" style="margin-left:8px">
+            <button type="submit" class="btn-small">Run it every day again</button></form>
+          <a class="btn-small linkbtn" href="/settings?tab=setup">Choose a different schedule</a></div>`;
+    }
+    if (tier > 1) {
+      return `<div class="alert"><strong>JobSeeker now runs ${esc(SCHEDULE[tier])}.</strong>
+          ${esc(l.why || "")}
+          <form method="POST" action="/restore-schedule" class="inline" style="margin-left:8px">
+            <button type="submit" class="btn-small">Back to every day</button></form>
+          <a class="btn-small linkbtn" href="/settings?tab=setup">Settings</a></div>`;
+    }
+    return "";
+  })();
 
   const advancesBlock = advances.length
     ? `<div class="tblock">
@@ -2074,7 +2160,11 @@ function todayHTML(all, dueToday, appTok, appIds) {
                ${
                  lastNow.state === "ok"
                    ? `<span class="ok-pill">finished</span>`
-                   : `<span class="bad-pill">${esc(lastNow.state)}</span> ${esc(lastNow.detail || "")}`
+                   : lastNow.state === "partial"
+                     ? `<span class="warn-pill">finished, partly</span> ${esc(lastNow.detail || "")}`
+                     : lastNow.state === "skipped-busy" || lastNow.state === "skipped-budget"
+                       ? `<span class="warn-pill">${esc(lastNow.state.replace("skipped-", "skipped: "))}</span> ${esc(lastNow.detail || "")}`
+                       : `<span class="bad-pill">${esc(lastNow.state)}</span> ${esc(lastNow.detail || "")}`
                }
                <span class="muted">${esc(String(lastNow.finished || "").slice(0, 16).replace("T", " "))}</span></div>`
           : ""
@@ -2130,7 +2220,8 @@ function todayHTML(all, dueToday, appTok, appIds) {
          will use it. <a href="/settings?tab=companies">Open in Settings →</a></div>`
     : "";
 
-  return `${browserBanner}
+  return `${ladderBanner}
+    ${browserBanner}
     ${runBanner}
     ${digestBlock}
     ${queues.length ? `<div class="tsummary">${queues.join(" · ")}</div>` : ""}
@@ -2522,7 +2613,11 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .ok-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(46,160,67,.16);color:#3fb950}
 .bad-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
 /* A send that is on its way is neither good news nor bad — it is unfinished, and reads as amber. */
-.warn-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(88,120,200,.18);color:#8fa6e8}
+.warn-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
+/* What a partial run could not do. A list, because a run can miss more than one thing at once and
+   a comma-joined sentence hides the second one. */
+.gaplist{margin:8px 0 6px;padding-left:20px}
+.gaplist li{margin-bottom:4px}
 /* The message itself, collapsed by default: Today is a list of decisions, and five open drafts
    would bury the other four things that need you. One click reveals the exact text that will go. */
 .askblock{border:1px solid var(--acc);border-radius:12px;padding:14px 16px;background:var(--card)}
@@ -5841,6 +5936,15 @@ async function handlePost(req, res, url) {
     const q = r.flash ? `${r.redirect.includes("?") ? "&" : "?"}flash=${encodeURIComponent(r.flash.kind)}&msg=${encodeURIComponent(r.flash.msg)}` : "";
     res.writeHead(303, { Location: r.redirect + q });
     return res.end();
+  }
+  if (url.pathname === "/restore-schedule") {
+    // Recovery is manual by design: the ladder slows itself down, but only a person speeds it back
+    // up. Delegates to the same script that stepped it down, so there is one writer of the plist.
+    const r = await shOut("bash", [path.join(ROOT, "scripts", "schedule-ladder.sh"), "--reset"], 20000);
+    await logActivity("schedule-ladder", `Schedule restored to daily from the dashboard: ${r.out || "done"}`);
+    return redirect(res, r.ok
+      ? { kind: "ok", msg: `Back to a daily run — ${r.out || "restored"}.` }
+      : { kind: "err", msg: `Could not restore the schedule: ${r.out || "see docs/SCHEDULER.md"}` });
   }
   if (url.pathname === "/defer-market-ask") {
     return redirect(res, await handleDeferMarketAsk(form));

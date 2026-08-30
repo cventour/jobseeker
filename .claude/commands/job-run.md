@@ -134,7 +134,7 @@ stage 1) and again when composing the digest.
 
 ```
 Update of <D Mon YYYY> Completed at <HH:MM>
-Started <HH:MM> · <N>m · <ok | partial | failed>
+Started <HH:MM> · <N>m · <ok | partial | failed>   ← take this from the audit's `run_gaps.state_hint`, never from the status file
 
 Highlights
 - <the decision-worthy items, most urgent first — 3 to 6 bullets, one line each>
@@ -255,7 +255,10 @@ tool**, so an "emailed digest" would sit unsent in Drafts. Verified, not assumed
   many boards are queued behind a browser. If `any_never_swept` is true or `worst_days` is 2 or
   more, that belongs in **Highlights**, named with the number — an unread channel that stays unread
   for a week is exactly the kind of quiet failure this pipeline exists to surface.
-- If the audit's `last_scheduled_run` shows the **previous** run ended in state `failed`, say so at
+- Read `previous_scheduled_run`, NEVER `last_scheduled_run`, when asking how the run before this
+  one went. During your run `last_scheduled_run` describes **you**, and says `running` — a digest
+  once reported its own status file as stuck because of exactly this.
+- If `previous_scheduled_run` shows the previous run ended in state `failed` or `partial`, say so at
   the top of the digest — a silently-failed run is the one thing I would otherwise never notice.
 - WhatsApp: send it with the `reply` tool to my owner chat (`whatsapp_owner_jid` from
   `config/job-seeker.config.md`; if blank, use my most recent WhatsApp `unreplied` sender or skip
