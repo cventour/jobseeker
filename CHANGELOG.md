@@ -2,34 +2,20 @@
 
 Every release, in plain language. Newest first.
 
-Technical detail lives in the commit history; this file is for deciding whether a release is worth
-downloading.
-
 ---
 
 ## v0.4.0 — 30 August 2026
 
-- **JobSeeker now tells you when a run only half worked.** Before, a run that could not reach Chrome
-  would find no roles, read none of your messages, and still report success. It now says which part
-  did not happen, and why.
-- **Improved scheduling to reduce the cost of usage.** If you stop reviewing the roles it finds,
-  JobSeeker slows itself down instead of searching every day for a list nobody is reading — daily,
-  then twice a week, then weekly. It warns you in the dashboard before each change, and one button
-  puts it back.
-- **It stops entirely if you stop using it.** After two weeks with no activity at all, the daily run
-  switches itself off and tells you it has, rather than quietly costing money.
-- **A run that produced no summary is now reported as failed.** It used to count as a success.
+- Runs now report when part of the work did not happen. Before, a run could fail to read your messages and still report success.
+- Improved scheduling to reduce the cost of usage. If you have not accessed the dashboard for a few days the automated runs will slow down. You will be warned when it happens on the dashboard.
+- Automated runs stop completely after two weeks with no activity, and the dashboard tells you.
+- A run that produces no daily summary is now reported as failed.
 
 ## v0.3.0 — 27 August 2026
 
-- **You no longer need a terminal to install it.** Download, unzip, double-click. A setup window
-  checks your Mac and opens JobSeeker in its own window.
-- **A setup wizard replaces the old command-line questionnaire.** Six questions, three of which you
-  can skip — and each skip tells you exactly what you lose by skipping it.
-- **Approve or reject messages from the dashboard.** Drafts used to be visible there but could only
-  be approved elsewhere. Now you read the message and decide in the same place.
-- **Run it on demand.** Buttons on Today for reading your channels, finding roles, or drafting
-  follow-ups, without waiting for the morning run.
-- **Choose which days it runs**, not just what time.
-- **Change one thing later without redoing setup** — replacing your CV shows you what it is about to
-  overwrite.
+- Install without a terminal. Download, unzip and double-click.
+- A setup wizard replaces the old command-line questions. Six steps, three of them optional.
+- Approve or reject messages on the dashboard, where you read them.
+- Run a search, a channel check or your follow-ups on demand, instead of waiting for the morning run.
+- Choose which days the automated run happens, not just the time.
+- Replace your CV or change one setting later without repeating setup.
