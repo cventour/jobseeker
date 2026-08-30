@@ -219,7 +219,9 @@ That is the whole routine. It reads your channels, finds roles, and sends you a 
 ## Talking to it
 
 You do not need to memorise commands. Address **`jobseeker`** in plain English and it works out what
-to run:
+to run — and after setup this works in Claude Code from **any** directory, not just this folder
+(setup installs a thin front-door agent into `~/.claude/agents` that defers to this install's own
+playbooks; `scripts/install-global-agent.sh --remove` takes it back out):
 
 ```text
 jobseeker, check my email and WhatsApp for anything new

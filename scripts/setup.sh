@@ -118,6 +118,16 @@ else
   done_ "$CFG created from the example"
 fi
 
+# Global front door: "jobseeker, ..." from any directory in Claude Code. Safe to re-run; refuses to
+# touch a ~/.claude/agents/jobseeker.md it did not write itself.
+if [ "$DRY" = 1 ]; then
+  skip "would install the global jobseeker agent into ~/.claude/agents"
+elif bash scripts/install-global-agent.sh >/dev/null 2>&1; then
+  done_ "global jobseeker agent -> ~/.claude/agents (works from any directory)"
+else
+  warn "global jobseeker agent not installed — a foreign file is already at ~/.claude/agents/jobseeker.md"
+fi
+
 # ---- how do you want to run it? ---------------------------------------------------------------
 # Asked FIRST, because the answer decides how much of the rest is needed at all.
 #

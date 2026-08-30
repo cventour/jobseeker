@@ -130,6 +130,16 @@ if [ -x scripts/install-browser-agent.sh ] || [ -f scripts/install-browser-agent
   fi
 fi
 
+# The global front door: makes "jobseeker, check my email" work in Claude Code from ANY directory,
+# not only inside this folder. One thin agent in ~/.claude/agents that carries this install's
+# absolute path and defers to the project's own playbooks — so it never goes stale and never
+# clutters other projects with the nine specialists.
+if bash scripts/install-global-agent.sh >/dev/null 2>&1; then
+  ok "\"jobseeker\" available in Claude Code everywhere (~/.claude/agents)"
+else
+  bad "Global agent not installed — \"jobseeker\" only answers inside this folder."
+fi
+
 # ---------------------------------------------------------------- 3. start it, and open a window
 PORT="$(node -e '
   const fs=require("fs");
