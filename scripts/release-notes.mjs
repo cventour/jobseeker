@@ -94,7 +94,7 @@ async function main() {
     <a href="install.html">Install</a>
     <a class="on" href="whats-new.html">What's new</a>
     <a href="https://github.com/cventour/jobseeker">GitHub</a>
-    <a class="navbtn" href="https://github.com/cventour/jobseeker/releases/latest/download/JobSeeker-Installer.zip">Download Installer</a>
+    <a class="navbtn" href="https://github.com/cventour/jobseeker/releases/latest">Download Latest Release</a>
   </nav>
 </header>
 <main>
@@ -104,17 +104,22 @@ async function main() {
     <p class="lede">What changed and whether it matters to you. No release notes written for
       developers.</p>
   </section>
+  <section class="rels">
 ${releases
   .map(
-    (r, i) => `  <section${i === 0 ? "" : ""}>
-    <p class="eyebrow">${esc(r.date)}</p>
-    <h2>${esc(r.version)}${i === 0 ? " — latest" : ""}</h2>
-    <ul class="problems">
-${bullets(r.body).map((b) => `      <li data-reveal>${inline(b)}</li>`).join("\n")}
-    </ul>
-  </section>`
+    (r, i) => `    <details class="rel"${i === 0 ? " open" : ""}>
+      <summary>
+        <span class="rel-v">${esc(r.version)}</span>
+        <span class="rel-d">${esc(r.date)}</span>
+        ${i === 0 ? '<span class="rel-tag">latest</span>' : ""}
+      </summary>
+      <ul class="problems">
+${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
+      </ul>
+    </details>`
   )
   .join("\n")}
+  </section>
   <section>
     <p class="sub">Older versions and the full technical history are on
       <a href="https://github.com/cventour/jobseeker/releases">GitHub</a>.</p>
