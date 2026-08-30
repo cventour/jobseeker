@@ -45,6 +45,8 @@
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
     "setup": "bash scripts/setup.sh",
     "schedule": "bash scripts/set-schedule.sh",
+    "notes": "node scripts/release-notes.mjs",
+    "notes:site": "node scripts/release-notes.mjs --html ../myjobseeker-site",
     "mock:wizard": "node scripts/mock-wizard.mjs"
   }
 }

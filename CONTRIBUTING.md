@@ -12,6 +12,23 @@ beyond what one person can maintain.
 It is **macOS only** and needs [Claude Code](https://claude.com/claude-code). That is not an
 oversight: it drives Chrome through Apple Events, and the agents are Claude Code agents.
 
+## Cutting a release
+
+`CHANGELOG.md` is the single source for what a release contains. Write the bullets there, in plain
+language — what a user gains, not how it was built. "Improved scheduling to reduce the cost of
+usage", never "coverage-derived partial state in write_status".
+
+Then generate rather than retype, because a release is precisely the moment nobody re-words the same
+list carefully in a second place, and the second place is where the drift begins:
+
+```bash
+npm run notes                 # the GitHub release body, from the newest CHANGELOG entry
+npm run notes:site            # regenerates whats-new.html in ../myjobseeker-site
+gh release create vX.Y.Z dist/*.zip --title "vX.Y.Z — <short name>" --notes-file <(npm run --silent notes)
+```
+
+`whats-new.html` is generated. Editing it directly is safe only until the next release overwrites it.
+
 ## Rules that are not negotiable
 
 These exist because breaking them has already caused real damage here.
