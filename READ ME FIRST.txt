@@ -1,0 +1,21 @@
+JobSeeker — how to start it
+===========================
+
+1. Double-click  JobSeeker Setup.command
+
+2. macOS will refuse to open it the first time. That is expected: the file came
+   from the internet and is not signed by a registered Apple developer.
+
+   Right-click it, choose Open, then click Open again in the dialog.
+
+   It only asks once. After that, double-clicking works normally.
+
+3. A window opens and walks you through setting it up. Nothing runs and nothing
+   is spent while you do that.
+
+You need a Mac, Google Chrome, Node 20 or newer, and Claude Code. If any are
+missing the setup window tells you which and where to get it.
+
+Everything stays in plain text files in this folder. Nothing is uploaded.
+
+myjobseeker.ai

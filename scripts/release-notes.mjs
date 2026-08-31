@@ -94,7 +94,7 @@ async function main() {
     <a href="install.html">Install</a>
     <a class="on" href="whats-new.html">What's new</a>
     <a href="https://github.com/cventour/jobseeker">GitHub</a>
-    <a class="navbtn" href="https://github.com/cventour/jobseeker/releases/latest">Download Latest Release</a>
+    <a class="navbtn" href="https://github.com/cventour/jobseeker/releases/latest/download/JobSeeker-Installer.zip" download>Download Latest Release</a>
   </nav>
 </header>
 <main>
