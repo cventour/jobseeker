@@ -3,15 +3,28 @@ JobSeeker — how to start it
 
 1. Double-click  JobSeeker Setup.command
 
-2. macOS will refuse to open it the first time. That is expected: the file came
-   from the internet and is not signed by a registered Apple developer.
+2. macOS will refuse to open it, and will offer only "Move to Trash" or "Done".
+   Click Done. Nothing is wrong: the file is not signed by a registered Apple
+   developer, and macOS blocks every unsigned download by default.
 
-   Right-click it, choose Open, then click Open again in the dialog.
+3. Open System Settings > Privacy & Security.
+   Scroll down to Security. You will see a line saying JobSeeker Setup.command
+   was blocked, with an "Open Anyway" button. Click it and confirm.
 
-   It only asks once. After that, double-clicking works normally.
+4. Double-click JobSeeker Setup.command again. It opens this time.
 
-3. A window opens and walks you through setting it up. Nothing runs and nothing
+   macOS only asks once. After that it behaves like any other file.
+
+5. A window opens and walks you through setting it up. Nothing runs and nothing
    is spent while you do that.
+
+If step 3 does not show the button, open Terminal, type this, press Return, and
+then go back to step 4:
+
+    xattr -c "$HOME/Downloads/JobSeeker/JobSeeker Setup.command"
+
+That removes the "downloaded from the internet" marker from this one file. It
+changes nothing else on your Mac.
 
 You need a Mac, Google Chrome, Node 20 or newer, and Claude Code. If any are
 missing the setup window tells you which and where to get it.
