@@ -132,6 +132,48 @@ var app = $.NSApplication.sharedApplication;
 var win, wv;
 var mode = 'setup';
 
+// ------------------------------------------------------------------ native chrome follows the page
+// The page can restyle itself, but the traffic lights, the title bar and the menus are AppKit's --
+// so choosing Light left the window painted dark around a cream page. This closes that gap.
+//
+// It reads the page rather than taking a message, which means ONE code path covers both the setup
+// page and the dashboard: whichever is loaded, the app asks it what appearance it is showing and
+// matches the window to it. The dashboard's own switch therefore drives the native chrome too,
+// without dashboard.mjs needing to know this app exists.
+var themeSeen = null, themeApplied = null, themeTick = 0;
+
+function themeAnswer(result, error) {
+  // A real function, never $() -- see THE RULE at the top of this file.
+  try { themeSeen = result.isNil() ? 'auto' : String(result.js); }
+  catch (e) { themeSeen = null; }
+}
+
+function syncAppearance() {
+  if (!wv) return;
+  themeTick++;
+  if (themeTick % 4 === 0) {          // ~0.6s: chrome should lag a click, not a second
+    try {
+      wv.evaluateJavaScriptCompletionHandler(
+        $("(document.documentElement.getAttribute('data-theme')||'auto')"), themeAnswer);
+    } catch (e) { /* page mid-navigation */ }
+  }
+  if (!themeSeen || themeSeen === themeApplied) return;
+  themeApplied = themeSeen;
+  try {
+    if (themeApplied === 'light') {
+      app.appearance = $.NSAppearance.appearanceNamed($.NSAppearanceNameAqua);
+    } else if (themeApplied === 'dark') {
+      app.appearance = $.NSAppearance.appearanceNamed($.NSAppearanceNameDarkAqua);
+    } else {
+      // nil is not "no appearance", it is "inherit" -- which is exactly what Auto means.
+      app.appearance = $();
+    }
+    appendFile(FULLLOG, stamp() + '  appearance: ' + themeApplied + '\n');
+  } catch (e) {
+    appendFile(FULLLOG, stamp() + '  appearance failed: ' + e.message + '\n');
+  }
+}
+
 // ------------------------------------------------------------------ window placement
 // NSWindow's own -center puts the window on the MAIN screen, which on a multi-monitor Mac is
 // wherever the menu bar lives -- not necessarily the display the user is looking at. A setup
@@ -479,6 +521,8 @@ function tick() {
 
   // The user closed the window. Minimising is not closing -- isVisible goes false for both.
   if (!win.isVisible && !win.isMiniaturized) { stopServer(); app.terminate(null); return; }
+
+  syncAppearance();   // every phase, including after the dashboard takes the window over
 
   if (phase === 'wait-ui') {
     if (wv.title.isNil() || !wv.title.js) return;   // page still parsing
