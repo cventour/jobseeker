@@ -456,7 +456,9 @@ do_start() {
 # author's page. It also needs bun -- the plugin's MCP server is launched with `bun run`, not node
 # -- which is why bun is installed here rather than as a JobSeeker prerequisite: nobody who skips
 # WhatsApp should be made to install a second runtime.
-WA_DIR="$HOME/.whatsapp-channel"
+# Overridable so this step can be exercised against a scratch directory without going near a
+# real, working WhatsApp link.
+WA_DIR="${JOBSEEKER_WA_DIR:-$HOME/.whatsapp-channel}"
 WA_PLUGIN_REPO="Rich627/whatsapp-claude-plugin"
 WA_PLUGIN="whatsapp-claude-channel@whatsapp-claude-plugin"
 

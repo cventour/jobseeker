@@ -105,13 +105,14 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 
 /* The code, big enough to read from arm's length while holding the phone. */
 .wacode{display:flex;align-items:center;gap:16px;background:var(--card);border:1px solid var(--acc);
-  border-radius:12px;padding:16px 20px;margin:0 0 18px}
+  border-radius:12px;padding:16px 20px;margin:0}
 .wacode b{font:700 30px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;color:var(--fg)}
 .wacode span{font-size:12.5px;color:var(--mut);line-height:1.5}
 
 /* Four phone screens, drawn rather than photographed so they stay legible in both schemes. */
+.waLead{margin:0 0 10px;font-size:12.5px;color:var(--mut)}
 .waSteps{list-style:none;display:grid;grid-template-columns:repeat(4,1fr);gap:14px;
-  margin:0;padding:0}
+  margin:0 0 18px;padding:0}
 .waSteps li{display:flex;flex-direction:column;gap:7px}
 .waSteps svg{width:58px;height:auto;display:block}
 .waSteps p{margin:0;font-size:11px;line-height:1.4;color:var(--mut)}
@@ -223,14 +224,15 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     </div>
 
     <div id="wa-pair" hidden>
-      <div class="wacode"><b id="wa-code">————</b>
-        <span>Enter this on your phone.<br>It expires in a couple of minutes.</span></div>
+      <p class="waLead">On your phone, tap through to the screen that asks for a code:</p>
       <ol class="waSteps">
         <li><p><b>1. WhatsApp</b>Settings</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="44" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="42" width="60" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="60" width="52" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="78" width="58" height="9" rx="4" fill="var(--acc)"/><rect x="10" y="100" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="118" width="46" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
         <li><p><b>2. Settings</b>Linked Devices</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="42" width="56" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="60" width="62" height="9" rx="4" fill="var(--acc)"/><rect x="10" y="82" width="48" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="100" width="54" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="118" width="44" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
         <li><p><b>3. Linked Devices</b>Link a Device</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="58" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="46" width="72" height="13" rx="4" fill="var(--acc)"/><rect x="10" y="70" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="88" width="56" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="106" width="48" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
         <li><p><b>4. Link a Device</b>Link with phone number instead</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="54" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="44" width="62" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="66" width="70" height="13" rx="4" fill="var(--acc)"/><rect x="10" y="92" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="110" width="44" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
       </ol>
+      <div class="wacode"><b id="wa-code">————</b>
+        <span>Enter this on your phone.<br>It expires in a couple of minutes.</span></div>
     </div>
   </div>
 
