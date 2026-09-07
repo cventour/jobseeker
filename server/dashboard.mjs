@@ -83,11 +83,53 @@ const BRAND = (title) => `<div class="brand">
   <h1>${title}</h1>
 </div>`;
 
+// Runs in <head>, before the body paints. Setting data-theme here rather than after load is the
+// difference between a themed page and a page that flashes the wrong scheme on every navigation --
+// and this dashboard is a multi-page app, so that flash would happen on every click.
+const APPEARANCE_JS = `(function(){
+  var G={
+    auto:'<circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M10 2.75a7.25 7.25 0 0 0 0 14.5z" fill="currentColor"></path>',
+    light:'<circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle>',
+    dark:'<circle cx="10" cy="10" r="7.25" fill="currentColor"></circle>'};
+  var N={auto:'light',light:'dark',dark:'auto'};
+  var L={auto:'Auto',light:'Light',dark:'Dark'};
+  var mode='auto';
+  try{ var m=localStorage.getItem('jobseeker.appearance'); if(G[m]) mode=m; }catch(e){}
+  function apply(){
+    var r=document.documentElement;
+    // Auto writes NO attribute, which is what hands the decision back to the media query.
+    if(mode==='auto') r.removeAttribute('data-theme'); else r.setAttribute('data-theme',mode);
+    var b=document.getElementById('appearance');
+    if(!b) return;
+    b.innerHTML='<svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">'+G[mode]+'</svg>';
+    var t='Appearance: '+L[mode]+' \\u2014 click for '+L[N[mode]];
+    b.title=t; b.setAttribute('aria-label',t);
+  }
+  apply();
+  document.addEventListener('DOMContentLoaded',function(){
+    var b=document.getElementById('appearance');
+    if(!b) return;
+    b.addEventListener('click',function(){
+      mode=N[mode];
+      try{ localStorage.setItem('jobseeker.appearance',mode); }catch(e){}
+      apply();
+    });
+    apply();
+  });
+})();`;
+
 const HEAD_ICONS = `<link rel="icon" href="${v("/favicon.ico")}" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="${v("/favicon-32.png")}">
 <link rel="icon" type="image/png" sizes="16x16" href="${v("/favicon-16.png")}">
 <link rel="apple-touch-icon" href="${v("/apple-touch-icon.png")}">
-<meta name="theme-color" content="#0f1220">`;
+<meta name="theme-color" content="#0f1220">
+<script>${APPEARANCE_JS}</script>`;
+
+// One button, three states, shown as one silhouette at three fill levels: empty is light, half is
+// auto, full is dark. Auto sits visually between the two states it chooses from, which is what it
+// does -- a sun/moon pair has no natural third member, and adding a monitor glyph for Auto puts
+// three unrelated shapes in a 16px box.
+const APPEARANCE_BTN = `<button type="button" id="appearance" class="moonbtn"></button>`;
 
 // The ATS/careers-board registry (see server/record.mjs and AGENT-RULES §12). Mirrored here rather
 // than shelling out to record.mjs: handlePost already holds the data/ lock, and record.mjs takes
@@ -2548,6 +2590,7 @@ ${HEAD_ICONS}
 <header>
   ${BRAND("Job Seeker")}
   <div class="head-actions">
+    ${APPEARANCE_BTN}
     <a class="gearlink" href="/settings" title="Criteria, markets, careers boards, CV">⚙ Settings</a>
   </div>
 </header>
@@ -2646,7 +2689,7 @@ ${HEAD_ICONS}
 </head><body>
 <header>
   ${BRAND("Settings")}
-  <div class="head-actions"><a class="gearlink" href="/">← Back to work</a></div>
+  <div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="/">← Back to work</a></div>
 </header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <div class="topbar">
@@ -2678,7 +2721,15 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
 
 const CSS = `
 :root{--bg:#0f1220;--card:#181c2f;--line:#2a2f48;--fg:#e7e9f3;--mut:#9aa0bd;--acc:#6ea8fe;}
-@media (prefers-color-scheme: light){:root{--bg:#f6f7fb;--card:#fff;--line:#e3e6f0;--fg:#1a1c28;--mut:#5b6178;--acc:#2563eb;}}
+/* Appearance, three states. The base :root above is dark, so the ONLY thing that needs saying
+   twice is light. No data-theme attribute means Auto: the media query alone decides, so the page
+   really does follow the OS instead of guessing once at load. An explicit choice writes the
+   attribute and must beat the OS in both directions -- the :not() guard is what stops a light Mac
+   overriding someone who asked for dark, and the attribute rule after it is what lets a light
+   choice win on a dark Mac. color-scheme rides along so scrollbars and form controls follow too. */
+:root{color-scheme:dark;}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f7f5f0;--card:#fffdf9;--line:#e8e3d9;--fg:#1f1c17;--mut:#6b6355;--acc:#2f5fd0;color-scheme:light;}}
+:root[data-theme="light"]{--bg:#f7f5f0;--card:#fffdf9;--line:#e8e3d9;--fg:#1f1c17;--mut:#6b6355;--acc:#2f5fd0;color-scheme:light;}
 *{box-sizing:border-box}body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
 header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
 h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 12px;letter-spacing:.02em}
@@ -2713,6 +2764,13 @@ body>footer{padding-top:22px;padding-bottom:40px;border-top:1px solid var(--line
 .gearlink{display:inline-block;padding:6px 12px;border:1px solid var(--line);border-radius:8px;
   color:var(--acc);text-decoration:none;font-size:13px;white-space:nowrap}
 .gearlink:hover{background:var(--line)}
+/* Same shell as .gearlink -- 8px radius, 1px --line border, 13px accent -- so the two sit as a
+   pair. The 1.5 line-height is what makes the heights match without hard-coding a pixel value. */
+.moonbtn{display:inline-block;padding:6px 9px;border:1px solid var(--line);border-radius:8px;
+  color:var(--acc);background:none;cursor:pointer;font:inherit;font-size:13px;line-height:1.5}
+.moonbtn:hover{background:var(--line)}
+.moonbtn svg{display:block}
+.moonbtn:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .statbar{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:10px 4px 14px;font-size:12.5px;color:var(--mut)}
 .statbar b{color:var(--fg);font-weight:700;font-variant-numeric:tabular-nums}
 .statbar .sb-sp{flex:1;min-width:0}
@@ -2737,12 +2795,19 @@ body>footer{padding-top:22px;padding-bottom:40px;border-top:1px solid var(--line
   --ton-bg-l:0.470; --ton-bg-c:0.120; --ton-fg-l:0.985; --ton-fg-c:0.020;
   --tring-l:0.640; --tring-c:0.130;
 }
+/* Chroma pulled back a little against the warmer ground: the same pill saturation that
+   reads as crisp on cool grey reads as garish on cream. */
 @media (prefers-color-scheme: light){
-  :root{
-    --tbg-l:0.945; --tbg-c:0.045; --tfg-l:0.430; --tfg-c:0.130;
-    --ton-bg-l:0.855; --ton-bg-c:0.095; --ton-fg-l:0.300; --ton-fg-c:0.070;
+  :root:not([data-theme="dark"]){
+    --tbg-l:0.955; --tbg-c:0.035; --tfg-l:0.440; --tfg-c:0.110;
+    --ton-bg-l:0.870; --ton-bg-c:0.080; --ton-fg-l:0.310; --ton-fg-c:0.060;
     --tring-l:0.550; --tring-c:0.130;
   }
+}
+:root[data-theme="light"]{
+    --tbg-l:0.955; --tbg-c:0.035; --tfg-l:0.440; --tfg-c:0.110;
+    --ton-bg-l:0.870; --ton-bg-c:0.080; --ton-fg-l:0.310; --ton-fg-c:0.060;
+    --tring-l:0.550; --tring-c:0.130;
 }
 nav.tabs{display:flex;gap:7px;border-bottom:0;margin:0;padding-block:2px;overflow-x:auto;scrollbar-width:none}
 nav.tabs::-webkit-scrollbar{display:none}
@@ -2860,10 +2925,13 @@ details.orphans{border-style:dashed}
 .subpill:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .subpill.on{background:#2f3757;color:#f2f4ff;font-weight:700;box-shadow:inset 0 0 0 1px #5a67a0}
 @media (prefers-color-scheme: light){
-  .subpill{background:#eef0f7;color:#5b6178}
-  .subpill:hover{box-shadow:inset 0 0 0 1px #c9cfe2}
-  .subpill.on{background:#dfe4f2;color:#1a1c28;box-shadow:inset 0 0 0 1px #a9b2cf}
+  :root:not([data-theme="dark"]) .subpill{background:#f0ece3;color:#6b6355}
+  :root:not([data-theme="dark"]) .subpill:hover{box-shadow:inset 0 0 0 1px #ddd6c8}
+  :root:not([data-theme="dark"]) .subpill.on{background:#e4ddcf;color:#1f1c17;box-shadow:inset 0 0 0 1px #c3b9a4}
 }
+:root[data-theme="light"] .subpill{background:#f0ece3;color:#6b6355}
+:root[data-theme="light"] .subpill:hover{box-shadow:inset 0 0 0 1px #ddd6c8}
+:root[data-theme="light"] .subpill.on{background:#e4ddcf;color:#1f1c17;box-shadow:inset 0 0 0 1px #c3b9a4}
 .subblurb{font-size:12.5px;margin:10px 0 18px}
 .subpane[hidden]{display:none}
 .paneacts{margin-top:22px}
@@ -4975,7 +5043,7 @@ function welcomeStandalonePage(st, ix, back, flash) {
 ${HEAD_ICONS}
 <style>${CSS}${WELCOME_CSS}</style>
 </head><body class="wbody">
-<header>${BRAND("Job Seeker")}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a></header>
+<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a></div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
   <form method="POST" action="/welcome-step" class="wform">
@@ -5023,7 +5091,7 @@ function welcomePage(st, ix, flash) {
 ${HEAD_ICONS}
 <style>${CSS}${WELCOME_CSS}</style>
 </head><body class="wbody">
-<header>${BRAND("Job Seeker")}</header>
+<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}</div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
   ${welcomeStepper(ix, st)}
