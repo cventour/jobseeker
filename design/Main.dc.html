@@ -1,0 +1,190 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+           -webkit-font-smoothing: antialiased; }
+    a { color: #6ea8fe; text-decoration: none; } a:hover { color: #8fbcff; }
+
+    /* Dark is the shipping scheme, lifted from server/dashboard.mjs. Paper is the chosen light
+       scheme: warm off-white neutrals, with the accent moved #2563eb -> #2f5fd0 so it does not
+       read cold against the cream. */
+    .t-dark {
+      --bg:#0f1220; --card:#181c2f; --line:#2a2f48; --fg:#e7e9f3; --mut:#9aa0bd; --acc:#6ea8fe;
+      --tbg-l:0.255; --tbg-c:0.055; --tfg-l:0.855; --tfg-c:0.095;
+      --ton-bg-l:0.470; --ton-bg-c:0.120; --ton-fg-l:0.985; --ton-fg-c:0.020;
+    }
+    .t-paper {
+      --bg:#f7f5f0; --card:#fffdf9; --line:#e8e3d9; --fg:#1f1c17; --mut:#6b6355; --acc:#2f5fd0;
+      --tbg-l:0.955; --tbg-c:0.035; --tfg-l:0.440; --tfg-c:0.110;
+      --ton-bg-l:0.870; --ton-bg-c:0.080; --ton-fg-l:0.310; --ton-fg-c:0.060;
+    }
+
+    .root { background: var(--bg); color: var(--fg); min-height: 100%;
+            transition: background .18s ease, color .18s ease; }
+    header { display: flex; align-items: center; justify-content: space-between;
+             padding: 16px 24px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand .mark { display: block; width: 32px; height: 32px; border-radius: 8px; flex: 0 0 auto; }
+    .brand h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+    .head-actions { display: flex; align-items: center; gap: 8px; }
+
+    /* Same 8px radius, 1px --line border and 13px accent text as .gearlink, so it reads as its
+       sibling. The 1.5 line-height is what makes the height match .gearlink exactly without
+       hard-coding a pixel value. */
+    .moonbtn { display: inline-block; padding: 6px 9px; border: 1px solid var(--line);
+               border-radius: 8px; color: var(--acc); background: none; cursor: pointer;
+               font: inherit; font-size: 13px; line-height: 1.5; }
+    .moonbtn:hover { background: var(--line); }
+    .moonbtn svg { display: inline-block; vertical-align: -3px; }
+    .gearlink { display: inline-block; padding: 6px 12px; border: 1px solid var(--line);
+                border-radius: 8px; color: var(--acc); text-decoration: none; font-size: 13px;
+                white-space: nowrap; }
+    .gearlink:hover { background: var(--line); color: var(--acc); }
+
+    .topbar { border-bottom: 1px solid var(--line); }
+    .statbar { display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+               padding: 12px 24px 10px; font-size: 12.5px; color: var(--mut); }
+    .statbar b { color: var(--fg); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+    nav.tabs { display: flex; align-items: center; gap: 7px; padding: 2px 24px 10px; }
+    nav.tabs .tab { --h: 228; --tab-c: 1;
+      appearance: none; border: 0; border-radius: 999px; font: inherit; font-size: 13px;
+      font-weight: 550; padding: 7px 14px; cursor: pointer; display: inline-flex;
+      align-items: center; gap: 7px; white-space: nowrap;
+      background: oklch(var(--tbg-l) calc(var(--tbg-c) * var(--tab-c)) var(--h));
+      color: oklch(var(--tfg-l) calc(var(--tfg-c) * var(--tab-c)) var(--h)); }
+    nav.tabs .tab.on {
+      background: oklch(var(--ton-bg-l) calc(var(--ton-bg-c) * var(--tab-c)) var(--h));
+      color: oklch(var(--ton-fg-l) calc(var(--ton-fg-c) * var(--tab-c)) var(--h)); }
+    .tab[data-tab="today"] { --h: 213; }
+    .tab[data-tab="proposals"] { --h: 187; }
+    .tab[data-tab="pipeline"] { --h: 152; }
+    .tab[data-tab="people"] { --h: 30; }
+    .tab[data-tab="activity"] { --h: 228; --tab-c: .3; }
+    .sb-sp { flex: 1; min-width: 0; }
+    .runbtn { appearance: none; border: 0; border-radius: 999px; background: var(--acc);
+              color: var(--bg); font: inherit; font-size: 13px; font-weight: 550;
+              padding: 7px 14px; cursor: pointer; }
+
+    .body { padding: 18px 24px 22px; }
+    .band { border: 1px solid var(--line); background: var(--card); border-radius: 12px;
+            padding: 13px 16px; font-size: 13px; color: var(--mut); margin-bottom: 16px; }
+    .band b { color: var(--fg); }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+             vertical-align: top; }
+    th { color: var(--mut); font-weight: 550; font-size: 12px; }
+    td.who { color: var(--fg); }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+            background: var(--line); font-size: 12px; color: var(--fg); }
+    .muted { color: var(--mut); }
+    .modenote { font-size: 12px; color: var(--mut); padding: 0 24px 14px; }
+    .modenote b { color: var(--fg); }
+  </style>
+</helmet>
+
+<div class="root {{themeCls}}">
+  <header>
+    <div class="brand">
+      <img class="mark" src="logo-128.webp" alt="">
+      <h1>Job Seeker</h1>
+    </div>
+    <div class="head-actions">
+      <button type="button" class="moonbtn" onClick="{{cycle}}" title="{{tip}}" aria-label="{{tip}}">
+        <sc-if value="{{isAuto}}" hint-placeholder-val="{{ true }}">
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
+            <path d="M10 2.75a7.25 7.25 0 0 0 0 14.5z" fill="currentColor"></path>
+          </svg>
+        </sc-if>
+        <sc-if value="{{isLight}}" hint-placeholder-val="{{ false }}">
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
+          </svg>
+        </sc-if>
+        <sc-if value="{{isDark}}" hint-placeholder-val="{{ false }}">
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="7.25" fill="currentColor"></circle>
+          </svg>
+        </sc-if>
+      </button>
+      <a class="gearlink" href="#" title="Criteria, markets, careers boards, CV">⚙ Settings</a>
+    </div>
+  </header>
+
+  <div class="topbar">
+    <div class="statbar">
+      <span><b>1</b> due today</span>
+      <span><b>7</b> overdue</span>
+      <span><b>0</b> approvals</span>
+      <span><b>1</b> advances waiting</span>
+    </div>
+    <nav class="tabs">
+      <button type="button" class="tab on" data-tab="today">Today <span>9</span></button>
+      <button type="button" class="tab" data-tab="proposals">Jobs <span>50</span></button>
+      <button type="button" class="tab" data-tab="pipeline">Pipeline <span>50</span></button>
+      <button type="button" class="tab" data-tab="people">People <span>32</span></button>
+      <button type="button" class="tab" data-tab="activity">Activity</button>
+      <span class="sb-sp"></span>
+      <button type="button" class="runbtn">Run now ▾</button>
+    </nav>
+  </div>
+
+  <div class="body">
+    <div class="band"><b>35 proposals</b> aging 7+ days without a decision</div>
+    <table>
+      <tr><th>date</th><th>type</th><th>who</th><th>status</th></tr>
+      <tr>
+        <td class="muted">2026-09-03</td>
+        <td>followup</td>
+        <td class="who">recruiter@example.com</td>
+        <td><span class="pill">open</span></td>
+      </tr>
+      <tr>
+        <td class="muted">2026-09-02</td>
+        <td>review</td>
+        <td class="who">Unread LinkedIn message</td>
+        <td><span class="pill">open</span></td>
+      </tr>
+    </table>
+  </div>
+  <p class="modenote">Appearance: <b>{{modeLabel}}</b>{{resolvedNote}} — click the glyph to cycle.</p>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "systemIs": {"editor":"enum","default":"dark","options":["dark","light"],
+               "section":"What the OS says"}
+}'>
+class Component extends DCLogic {
+  renderVals() {
+    const s = this.state || {};
+    const mode = s.mode || 'auto';                       // auto | light | dark
+    const sys = this.props.systemIs ?? 'dark';
+    const effective = mode === 'auto' ? sys : mode;
+    const next = { auto: 'light', light: 'dark', dark: 'auto' };
+    const labels = { auto: 'Auto', light: 'Light', dark: 'Dark' };
+    return {
+      isAuto: mode === 'auto',
+      isLight: mode === 'light',
+      isDark: mode === 'dark',
+      themeCls: effective === 'dark' ? 't-dark' : 't-paper',
+      modeLabel: labels[mode],
+      resolvedNote: mode === 'auto'
+        ? ' — following your Mac, currently ' + labels[sys]
+        : '',
+      tip: 'Appearance: ' + labels[mode] + '. Switch to ' + labels[next[mode]] + '.',
+      cycle: () => this.setState({ mode: next[mode] }),
+    };
+  }
+}
+</script>
+</body>
+</html>

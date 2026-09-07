@@ -19,12 +19,23 @@
   aborts the whole process -- an unrecoverable SIGABRT, not a catchable error.
 -->
 <style>
+/* Dark is the default because the app is dark-first. Light is "Paper": warm off-white, with the
+   accent moved #2563eb -> #2f5fd0 so it does not read cold against the cream.
+
+   Three states, and the selector order is what makes them work. No data-theme attribute means
+   Auto, so the media query alone decides and the window genuinely follows the Mac. An explicit
+   choice writes data-theme and must win over the OS in BOTH directions -- hence the :not() guard
+   on the media query and the standalone attribute rule after it. */
 :root{--bg:#0f1220;--card:#181c2f;--line:#2a2f48;--fg:#e7e9f3;--mut:#9aa0bd;--acc:#6ea8fe;
       --good:#4fc79c;--warn:#e0b155;--bad:#ff8b7d}
 @media (prefers-color-scheme: light){
-  :root{--bg:#f6f7fb;--card:#fff;--line:#e3e6f0;--fg:#1a1c28;--mut:#5b6178;--acc:#2563eb;
-        --good:#17805a;--warn:#8a6100;--bad:#b23c3c}
+  :root:not([data-theme="dark"]){--bg:#f7f5f0;--card:#fffdf9;--line:#e8e3d9;--fg:#1f1c17;
+        --mut:#6b6355;--acc:#2f5fd0;--good:#17805a;--warn:#8a6100;--bad:#b23c3c}
 }
+:root[data-theme="light"]{--bg:#f7f5f0;--card:#fffdf9;--line:#e8e3d9;--fg:#1f1c17;
+      --mut:#6b6355;--acc:#2f5fd0;--good:#17805a;--warn:#8a6100;--bad:#b23c3c}
+:root[data-theme="dark"]{--bg:#0f1220;--card:#181c2f;--line:#2a2f48;--fg:#e7e9f3;--mut:#9aa0bd;
+      --acc:#6ea8fe;--good:#4fc79c;--warn:#e0b155;--bad:#ff8b7d}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--fg);
@@ -42,6 +53,15 @@ main{flex:1;overflow-y:auto;padding:38px 34px 22px}
   border:2px solid var(--bg);border-top-width:4px}
 .brand b{font-size:14px;letter-spacing:-.01em}
 .brand span{color:var(--mut);font-size:12.5px}
+/* Same shell as the dashboard's .gearlink -- 8px radius, 1px --line border, 13px accent -- so the
+   two windows share one control. margin-left:auto parks it opposite the wordmark; the traffic
+   lights are top-LEFT, so the top-right corner is free. */
+.moonbtn{margin-left:auto;display:inline-block;padding:6px 9px;border:1px solid var(--line);
+  border-radius:8px;color:var(--acc);background:none;cursor:default;font:inherit;font-size:13px;
+  line-height:1.5}
+.moonbtn:hover{background:var(--line)}
+.moonbtn svg{display:block}
+.moonbtn:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .sub{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 18px;max-width:56ch}
 
@@ -114,7 +134,8 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 
 <main>
   <div class="brand"><span class="mark"></span><b>JobSeeker</b>
-    <span id="brandnote">· first run on this Mac</span></div>
+    <span id="brandnote">· first run on this Mac</span>
+    <button type="button" id="appearance" class="moonbtn"></button></div>
   <h1 id="title">Checking this Mac</h1>
   <p class="sub" id="subtitle">One moment — looking at what is already installed.</p>
 
@@ -147,6 +168,43 @@ function send(cmd, id) {
   seq++;
   location.hash = "#" + encodeURIComponent(JSON.stringify({ n: seq, cmd: cmd, id: id || "" }));
 }
+
+// ---- appearance: Auto / Light / Dark -------------------------------------------------------
+// One silhouette at three fill levels rather than three unrelated icons: empty is light, half is
+// auto, full is dark. Auto sits visually between the two it chooses from, which is what it does.
+// Purely presentational -- this never speaks to the app, so it cannot disturb setup.
+var GLYPH = {
+  auto: '<circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5">'
+      + '</circle><path d="M10 2.75a7.25 7.25 0 0 0 0 14.5z" fill="currentColor"></path>',
+  light: '<circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5">'
+       + '</circle>',
+  dark: '<circle cx="10" cy="10" r="7.25" fill="currentColor"></circle>'
+};
+var NEXT = { auto: "light", light: "dark", dark: "auto" };
+var LABEL = { auto: "Auto", light: "Light", dark: "Dark" };
+var mode = "auto";
+try { mode = localStorage.getItem("jobseeker.appearance") || "auto"; } catch (e) { /* file:// */ }
+if (!GLYPH[mode]) mode = "auto";
+
+function applyAppearance() {
+  var root = document.documentElement;
+  // No attribute at all is what lets the media query decide, so Auto is the real OS setting
+  // rather than a guess this page made when it loaded.
+  if (mode === "auto") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", mode);
+  var b = document.getElementById("appearance");
+  b.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">'
+              + GLYPH[mode] + '</svg>';
+  var t = "Appearance: " + LABEL[mode] + " \u2014 click for " + LABEL[NEXT[mode]];
+  b.title = t;
+  b.setAttribute("aria-label", t);
+}
+document.getElementById("appearance").onclick = function () {
+  mode = NEXT[mode];
+  try { localStorage.setItem("jobseeker.appearance", mode); } catch (e) { /* file:// */ }
+  applyAppearance();
+};
+applyAppearance();
 
 // ---- inbound: the app calls __render(state) directly ---------------------------------------
 var lastJSON = "";
