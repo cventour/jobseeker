@@ -145,7 +145,7 @@ ${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
     process.exit(1);
   }
   // Exactly what goes in the GitHub release body.
-  process.stdout.write(`${r.body}\n\n---\n\nInstall or upgrade: download below, unzip, double-click **JobSeeker Setup.command**. First time, right-click it and choose Open — macOS asks that of anything not signed by a registered developer. Your existing data and settings are untouched.\n`);
+  process.stdout.write(`${r.body}\n\n---\n\nInstall or upgrade — paste this into Terminal:\n\n\`\`\`\ncurl -fsSL https://myjobseeker.ai/install.sh | bash\n\`\`\`\n\nIt builds JobSeeker.app on your Mac, so there is no security warning to click through. Your existing data and settings are untouched.\n`);
 }
 
 main().catch((e) => {

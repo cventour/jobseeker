@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>JobSeeker Setup</title>
+<!--
+  The setup window's UI. Rendered inside a WKWebView owned by JobSeeker.app.
+
+  The bridge, in both directions:
+
+  * app -> page : the app calls __render(state) directly, via evaluateJavaScript. Nothing is
+    fetched from here -- this is a file:// page, where XHR and fetch to a sibling file are blocked
+    anyway.
+  * page -> app : the page sets location.hash, which the app reads as a plain property poll. A
+    fragment write is cheap and cannot fail silently the way a file read can.
+
+  Note for anyone tempted to "tidy up" the app side: its evaluateJavaScript call MUST be given a
+  real JS function as its completion handler. Passing $() instead makes JXA hand WebKit a
+  forwarding proxy, which raises inside a noexcept C++ frame the moment WebKit invokes it and
+  aborts the whole process -- an unrecoverable SIGABRT, not a catchable error.
+-->
+<style>
+:root{--bg:#0f1220;--card:#181c2f;--line:#2a2f48;--fg:#e7e9f3;--mut:#9aa0bd;--acc:#6ea8fe;
+      --good:#4fc79c;--warn:#e0b155;--bad:#ff8b7d}
+@media (prefers-color-scheme: light){
+  :root{--bg:#f6f7fb;--card:#fff;--line:#e3e6f0;--fg:#1a1c28;--mut:#5b6178;--acc:#2563eb;
+        --good:#17805a;--warn:#8a6100;--bad:#b23c3c}
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;overflow:hidden;
+  -webkit-user-select:none;user-select:none;cursor:default}
+
+/* The title bar is transparent and the window has no visible chrome of its own, so the top
+   padding here is what stops content colliding with the traffic lights. */
+main{flex:1;overflow-y:auto;padding:38px 34px 22px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:20px}
+.mark{width:24px;height:24px;border-radius:6px;flex:none;
+  background:linear-gradient(150deg,#6ea8fe,#3d6fd6);position:relative}
+.mark::after{content:"";position:absolute;inset:7px 6px;border-radius:2px;
+  border:2px solid var(--bg);border-top-width:4px}
+.brand b{font-size:14px;letter-spacing:-.01em}
+.brand span{color:var(--mut);font-size:12.5px}
+h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
+.sub{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 18px;max-width:56ch}
+
+/* ---- the plan (before anything runs) ---- */
+.plan{list-style:none;margin:0 0 18px;padding:0;display:grid;gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.plan li{background:var(--card);padding:11px 14px;display:grid;
+  grid-template-columns:18px 1fr auto;gap:11px;align-items:center}
+.plan .idx{font:500 11px/1 ui-monospace,Menlo,monospace;color:var(--mut);text-align:right}
+.plan .t{font-size:13px}
+.plan .t em{font-style:normal;color:var(--mut);display:block;font-size:12px;margin-top:2px;
+  line-height:1.45}
+.cost{font:500 11px/1 ui-monospace,Menlo,monospace;color:var(--mut);white-space:nowrap}
+.cost.pw{color:var(--warn)}
+.cost.have{color:var(--good)}
+
+/* ---- the checklist (while working) ---- */
+.chk{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:7px}
+.chk li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+  display:grid;grid-template-columns:18px 1fr auto;gap:11px;align-items:center}
+.chk li.running{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,var(--card))}
+.chk li.fail{border-color:color-mix(in srgb,var(--bad) 45%,var(--line))}
+.ic{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;
+  font-size:10.5px;font-weight:700;line-height:1}
+.ic.ok{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good)}
+.ic.fail{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+.ic.running{background:color-mix(in srgb,var(--acc) 18%,transparent);color:var(--acc)}
+.ic.todo,.ic.skip{background:color-mix(in srgb,var(--mut) 16%,transparent);color:var(--mut)}
+.nm{font-size:13px;font-weight:500}
+.nm em{font-style:normal;font-weight:400;color:var(--mut);display:block;font-size:12px;
+  margin-top:2px;line-height:1.45}
+.chk li.fail .nm em{color:var(--bad)}
+
+/* ---- progress + log ---- */
+.bar{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin:2px 0 10px}
+.bar i{display:block;height:100%;background:var(--acc);border-radius:99px;width:0;
+  transition:width .25s ease}
+.saying{font-size:12.5px;color:var(--mut);margin-bottom:12px;min-height:1.4em}
+.needbox{background:color-mix(in srgb,var(--warn) 12%,var(--card));
+  border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));border-radius:10px;
+  padding:12px 14px;font-size:12.5px;line-height:1.6;color:var(--fg);margin-bottom:14px}
+details.log{border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
+details.log summary{font-size:12px;color:var(--mut);cursor:default;outline:none}
+details.log summary::-webkit-details-marker{color:var(--mut)}
+pre.logbox{font:11.5px/1.7 ui-monospace,Menlo,monospace;color:var(--mut);background:var(--bg);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:10px 0 0;
+  max-height:190px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  -webkit-user-select:text;user-select:text}
+
+/* ---- footer ---- */
+footer{flex:none;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:14px 34px;border-top:1px solid var(--line);background:var(--bg)}
+.status{font-size:12px;color:var(--mut)}
+.status b{color:var(--fg);font-weight:600}
+.acts{display:flex;gap:8px}
+button{font:600 12.5px/1 -apple-system,sans-serif;padding:8px 15px;border-radius:7px;
+  border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:default}
+button:hover:not(:disabled){background:var(--line)}
+button.primary{background:var(--acc);border-color:var(--acc);color:var(--bg)}
+button.primary:hover:not(:disabled){filter:brightness(1.08);background:var(--acc)}
+button.ghost{background:transparent;color:var(--mut)}
+button:disabled{opacity:.45}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.spin{display:inline-block;width:10px;height:10px;border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--acc) 35%,transparent);border-top-color:var(--acc);
+  animation:sp .7s linear infinite;vertical-align:-1px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}.bar i{transition:none}}
+</style>
+
+<main>
+  <div class="brand"><span class="mark"></span><b>JobSeeker</b>
+    <span id="brandnote">· first run on this Mac</span></div>
+  <h1 id="title">Checking this Mac</h1>
+  <p class="sub" id="subtitle">One moment — looking at what is already installed.</p>
+
+  <ul class="plan" id="plan" hidden></ul>
+  <ul class="chk" id="chk" hidden></ul>
+
+  <div id="progress" hidden>
+    <div class="bar"><i id="barfill"></i></div>
+    <div class="saying" id="saying"></div>
+  </div>
+  <div class="needbox" id="need" hidden></div>
+
+  <details class="log" id="logwrap" hidden>
+    <summary>Show what it is doing</summary>
+    <pre class="logbox" id="logbox"></pre>
+  </details>
+</main>
+
+<footer>
+  <span class="status" id="status">Looking…</span>
+  <span class="acts" id="acts"></span>
+</footer>
+
+<script>
+"use strict";
+
+// ---- outbound: the only way this page talks to the app ------------------------------------
+var seq = 0;
+function send(cmd, id) {
+  seq++;
+  location.hash = "#" + encodeURIComponent(JSON.stringify({ n: seq, cmd: cmd, id: id || "" }));
+}
+
+// ---- inbound: the app calls __render(state) directly ---------------------------------------
+var lastJSON = "";
+
+var ICON = { ok: "✓", fail: "✕", running: "•", todo: "", skip: "–" };
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function renderPlan(st) {
+  var ul = document.getElementById("plan");
+  ul.textContent = "";
+  st.steps.forEach(function (s, i) {
+    var li = el("li");
+    li.appendChild(el("span", "idx", String(i + 1)));
+    var t = el("span", "t", s.label);
+    if (s.note) t.appendChild(el("em", null, s.note));
+    li.appendChild(t);
+    var have = s.state === "ok";
+    li.appendChild(el("span", "cost " + (have ? "have" : s.password ? "pw" : ""),
+      have ? "already installed" : s.password ? "asks your password" : "no password"));
+    ul.appendChild(li);
+  });
+  ul.hidden = false;
+}
+
+function renderChecklist(st) {
+  var ul = document.getElementById("chk");
+  ul.textContent = "";
+  st.steps.forEach(function (s) {
+    var li = el("li", s.state);
+    li.appendChild(el("span", "ic " + s.state, ICON[s.state] || ""));
+    var nm = el("span", "nm", s.label);
+    if (s.detail) nm.appendChild(el("em", null, s.detail));
+    li.appendChild(nm);
+
+    var slot = el("span");
+    if (s.state === "fail" && !st.busy) {
+      var again = el("button", "", "Try again");
+      again.onclick = function () { send("run", s.id); };
+      slot.appendChild(again);
+      if (s.optional) {
+        var sk = el("button", "ghost", "Skip");
+        sk.onclick = function () { send("skip", s.id); };
+        slot.appendChild(sk);
+      }
+    }
+    li.appendChild(slot);
+    ul.appendChild(li);
+  });
+  ul.hidden = false;
+}
+
+function renderActions(st) {
+  var acts = document.getElementById("acts");
+  acts.textContent = "";
+  function add(label, cls, cmd, disabled) {
+    var b = el("button", cls, label);
+    b.disabled = !!disabled;
+    b.onclick = function () { send(cmd); };
+    acts.appendChild(b);
+    return b;
+  }
+  if (st.view === "plan") {
+    add("Quit", "ghost", "quit");
+    add(st.allInstalled ? "Start JobSeeker" : "Begin", "primary", "begin");
+  } else if (st.view === "work") {
+    if (st.busy) add("Stop", "ghost", "stop");
+    else if (st.failed) add("Try the rest anyway", "", "begin");
+  } else if (st.view === "done") {
+    add("Open JobSeeker", "primary", "open");
+  }
+}
+
+window.__render = function (st) {
+  var j = JSON.stringify(st);
+  if (j === lastJSON) return;      // nothing changed; leave the DOM alone
+  lastJSON = j;
+
+  document.getElementById("title").textContent = st.title || "";
+  document.getElementById("subtitle").textContent = st.subtitle || "";
+  document.getElementById("brandnote").textContent = st.brandnote || "";
+
+  if (st.view === "plan") {
+    renderPlan(st);
+    document.getElementById("chk").hidden = true;
+  } else {
+    renderChecklist(st);
+    document.getElementById("plan").hidden = true;
+  }
+
+  var prog = document.getElementById("progress");
+  prog.hidden = !st.busy;
+  document.getElementById("barfill").style.width = (st.pct || 0) + "%";
+  var saying = document.getElementById("saying");
+  saying.textContent = "";
+  if (st.busy) {
+    saying.appendChild(el("span", "spin"));
+    saying.appendChild(document.createTextNode(st.say || "Working…"));
+  }
+
+  var need = document.getElementById("need");
+  need.hidden = !st.need;
+  need.textContent = st.need || "";
+
+  var lw = document.getElementById("logwrap");
+  lw.hidden = !st.log;
+  if (st.log) {
+    var box = document.getElementById("logbox");
+    var stuck = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
+    box.textContent = st.log;
+    if (stuck) box.scrollTop = box.scrollHeight;
+  }
+
+  document.getElementById("status").innerHTML = "";
+  var stat = document.getElementById("status");
+  if (st.status) {
+    var parts = String(st.status).split("|");
+    stat.appendChild(el("b", null, parts[0]));
+    if (parts[1]) stat.appendChild(document.createTextNode(" " + parts[1]));
+  }
+  renderActions(st);
+};
+</script>
+</html>

@@ -44,6 +44,7 @@
     "test:runstate": "node scripts/test-run-state.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
     "setup": "bash scripts/setup.sh",
+    "app": "bash scripts/build-app.sh",
     "schedule": "bash scripts/set-schedule.sh",
     "notes": "node scripts/release-notes.mjs",
     "notes:site": "node scripts/release-notes.mjs --html ../myjobseeker-site",
