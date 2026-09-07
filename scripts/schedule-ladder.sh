@@ -31,7 +31,8 @@ cd "$REPO" || exit 1
 
 STATE="$REPO/data/.schedule-tier.json"
 NODE_BIN="${NODE_BIN:-$(command -v node || echo /opt/homebrew/bin/node)}"
-TODAY="$(date '+%F')"
+# FAKE_TODAY pins the clock so the test suite can drive the ladder across dated scenarios.
+TODAY="${FAKE_TODAY:-$(date '+%F')}"
 
 # Tier -> the day list scripts/set-schedule.sh understands. Tier 4 has none: it is removal.
 tier_days() {

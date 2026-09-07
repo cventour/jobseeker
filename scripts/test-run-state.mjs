@@ -146,7 +146,7 @@ async function main() {
   let l = await ladder(dir, "2026-08-30");
   check(l.armed === false && l.action === "none", "an unarmed ladder recommends nothing");
 
-  await sh("bash", [path.join(dir, "scripts", "schedule-ladder.sh")], { cwd: dir, env: env(dir) });
+  await sh("bash", [path.join(dir, "scripts", "schedule-ladder.sh")], { cwd: dir, env: env(dir, { FAKE_TODAY: "2026-08-30" }) });
   l = await ladder(dir, "2026-08-30");
   check(l.armed === true && l.tier === 1 && l.action === "none",
     "arming on a install with months of stale history still leaves it daily", `dry_days=${l.dry_days}`);
