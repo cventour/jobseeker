@@ -180,81 +180,66 @@ function syncAppearance() {
 }
 
 // ------------------------------------------------------------------ window placement
-// NSWindow's own -center puts the window on the MAIN screen, which on a multi-monitor Mac is
-// wherever the menu bar lives -- not necessarily the display the user is looking at. A setup
-// window that opens on the other monitor looks exactly like a setup window that failed to open.
-// Put it on the screen holding the pointer instead, which is the best available guess at "here".
-function placeOnActiveScreen(w) {
+// Centre on the MENU BAR screen, and nowhere else.
+//
+// This used to follow the pointer onto whichever display it was on, which sounds friendlier and is
+// not. Measured against the window server: placing on the main screen lands exactly where asked
+// every time, but asking for a spot on a secondary display produced a window the window server put
+// somewhere else entirely -- requested 248,1566 on the second display, actually placed at the
+// bottom-left of the built-in with most of it below the screen edge and behind the Dock. Worse,
+// NSWindow.frame kept reporting the position it was TOLD, so the app could not even tell.
+//
+// So: one screen, the one with the menu bar, centred. Predictable beats clever, and a window you
+// have to drag back from under the Dock is not friendly at any price.
+function placeWindow(w) {
   try {
-    var mouse = $.NSEvent.mouseLocation;
-    var screens = $.NSScreen.screens;
-    var target = $.NSScreen.mainScreen;
-    for (var i = 0; i < screens.count; i++) {
-      var sc = screens.objectAtIndex(i);
-      var fr = sc.frame;
-      if (mouse.x >= fr.origin.x && mouse.x <= fr.origin.x + fr.size.width &&
-          mouse.y >= fr.origin.y && mouse.y <= fr.origin.y + fr.size.height) {
-        target = sc; break;
-      }
-    }
-    var vf = target.visibleFrame, f = w.frame;
-    function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
-    // setFrameOrigin: takes ONE argument. An earlier version passed a second (display) flag,
-    // which does not match any selector -- it threw, the catch below swallowed it, and the window
-    // silently fell back to -center on every launch. A caught exception that changes behaviour is
-    // worse than a crash, so this stays a single, correct call.
-    // Clamped to the screen it lands on. Without this a large display, a scaled resolution or a
-    // window taller than the space could put part of the window past an edge -- which is exactly
-    // when it is hardest to drag back.
-    var x = clamp(vf.origin.x + (vf.size.width - f.size.width) / 2,
-                  vf.origin.x, vf.origin.x + Math.max(0, vf.size.width - f.size.width));
-    // Slightly above true centre: a window pinned dead-centre reads as lower than it is.
-    var y = clamp(vf.origin.y + (vf.size.height - f.size.height) * 0.5,
-                  vf.origin.y, vf.origin.y + Math.max(0, vf.size.height - f.size.height));
-    w.setFrameOrigin($.NSMakePoint(x, y));
-    appendFile(FULLLOG, stamp() + '  placed at ' + Math.round(x) + ',' + Math.round(y)
-      + ' on screen ' + Math.round(vf.origin.x) + ',' + Math.round(vf.origin.y) + ' '
-      + Math.round(vf.size.width) + 'x' + Math.round(vf.size.height)
-      + ' (window ' + Math.round(f.size.width) + 'x' + Math.round(f.size.height) + ')\n');
+    var vf = $.NSScreen.mainScreen.visibleFrame, f = w.frame;
+    w.setFrameOrigin($.NSMakePoint(
+      vf.origin.x + Math.max(0, (vf.size.width - f.size.width) / 2),
+      vf.origin.y + Math.max(0, (vf.size.height - f.size.height) / 2)));
   } catch (e) {
     w.center;
   }
 }
 
-// Last word on where the window sits. placeOnActiveScreen picks a spot before the window is on
-// screen, using the display under the pointer -- but AppKit can still put it somewhere else:
-// restored state, a display that changed under us, a screen whose visible area is smaller than we
-// assumed. So after it is ordered front, ask the window which screen it actually landed on and
-// push it back inside if any edge is outside. Cheap, and it cannot be wrong in the way a
-// prediction can.
+// The window server's own answer, which is the only one that has proved trustworthy.
+function cgBounds() {
+  try {
+    var arr = ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
+      $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0));
+    var pid = $.NSProcessInfo.processInfo.processIdentifier;
+    for (var i = 0; i < arr.count; i++) {
+      var d = arr.objectAtIndex(i), o = d.objectForKey('kCGWindowOwnerPID');
+      if (o.isNil() || o.js !== pid) continue;
+      var b = d.objectForKey('kCGWindowBounds');
+      return { x: b.objectForKey('X').js, y: b.objectForKey('Y').js,
+               w: b.objectForKey('Width').js, h: b.objectForKey('Height').js };
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Checked after the window is up, against the window server rather than against AppKit -- because
+// AppKit was the thing reporting a position the window did not have.
 function ensureOnScreen(w) {
   try {
-    var sc = w.screen;
-    if (sc.isNil()) sc = $.NSScreen.mainScreen;
-    var vf = sc.visibleFrame, f = w.frame;
-    var maxX = vf.origin.x + Math.max(0, vf.size.width - f.size.width);
-    var maxY = vf.origin.y + Math.max(0, vf.size.height - f.size.height);
-    var x = Math.min(Math.max(f.origin.x, vf.origin.x), maxX);
-    var y = Math.min(Math.max(f.origin.y, vf.origin.y), maxY);
-    // A window taller than the space it is on cannot be made to fit by moving it, so shrink it
-    // rather than leaving part of it under the Dock or off the bottom edge.
-    var h = Math.min(f.size.height, vf.size.height);
-    var wd = Math.min(f.size.width, vf.size.width);
-    var moved = (Math.abs(x - f.origin.x) > 1 || Math.abs(y - f.origin.y) > 1);
-    var resized = (Math.abs(h - f.size.height) > 1 || Math.abs(wd - f.size.width) > 1);
-    if (resized) w.setFrameDisplayAnimate($.NSMakeRect(x, y, wd, h), true, false);
-    else if (moved) w.setFrameOrigin($.NSMakePoint(x, y));
-    if (moved || resized) {
-      appendFile(FULLLOG, stamp() + '  nudged onto screen: ' + Math.round(x) + ',' + Math.round(y)
-        + ' ' + Math.round(wd) + 'x' + Math.round(h) + '\n');
+    var b = cgBounds();
+    if (!b) return false;          // not registered yet; the caller will ask again
+    var sf = $.NSScreen.mainScreen.frame;          // CG space: main screen is 0,0 .. width,height
+    var off = (b.x < 0 || b.y < 0 || b.x + b.w > sf.size.width || b.y + b.h > sf.size.height);
+    appendFile(FULLLOG, stamp() + '  window at ' + Math.round(b.x) + ',' + Math.round(b.y) + ' '
+      + Math.round(b.w) + 'x' + Math.round(b.h) + (off ? '  — off screen, re-centring' : '') + '\n');
+    if (!off) return true;
+    w.center;
+    var after = cgBounds();
+    if (after) {
+      appendFile(FULLLOG, stamp() + '  re-centred to ' + Math.round(after.x) + ','
+        + Math.round(after.y) + '\n');
     }
-    var nf = w.frame;
-    appendFile(FULLLOG, stamp() + '  frame ' + Math.round(nf.origin.x) + ','
-      + Math.round(nf.origin.y) + ' ' + Math.round(nf.size.width) + 'x' + Math.round(nf.size.height)
-      + ' on screen ' + Math.round(vf.origin.x) + ',' + Math.round(vf.origin.y) + ' '
-      + Math.round(vf.size.width) + 'x' + Math.round(vf.size.height) + '\n');
+    return true;
   } catch (e) {
     appendFile(FULLLOG, stamp() + '  ensureOnScreen failed: ' + e.message + '\n');
+    return true;                   // do not retry a throw forever
   }
 }
 
@@ -338,6 +323,8 @@ var queue = [];
 var skipped = {};
 var phase = 'boot';
 var waOffered = false;
+var placementChecked = false;
+var placementTries = 0;
 var openAt = 0;
 
 function enqueueAll() {
@@ -471,8 +458,8 @@ function openDashboard() {
   // data/.setup/setup.log is the difference between knowing the handoff happened and guessing.
   appendFile(FULLLOG, stamp() + '  window handed over to ' + url + '\n');
   win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 1180, 900), true, false);
-  placeOnActiveScreen(win);
-  ensureOnScreen(win);
+  placeWindow(win);
+  placementChecked = false; placementTries = 0;   // re-check once the resized window is up
   win.minSize = $.NSMakeSize(880, 620);
   wv.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString($(url))));
 }
@@ -562,7 +549,7 @@ function run() {
     win.collectionBehavior = $.NSWindowCollectionBehaviorMoveToActiveSpace
                            | $.NSWindowCollectionBehaviorManaged;
   } catch (e) { /* older macOS: leave the default */ }
-  placeOnActiveScreen(win);
+  placeWindow(win);
 
   var cfg = $.WKWebViewConfiguration.alloc.init;
   wv = $.WKWebView.alloc.initWithFrameConfiguration(rect, cfg);
@@ -572,9 +559,9 @@ function run() {
   win.makeKeyAndOrderFront(null);
   win.orderFrontRegardless;
   app.activateIgnoringOtherApps(true);
-  // What the window ACTUALLY ended up at, after ordering front. If this differs from the "placed
-  // at" line above, something moved it and the placement code is not the thing to fix.
-  ensureOnScreen(win);
+  // The on-screen check happens on the first idle tick, not here: the window server does not know
+  // about the window yet in this run-loop turn, so asking it now returns nothing and the check
+  // quietly does nothing at all.
 
   // AND THEN RETURN. This is the whole reason the window appears at all.
   //
@@ -606,6 +593,12 @@ function tick() {
   // The user closed the window. Minimising is not closing -- isVisible goes false for both.
   if (!win.isVisible && !win.isMiniaturized) { stopServer(); app.terminate(null); return; }
 
+  // A window takes a few run-loop turns to reach the window server, so keep asking until it
+  // answers rather than giving up on the first look -- which is what made this check a no-op.
+  if (!placementChecked) {
+    placementTries++;
+    if (ensureOnScreen(win) || placementTries > 40) placementChecked = true;
+  }
   syncAppearance();   // every phase, including after the dashboard takes the window over
 
   if (phase === 'wait-ui') {
