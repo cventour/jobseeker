@@ -7,6 +7,7 @@
 #   bash scripts/setup-step.sh chrome         install Google Chrome, then verify it
 #   bash scripts/setup-step.sh configure      settings file, global agent, browser agent
 #   bash scripts/setup-step.sh start          start the dashboard and wait for it to answer
+#   bash scripts/setup-step.sh whatsapp <num> install the WhatsApp plugin and pair a phone
 #
 # This is the GUI half of what scripts/setup.sh does at a terminal. It differs in one way that
 # matters: setup.sh only ever CHECKS a runtime and tells you where to download it. This installs it.
@@ -35,6 +36,7 @@
 #   ::pct   <0-100>                       progress of the step now running
 #   ::say   <text>                        what is happening, right now
 #   ::need  <text>                        something only the user can do
+#   ::code  <XXXX-XXXX>                   a WhatsApp pairing code, to show large
 #   ::done  <ok|fail>                     this step is over
 
 set -uo pipefail
@@ -115,6 +117,15 @@ dashboard_port() {
          "$REPO/config/job-seeker.config.md" | head -1)"
   printf '%s' "${p:-4319}"
 }
+wa_number() {
+  [ -f "$WA_DIR/.env" ] || return 1
+  sed -n 's/^WHATSAPP_PHONE_NUMBER=//p' "$WA_DIR/.env" | head -1
+}
+check_whatsapp() {
+  wa_paired || return 1
+  local n; n="$(wa_number 2>/dev/null)"
+  if [ -n "$n" ]; then printf 'connected as +%s' "$n"; else printf 'connected'; fi
+}
 check_start() {
   curl -fsS -o /dev/null --max-time 2 "http://localhost:$(dashboard_port)" 2>/dev/null || return 1
   printf 'answering on port %s' "$(dashboard_port)"
@@ -167,7 +178,7 @@ human() { # bytes -> "46 MB"
 
 do_check_all() {
   local v
-  for id in node claude chrome configure start; do
+  for id in node claude chrome configure start whatsapp; do
     if v="$(check_$id)"; then step "$id" ok; [ -n "$v" ] && detail "$id" "$v"
     else step "$id" fail; [ -n "$v" ] && detail "$id" "$v"; fi
   done
@@ -436,6 +447,179 @@ do_start() {
   detail start "Started, but never answered on port $port"; step start fail; finish fail
 }
 
+
+# ---------------------------------------------------------------------------- whatsapp
+# Everything here is OPTIONAL and only runs if the user asks for it on the WhatsApp screen.
+#
+# The plugin is a third party's (Rich627/whatsapp-claude-plugin) and JobSeeker neither ships nor
+# maintains it, so this installs it by name, from its own marketplace, and the window links to the
+# author's page. It also needs bun -- the plugin's MCP server is launched with `bun run`, not node
+# -- which is why bun is installed here rather than as a JobSeeker prerequisite: nobody who skips
+# WhatsApp should be made to install a second runtime.
+WA_DIR="$HOME/.whatsapp-channel"
+WA_PLUGIN_REPO="Rich627/whatsapp-claude-plugin"
+WA_PLUGIN="whatsapp-claude-channel@whatsapp-claude-plugin"
+
+wa_paired() {
+  local creds="$WA_DIR/.baileys_auth/creds.json"
+  [ -f "$creds" ] || return 1
+  local n; n="$(node_bin)" || return 1
+  "$n" -e 'try{const c=require(process.argv[1]);process.exit(c.registered?0:1)}catch{process.exit(1)}' \
+    "$creds" 2>/dev/null
+}
+
+bun_bin() {
+  local c
+  for c in "$(command -v bun 2>/dev/null)" "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun \
+           /usr/local/bin/bun; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+do_whatsapp() {
+  local phone="${2:-}"
+  step whatsapp running
+  pct 5
+
+  # Already linked? Do not touch it. Re-pairing a working channel to show a nicer screen would be
+  # the worst possible trade.
+  if wa_paired; then
+    local n; n="$(wa_number 2>/dev/null)"
+    log "already paired - leaving the existing link alone"
+    if [ -n "$n" ]; then detail whatsapp "connected as +$n"; else detail whatsapp "connected"; fi
+    step whatsapp ok; pct 100; finish ok
+  fi
+
+  case "$phone" in
+    ''|*[!0-9]*)
+      log "refusing: '$phone' is not digits only"
+      detail whatsapp "Enter your number in digits only, with the country code and no plus sign."
+      step whatsapp fail; finish fail ;;
+  esac
+
+  # ---- bun ----
+  pct 12
+  local bun
+  if bun="$(bun_bin)"; then
+    log "bun $("$bun" --version 2>/dev/null) already installed"
+  else
+    say "Installing bun, which the WhatsApp plugin runs on"
+    log "GET https://bun.sh/install | bash"
+    curl -fsSL --max-time 300 https://bun.sh/install 2>/dev/null | bash 2>&1 | sed 's/^/    /'
+    export PATH="$HOME/.bun/bin:$PATH"
+    bun="$(bun_bin)" || {
+      detail whatsapp "bun did not install — the WhatsApp plugin cannot run without it"
+      step whatsapp fail; finish fail; }
+    log "installed bun $("$bun" --version 2>/dev/null)"
+  fi
+
+  # ---- the plugin ----
+  pct 30
+  local claude; claude="$(claude_bin)" || {
+    detail whatsapp "Claude Code is not installed, and the plugin lives inside it"
+    step whatsapp fail; finish fail; }
+  say "Adding the plugin marketplace"
+  log "claude plugin marketplace add $WA_PLUGIN_REPO"
+  "$claude" plugin marketplace add "$WA_PLUGIN_REPO" 2>&1 | sed 's/^/    /'
+  pct 45
+  say "Installing the WhatsApp plugin"
+  log "claude plugin install $WA_PLUGIN"
+  "$claude" plugin install "$WA_PLUGIN" 2>&1 | sed 's/^/    /'
+  if ! "$claude" plugin list 2>/dev/null | grep -q "whatsapp-claude-channel"; then
+    detail whatsapp "The plugin did not install — see the log"
+    step whatsapp fail; finish fail
+  fi
+  log "plugin installed"
+
+  # ---- the number ----
+  # This is all that /whatsapp-claude-channel:configure <number> does: one line in one file. No
+  # Claude session is needed for it, so the window writes it directly.
+  pct 55
+  mkdir -p "$WA_DIR"
+  chmod 700 "$WA_DIR" 2>/dev/null
+  if [ -f "$WA_DIR/.env" ]; then
+    grep -v '^WHATSAPP_PHONE_NUMBER=' "$WA_DIR/.env" > "$WA_DIR/.env.new" 2>/dev/null
+    printf 'WHATSAPP_PHONE_NUMBER=%s\n' "$phone" >> "$WA_DIR/.env.new"
+    mv "$WA_DIR/.env.new" "$WA_DIR/.env"
+  else
+    printf 'WHATSAPP_PHONE_NUMBER=%s\n' "$phone" > "$WA_DIR/.env"
+  fi
+  chmod 600 "$WA_DIR/.env" 2>/dev/null
+  log "wrote the number to ~/.whatsapp-channel/.env"
+
+  # ---- ask WhatsApp for a pairing code ----
+  # Starting the plugin's server is what makes WhatsApp issue one; the server appends it to
+  # pairing.log. Only lines written AFTER this moment count -- the file keeps old codes, and
+  # showing a dead one would send someone to their phone to type a code that cannot work.
+  pct 65
+  local plugin_dir
+  plugin_dir="$(find "$HOME/.claude/plugins/marketplaces" -maxdepth 2 -type d -name 'whatsapp-claude-plugin' 2>/dev/null | head -1)"
+  [ -n "$plugin_dir" ] || {
+    detail whatsapp "Cannot find the installed plugin"
+    step whatsapp fail; finish fail; }
+
+  # Another channel server -- usually a Claude Code session with the plugin loaded -- holds this
+  # lock and the same auth files. Two of them racing to register a device is how you end up with a
+  # half-written credential and no working link, so stop instead.
+  if [ -f "$WA_DIR/.server.lock" ]; then
+    local lock_pid; lock_pid="$(head -1 "$WA_DIR/.server.lock" 2>/dev/null | tr -d ' ')"
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+      log "another WhatsApp channel server is running (pid $lock_pid)"
+      detail whatsapp "Quit Claude Code first — it is already running the WhatsApp channel."
+      step whatsapp fail; finish fail
+    fi
+    log "clearing a stale lock (pid ${lock_pid:-unknown} is gone)"
+    rm -f "$WA_DIR/.server.lock"
+  fi
+
+  local before=0
+  [ -f "$WA_DIR/pairing.log" ] && before="$(wc -l < "$WA_DIR/pairing.log" 2>/dev/null | tr -d ' ')"
+  say "Asking WhatsApp for a pairing code"
+  nohup "$bun" run --cwd "$plugin_dir" --shell=bun --silent start \
+    >> "$WORK/whatsapp-server.log" 2>&1 < /dev/null &
+  local server_pid=$!
+  log "channel server pid $server_pid"
+
+  local code="" i
+  for i in $(seq 1 60); do
+    if [ -f "$WA_DIR/pairing.log" ]; then
+      code="$(tail -n +$((before + 1)) "$WA_DIR/pairing.log" 2>/dev/null \
+              | sed -n 's/.*PAIRING CODE: \([A-Z0-9-]*\).*/\1/p' | tail -1)"
+      [ -n "$code" ] && break
+    fi
+    kill -0 "$server_pid" 2>/dev/null || { log "the channel server exited early"; break; }
+    pct $(( 65 + i / 4 )); sleep 1
+  done
+
+  if [ -z "$code" ]; then
+    kill "$server_pid" 2>/dev/null
+    log "no pairing code appeared within 60s"
+    detail whatsapp "WhatsApp did not send a code. Check the number and try again."
+    step whatsapp fail; finish fail
+  fi
+  log "pairing code issued"
+  printf '::code %s\n' "$code"
+  need "Open WhatsApp on your phone and enter this code. It expires in a couple of minutes."
+  pct 85
+
+  # ---- wait for the phone ----
+  say "Waiting for your phone"
+  for i in $(seq 1 150); do
+    if wa_paired; then
+      kill "$server_pid" 2>/dev/null
+      log "paired"
+      detail whatsapp "Connected"
+      step whatsapp ok; pct 100; finish ok
+    fi
+    sleep 2
+  done
+  kill "$server_pid" 2>/dev/null
+  log "gave up waiting for the phone"
+  detail whatsapp "The code was not entered in time. You can try again."
+  step whatsapp fail; finish fail
+}
+
 case "${1:-}" in
   check-all) do_check_all ;;
   node)      do_node ;;
@@ -443,5 +627,6 @@ case "${1:-}" in
   chrome)    do_chrome ;;
   configure) do_configure ;;
   start)     do_start "$@" ;;   # "$@" so the app pid in $2 reaches the function
+  whatsapp)  do_whatsapp "$@" ;;
   *) echo "usage: setup-step.sh <check-all|node|claude|chrome|configure|start>" >&2; exit 64 ;;
 esac

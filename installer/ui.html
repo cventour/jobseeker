@@ -55,10 +55,7 @@ main{flex:1;overflow-y:auto;padding:38px 34px 22px;display:flex;flex-direction:c
 main>*{flex:none}
 main>#welcome{flex:1}
 .brand{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-.mark{width:24px;height:24px;border-radius:6px;flex:none;
-  background:linear-gradient(150deg,#6ea8fe,#3d6fd6);position:relative}
-.mark::after{content:"";position:absolute;inset:7px 6px;border-radius:2px;
-  border:2px solid var(--bg);border-top-width:4px}
+.mark{width:24px;height:24px;flex:none;display:block}
 .brand b{font-size:14px;letter-spacing:-.01em}
 .brand span{color:var(--mut);font-size:12.5px}
 /* Same shell as the dashboard's .gearlink -- 8px radius, 1px --line border, 13px accent -- so the
@@ -81,6 +78,45 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .wel img{width:76px;height:76px;border-radius:18px;display:block;margin-bottom:22px}
 .wel h1{font-size:23px;line-height:1.25;letter-spacing:-.02em;margin:0 0 10px;font-weight:600}
 .wel p{margin:0;font-size:13.5px;line-height:1.65;color:var(--mut);max-width:44ch}
+
+/* ---- WhatsApp ---- */
+.wa h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
+.wa .lede{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 4px;max-width:56ch}
+.wa.paired .lede,.wa.paired .whose{display:none}
+.wa.paired h1{margin-bottom:14px}
+.wa .whose{font-size:12.5px;color:var(--mut);margin:0 0 18px;max-width:56ch}
+.wa .whose a{color:var(--acc);text-decoration:none}
+.wa .whose a:hover{text-decoration:underline}
+.wa label{display:block;font-size:12.5px;font-weight:600;margin:0 0 6px}
+.wa .hint{font-size:12px;color:var(--mut);margin:6px 0 0}
+.wa input{width:260px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--fg);font:inherit;font-size:14px;
+  font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.wa input:focus{outline:2px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
+
+/* Already linked: say so and name the number, rather than silently skipping a step the plan
+   listed. A step that vanishes without explanation reads as a step that failed. */
+.waknown{display:flex;flex-direction:column;gap:5px;background:var(--card);
+  border:1px solid color-mix(in srgb,var(--good) 45%,var(--line));border-radius:12px;
+  padding:15px 18px;margin:0 0 18px}
+.waknown b{font:600 17px/1.3 ui-monospace,Menlo,monospace;color:var(--good);
+  letter-spacing:.02em}
+.waknown span{font-size:12.5px;color:var(--mut);line-height:1.55}
+
+/* The code, big enough to read from arm's length while holding the phone. */
+.wacode{display:flex;align-items:center;gap:16px;background:var(--card);border:1px solid var(--acc);
+  border-radius:12px;padding:16px 20px;margin:0 0 18px}
+.wacode b{font:700 30px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;color:var(--fg)}
+.wacode span{font-size:12.5px;color:var(--mut);line-height:1.5}
+
+/* Four phone screens, drawn rather than photographed so they stay legible in both schemes. */
+.waSteps{list-style:none;display:grid;grid-template-columns:repeat(4,1fr);gap:14px;
+  margin:0;padding:0}
+.waSteps li{display:flex;flex-direction:column;gap:7px}
+.waSteps svg{width:58px;height:auto;display:block}
+.waSteps p{margin:0;font-size:11px;line-height:1.4;color:var(--mut)}
+.waSteps b{color:var(--fg);font-weight:600;display:block;font-size:11.5px;margin-bottom:1px}
+@media (max-width:620px){.waSteps{grid-template-columns:repeat(2,1fr)}}
 
 /* ---- the plan (before anything runs) ---- */
 .plan{list-style:none;margin:0 0 18px;padding:0;display:grid;gap:1px;
@@ -150,7 +186,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 </style>
 
 <main>
-  <div class="brand"><span class="mark"></span><b>JobSeeker</b>
+  <div class="brand"><img class="mark" src="logo-128.png" alt=""><b>JobSeeker</b>
     <span id="brandnote">· first run on this Mac</span>
     <button type="button" id="appearance" class="moonbtn"></button></div>
   <h1 id="title">Checking this Mac</h1>
@@ -162,6 +198,39 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     <h1>Welcome to JobSeeker</h1>
     <p>This wizard will walk you through installing JobSeeker on your device and connecting it
       to your cloud. Click <b>Get started</b> to begin.</p>
+  </div>
+
+  <div class="wa" id="whatsapp" hidden>
+    <h1>Connect WhatsApp</h1>
+    <p class="lede">So the morning digest reaches your phone, and you can approve or reject
+      something without being at your desk. Everything works without it — you just read the
+      results on the dashboard instead.</p>
+    <p class="whose">This uses a plugin by Rich627, which JobSeeker does not ship or maintain.
+      Worth reading first:
+      <a href="https://github.com/Rich627/whatsapp-claude-plugin" id="wa-repo">github.com/Rich627/whatsapp-claude-plugin</a></p>
+
+    <div id="wa-form">
+      <label for="wanum">Your WhatsApp number</label>
+      <input id="wanum" type="text" inputmode="numeric" autocomplete="tel-national"
+             placeholder="971551234567" spellcheck="false">
+      <p class="hint">Country code first, digits only, no plus sign and no spaces.</p>
+    </div>
+
+    <div id="wa-known" class="waknown" hidden>
+      <b id="wa-known-num">connected</b>
+      <span>Already linked to this Mac. Nothing to do — the digest will reach this number.</span>
+    </div>
+
+    <div id="wa-pair" hidden>
+      <div class="wacode"><b id="wa-code">————</b>
+        <span>Enter this on your phone.<br>It expires in a couple of minutes.</span></div>
+      <ol class="waSteps">
+        <li><p><b>1. WhatsApp</b>Settings</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="44" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="42" width="60" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="60" width="52" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="78" width="58" height="9" rx="4" fill="var(--acc)"/><rect x="10" y="100" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="118" width="46" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
+        <li><p><b>2. Settings</b>Linked Devices</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="42" width="56" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="60" width="62" height="9" rx="4" fill="var(--acc)"/><rect x="10" y="82" width="48" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="100" width="54" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="118" width="44" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
+        <li><p><b>3. Linked Devices</b>Link a Device</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="58" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="46" width="72" height="13" rx="4" fill="var(--acc)"/><rect x="10" y="70" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="88" width="56" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="106" width="48" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
+        <li><p><b>4. Link a Device</b>Link with phone number instead</p><svg viewBox="0 0 92 150" aria-hidden="true"><rect x="1" y="1" width="90" height="148" rx="12" fill="var(--card)" stroke="var(--line)"/><rect x="30" y="6" width="32" height="5" rx="2.5" fill="var(--line)"/><rect x="10" y="24" width="54" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="44" width="62" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="66" width="70" height="13" rx="4" fill="var(--acc)"/><rect x="10" y="92" width="50" height="9" rx="4" fill="var(--line)" opacity=".55"/><rect x="10" y="110" width="44" height="9" rx="4" fill="var(--line)" opacity=".55"/></svg></li>
+      </ol>
+    </div>
   </div>
 
   <ul class="plan" id="plan" hidden></ul>
@@ -189,9 +258,10 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 
 // ---- outbound: the only way this page talks to the app ------------------------------------
 var seq = 0;
-function send(cmd, id) {
+function send(cmd, id, val) {
   seq++;
-  location.hash = "#" + encodeURIComponent(JSON.stringify({ n: seq, cmd: cmd, id: id || "" }));
+  location.hash = "#" + encodeURIComponent(
+    JSON.stringify({ n: seq, cmd: cmd, id: id || "", v: val || "" }));
 }
 
 // ---- appearance: Auto / Light / Dark -------------------------------------------------------
@@ -256,7 +326,8 @@ function renderPlan(st) {
     // Only ever say something when there is something to say. "already installed" is wrong for the
     // steps that are not installations, and labelling the ordinary steps "no password" invites the
     // question it was meant to answer -- so those rows stay blank.
-    var DONE = { start: "already running", configure: "already set up" };
+    var DONE = { start: "already running", configure: "already set up",
+                 whatsapp: "already connected" };
     var note = have ? (DONE[s.id] || "already installed")
                     : s.password ? "password may be required" : "";
     li.appendChild(el("span", "cost " + (have ? "have" : s.password ? "pw" : ""), note));
@@ -311,6 +382,21 @@ function renderActions(st) {
   } else if (st.view === "work") {
     if (st.busy) add("Stop", "ghost", "stop");
     else if (st.failed) add("Try the rest anyway", "", "begin");
+  } else if (st.view === "whatsapp") {
+    if (st.waKnown) { add("Continue", "primary", "wa-skip"); }
+    else {
+    add(st.code ? "Do this later" : "Skip", "ghost", "wa-skip");
+    if (!st.code) {
+      var go = el("button", "primary", "Send me a code");
+      go.disabled = !!st.busy;
+      go.onclick = function () {
+        var v = (document.getElementById("wanum").value || "").replace(/[^0-9]/g, "");
+        if (!v) { document.getElementById("wanum").focus(); return; }
+        send("wa-start", "", v);
+      };
+      acts.appendChild(go);
+    }
+    }
   } else if (st.view === "done") {
     add("Open JobSeeker", "primary", "open");
   }
@@ -325,13 +411,27 @@ window.__render = function (st) {
   document.getElementById("subtitle").textContent = st.subtitle || "";
   document.getElementById("brandnote").textContent = st.brandnote || "";
 
+  var isWA = st.view === "whatsapp";
+  var wa = document.getElementById("whatsapp");
+  wa.hidden = !isWA;
+  if (isWA) {
+    // The form gives way to the code the moment there is one to show.
+    var known = !!st.waKnown;
+    document.getElementById("wa-known").hidden = !known;
+    document.getElementById("wa-form").hidden = known || !!st.code;
+    document.getElementById("wa-pair").hidden = known || !st.code;
+    wa.classList.toggle("paired", !!st.code || known);
+    if (known) document.getElementById("wa-known-num").textContent = st.waKnown;
+    if (st.code) document.getElementById("wa-code").textContent = st.code;
+  }
+
   var isWelcome = st.view === "welcome";
   document.getElementById("welcome").hidden = !isWelcome;
   document.body.setAttribute("data-view", st.view || "");
   // The welcome carries its own heading, so the shared one would just repeat it.
-  document.getElementById("title").hidden = isWelcome;
-  document.getElementById("subtitle").hidden = isWelcome;
-  if (isWelcome) {
+  document.getElementById("title").hidden = isWelcome || isWA;
+  document.getElementById("subtitle").hidden = isWelcome || isWA;
+  if (isWelcome || isWA) {
     document.getElementById("plan").hidden = true;
     document.getElementById("chk").hidden = true;
   } else if (st.view === "plan") {

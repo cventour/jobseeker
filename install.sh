@@ -90,12 +90,12 @@ APP="$APPS_DIR/JobSeeker.app"
 [ -d "$APP" ] || die "the app was not built."
 ok "built $APP"
 
-# The claim this whole approach rests on. Check it rather than assert it.
+# Still checked, just not announced: a locally built app cannot be quarantined, so this only ever
+# speaks up when something is wrong -- and then it matters.
 if [ -n "$(xattr -p com.apple.quarantine "$APP" 2>/dev/null)" ]; then
   die "the app came out quarantined, which should be impossible for a local build. Stopping rather
   than sending you to System Settings."
 fi
-ok "not quarantined — it will open without a security warning"
 
 # ---------------------------------------------------------------- 5. hand over
 step "Opening JobSeeker"

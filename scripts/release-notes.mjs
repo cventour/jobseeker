@@ -91,7 +91,6 @@ async function main() {
   <nav>
     <a href="how-it-works.html">How it works</a>
     <a href="privacy.html">Privacy</a>
-    <a href="install.html">Install</a>
     <a class="on" href="whats-new.html">What's new</a>
     <a href="https://github.com/cventour/jobseeker">GitHub</a>
     <a class="navbtn" href="install.html">Install</a>

@@ -90,14 +90,19 @@ var STEPS = [
     password: false },
   { id: 'start', label: 'Start JobSeeker',
     note: 'On this Mac only. Nothing is sent anywhere.',
-    password: false }
+    password: false },
+  // Listed so "everything that will happen" is true, but `interactive` keeps it out of the queue:
+  // it needs a phone number and a phone, so it gets its own screen after the rest is done.
+  { id: 'whatsapp', label: 'Connect WhatsApp',
+    note: 'Optional, and you choose. Asked at the end.',
+    password: false, optional: true, interactive: true }
 ];
 
 var state = {
   view: 'plan', title: 'Checking this Mac',
   subtitle: 'One moment — looking at what is already installed.',
   brandnote: '· first run on this Mac',
-  steps: [], pct: 0, say: '', log: '', need: '', status: 'Looking…',
+  steps: [], pct: 0, say: '', log: '', need: '', code: '', waKnown: '', status: 'Looking…',
   busy: false, failed: false, allInstalled: false
 };
 
@@ -264,7 +269,8 @@ function drainStepLog() {
     var sp = L.indexOf(' ', 2);
     var verb = sp === -1 ? L.slice(2) : L.slice(2, sp);
     var rest = sp === -1 ? '' : L.slice(sp + 1);
-    if (verb === 'pct') { state.pct = parseInt(rest, 10) || 0; }
+    if (verb === 'code') { state.code = rest.trim(); }
+    else if (verb === 'pct') { state.pct = parseInt(rest, 10) || 0; }
     else if (verb === 'say') { state.say = rest; }
     else if (verb === 'need') { state.need = rest; }
     else if (verb === 'step') {
@@ -284,12 +290,14 @@ function drainStepLog() {
 var queue = [];
 var skipped = {};
 var phase = 'boot';
+var waOffered = false;
 var openAt = 0;
 
 function enqueueAll() {
   queue = [];
   for (var i = 0; i < STEPS.length; i++) {
     var s = STEPS[i];
+    if (s.interactive) continue;                      // its own screen, not a queued task
     if (s.state !== 'ok' && !skipped[s.id]) queue.push(s.id);
   }
   queuedTotal = queue.length;
@@ -319,6 +327,15 @@ function afterStep(ok) {
   state.busy = false;
   state.say = '';
   state.pct = 0;
+
+  // WhatsApp lives on its own screen: success moves on, failure stays put with the reason so the
+  // number can be corrected, and neither touches the install queue.
+  if (running === 'whatsapp') {
+    running = null; task = null;
+    if (ok) { state.code = ''; onQueueEmpty(); }
+    else { state.code = ''; state.view = 'whatsapp'; push(); }
+    return;
+  }
   if (!ok) {
     var s = stepById(running);
     // A failed optional step is not a failed install — note it and keep going.
@@ -340,6 +357,25 @@ function afterStep(ok) {
 function onQueueEmpty() {
   var startStep = stepById('start');
   var anySkipped = Object.keys(skipped).length > 0;
+  var waStep = stepById('whatsapp');
+  if (startStep && startStep.state === 'ok' && waStep && !skipped.whatsapp && !waOffered) {
+    waOffered = true;                       // shown once per run, never nagged
+    state.view = 'whatsapp';
+    state.busy = false;
+    state.code = '';
+    if (waStep.state === 'ok') {
+      // Already linked. Say so and name the number: a listed step that silently disappears
+      // reads as a step that failed.
+      state.waKnown = waStep.detail || 'connected';
+      state.status = 'Already connected.|Nothing to do here.';
+    } else {
+      state.waKnown = '';
+      state.status = 'Everything else is set up.|WhatsApp is optional.';
+    }
+    push();
+    return;
+  }
+
   if (startStep && startStep.state === 'ok') {
     state.view = 'done';
     state.title = 'JobSeeker is ready';
@@ -565,6 +601,21 @@ function tick() {
   if (cmd.cmd === 'quit') { stopServer(); app.terminate(null); return; }
   if (cmd.cmd === 'open') { openDashboard(); return; }
   if (cmd.cmd === 'stop') { if (task) { try { task.terminate; } catch (e) {} } return; }
+  if (cmd.cmd === 'wa-skip') {
+    skipped.whatsapp = true;
+    var ws = stepById('whatsapp');
+    if (ws) { ws.state = 'skip'; ws.detail = 'Skipped — you can set this up later.'; }
+    state.code = '';
+    onQueueEmpty();
+    return;
+  }
+  if (cmd.cmd === 'wa-start') {
+    state.code = '';
+    state.failed = false;
+    queuedTotal = 1; queuedDone = 0;
+    launchStep('whatsapp', cmd.v || '');
+    return;
+  }
   if (cmd.cmd === 'continue') { showPlan(); return; }
   if (cmd.cmd === 'back') { state.view = 'welcome'; push(); return; }
   if (cmd.cmd === 'begin') { state.failed = false; enqueueAll(); startNext(); return; }
@@ -588,7 +639,9 @@ function tick() {
 
 // What the survey found decides which of three things this launch is.
 function decideWhatToDo() {
-  var missing = STEPS.filter(function (s) { return s.state !== 'ok'; });
+  // Interactive steps are optional by nature, so a Mac that skipped WhatsApp is still "set up" --
+  // counting it here would send someone back through setup on every launch.
+  var missing = STEPS.filter(function (s) { return s.state !== 'ok' && !s.interactive; });
   var onlyStartMissing = missing.length === 1 && missing[0].id === 'start';
   state.allInstalled = missing.length === 0;
 

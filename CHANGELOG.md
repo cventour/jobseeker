@@ -11,6 +11,7 @@ Every release, in plain language. Newest first.
 - It installs what is missing. Node, Claude Code and Chrome, if you do not already have them, each checked before it runs.
 - JobSeeker is an app. It sits in your Applications folder and opens by double-click. Quitting it quits JobSeeker — there is no Terminal window to leave open.
 - A light mode, and a switch beside Settings. It follows your Mac unless you tell it otherwise.
+- Connect WhatsApp from the setup window. Enter your number and it installs the plugin, shows you the pairing code and the taps to make on your phone. Optional, and it says so if your Mac is already connected.
 
 ## v0.4.0 — 30 August 2026
 
