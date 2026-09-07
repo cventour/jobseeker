@@ -209,7 +209,7 @@ function placeOnActiveScreen(w) {
     var x = clamp(vf.origin.x + (vf.size.width - f.size.width) / 2,
                   vf.origin.x, vf.origin.x + Math.max(0, vf.size.width - f.size.width));
     // Slightly above true centre: a window pinned dead-centre reads as lower than it is.
-    var y = clamp(vf.origin.y + (vf.size.height - f.size.height) * 0.55,
+    var y = clamp(vf.origin.y + (vf.size.height - f.size.height) * 0.5,
                   vf.origin.y, vf.origin.y + Math.max(0, vf.size.height - f.size.height));
     w.setFrameOrigin($.NSMakePoint(x, y));
     appendFile(FULLLOG, stamp() + '  placed at ' + Math.round(x) + ',' + Math.round(y)
@@ -218,6 +218,43 @@ function placeOnActiveScreen(w) {
       + ' (window ' + Math.round(f.size.width) + 'x' + Math.round(f.size.height) + ')\n');
   } catch (e) {
     w.center;
+  }
+}
+
+// Last word on where the window sits. placeOnActiveScreen picks a spot before the window is on
+// screen, using the display under the pointer -- but AppKit can still put it somewhere else:
+// restored state, a display that changed under us, a screen whose visible area is smaller than we
+// assumed. So after it is ordered front, ask the window which screen it actually landed on and
+// push it back inside if any edge is outside. Cheap, and it cannot be wrong in the way a
+// prediction can.
+function ensureOnScreen(w) {
+  try {
+    var sc = w.screen;
+    if (sc.isNil()) sc = $.NSScreen.mainScreen;
+    var vf = sc.visibleFrame, f = w.frame;
+    var maxX = vf.origin.x + Math.max(0, vf.size.width - f.size.width);
+    var maxY = vf.origin.y + Math.max(0, vf.size.height - f.size.height);
+    var x = Math.min(Math.max(f.origin.x, vf.origin.x), maxX);
+    var y = Math.min(Math.max(f.origin.y, vf.origin.y), maxY);
+    // A window taller than the space it is on cannot be made to fit by moving it, so shrink it
+    // rather than leaving part of it under the Dock or off the bottom edge.
+    var h = Math.min(f.size.height, vf.size.height);
+    var wd = Math.min(f.size.width, vf.size.width);
+    var moved = (Math.abs(x - f.origin.x) > 1 || Math.abs(y - f.origin.y) > 1);
+    var resized = (Math.abs(h - f.size.height) > 1 || Math.abs(wd - f.size.width) > 1);
+    if (resized) w.setFrameDisplayAnimate($.NSMakeRect(x, y, wd, h), true, false);
+    else if (moved) w.setFrameOrigin($.NSMakePoint(x, y));
+    if (moved || resized) {
+      appendFile(FULLLOG, stamp() + '  nudged onto screen: ' + Math.round(x) + ',' + Math.round(y)
+        + ' ' + Math.round(wd) + 'x' + Math.round(h) + '\n');
+    }
+    var nf = w.frame;
+    appendFile(FULLLOG, stamp() + '  frame ' + Math.round(nf.origin.x) + ','
+      + Math.round(nf.origin.y) + ' ' + Math.round(nf.size.width) + 'x' + Math.round(nf.size.height)
+      + ' on screen ' + Math.round(vf.origin.x) + ',' + Math.round(vf.origin.y) + ' '
+      + Math.round(vf.size.width) + 'x' + Math.round(vf.size.height) + '\n');
+  } catch (e) {
+    appendFile(FULLLOG, stamp() + '  ensureOnScreen failed: ' + e.message + '\n');
   }
 }
 
@@ -435,6 +472,7 @@ function openDashboard() {
   appendFile(FULLLOG, stamp() + '  window handed over to ' + url + '\n');
   win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 1180, 900), true, false);
   placeOnActiveScreen(win);
+  ensureOnScreen(win);
   win.minSize = $.NSMakeSize(880, 620);
   wv.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString($(url))));
 }
@@ -534,6 +572,9 @@ function run() {
   win.makeKeyAndOrderFront(null);
   win.orderFrontRegardless;
   app.activateIgnoringOtherApps(true);
+  // What the window ACTUALLY ended up at, after ordering front. If this differs from the "placed
+  // at" line above, something moved it and the placement code is not the thing to fix.
+  ensureOnScreen(win);
 
   // AND THEN RETURN. This is the whole reason the window appears at all.
   //
