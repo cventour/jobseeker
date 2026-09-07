@@ -4,6 +4,14 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.5.0 — 7 September 2026
+
+- Install with one command. Paste one line into Terminal and it downloads JobSeeker, builds the app on your Mac and opens it. Nothing to unzip, and no security warning to click through.
+- Setup happens in a window now, not a Terminal. It shows everything it plans to install and where each download comes from, then waits for you.
+- It installs what is missing. Node, Claude Code and Chrome, if you do not already have them, each checked before it runs.
+- JobSeeker is an app. It sits in your Applications folder and opens by double-click. Quitting it quits JobSeeker — there is no Terminal window to leave open.
+- A light mode, and a switch beside Settings. It follows your Mac unless you tell it otherwise.
+
 ## v0.4.0 — 30 August 2026
 
 - Runs now report when part of the work did not happen. Before, a run could fail to read your messages and still report success.

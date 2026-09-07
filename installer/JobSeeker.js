@@ -565,6 +565,8 @@ function tick() {
   if (cmd.cmd === 'quit') { stopServer(); app.terminate(null); return; }
   if (cmd.cmd === 'open') { openDashboard(); return; }
   if (cmd.cmd === 'stop') { if (task) { try { task.terminate; } catch (e) {} } return; }
+  if (cmd.cmd === 'continue') { showPlan(); return; }
+  if (cmd.cmd === 'back') { state.view = 'welcome'; push(); return; }
   if (cmd.cmd === 'begin') { state.failed = false; enqueueAll(); startNext(); return; }
   if (cmd.cmd === 'skip') {
     skipped[cmd.id] = true;
@@ -605,6 +607,15 @@ function decideWhatToDo() {
     startNext();
     return;
   }
+  // There is real work to do, so open on the welcome rather than dropping someone straight into
+  // a list of things about to be installed on their Mac.
+  state.view = 'welcome';
+  state.status = 'Nothing has been installed yet.|';
+  push();
+}
+
+function showPlan() {
+  var missing = STEPS.filter(function (s) { return s.state !== 'ok'; });
   state.view = 'plan';
   state.title = 'Here is everything that will happen.';
   var need = missing.filter(function (s) { return s.id !== 'start' && s.id !== 'configure'; });

@@ -77,6 +77,18 @@ ok "identity set (ai.myjobseeker.app)"
 
 # ---------------------------------------------------------------- resources
 cp "$UI" "$C/Resources/ui.html"
+# The welcome screen shows the real mark, so it has to travel with the page. Prefer the brand
+# master: public/logo-128.webp is matted onto black, which reads as a black tile on the light
+# scheme. The master has a transparent ground, so it sits on either background.
+WELCOME_LOGO=""
+for logo in "$REPO/assets/brand/jobseeker-master.webp" "$REPO/public/logo-128.webp" \
+            "$REPO/public/logo.png"; do
+  [ -f "$logo" ] && { WELCOME_LOGO="$logo"; break; }
+done
+if [ -n "$WELCOME_LOGO" ]; then
+  sips -s format png -Z 320 "$WELCOME_LOGO" --out "$C/Resources/logo-128.png" >/dev/null 2>&1 \
+    || cp "$WELCOME_LOGO" "$C/Resources/logo-128.png"
+fi
 # The one thing the app cannot work out for itself: which checkout it belongs to. Launched from the
 # Dock it has no working directory, and there may be more than one copy of the repo on the Mac.
 printf '%s' "$REPO" > "$C/Resources/repo-path.txt"
