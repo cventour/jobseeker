@@ -188,7 +188,7 @@ const INDEX = page(
       it is built.</p>
     <div class="index">
       <a href="/setup"><b>The setup window</b><span>What opens when you double-click
-        <code>JobSeeker Setup.command</code>. Downloads and installs what is missing, then checks it.</span></a>
+        <code>curl -fsSL https://myjobseeker.ai/install.sh | bash</code>. Downloads and installs what is missing, then checks it.</span></a>
       <a href="/welcome"><b>The welcome wizard</b><span>Seven steps. CV, markets and the answer
         library are all skippable; cancelling anywhere tells you how to pick it up later.</span></a>
       <a href="/today"><b>Today</b><span>Where the wizard lets you out — and where it asks, once,

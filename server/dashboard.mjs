@@ -83,11 +83,141 @@ const BRAND = (title) => `<div class="brand">
   <h1>${title}</h1>
 </div>`;
 
+// Runs in <head>, before the body paints. Setting data-theme here rather than after load is the
+// difference between a themed page and a page that flashes the wrong scheme on every navigation --
+// and this dashboard is a multi-page app, so that flash would happen on every click.
+const APPEARANCE_JS = `(function(){
+  var G={
+    auto:'<circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path d="M10 2.75a7.25 7.25 0 0 0 0 14.5z" fill="currentColor"></path>',
+    light:'<circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5"></circle>',
+    dark:'<circle cx="10" cy="10" r="7.25" fill="currentColor"></circle>'};
+  var N={auto:'light',light:'dark',dark:'auto'};
+  var L={auto:'Auto',light:'Light',dark:'Dark'};
+  var mode='auto';
+  try{ var m=localStorage.getItem('jobseeker.appearance'); if(G[m]) mode=m; }catch(e){}
+  function apply(){
+    var r=document.documentElement;
+    // Auto writes NO attribute, which is what hands the decision back to the media query.
+    if(mode==='auto') r.removeAttribute('data-theme'); else r.setAttribute('data-theme',mode);
+    var b=document.getElementById('appearance');
+    if(!b) return;
+    b.innerHTML='<svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">'+G[mode]+'</svg>';
+    var t='Appearance: '+L[mode]+' \\u2014 click for '+L[N[mode]];
+    b.title=t; b.setAttribute('aria-label',t);
+  }
+  apply();
+  document.addEventListener('DOMContentLoaded',function(){
+    var b=document.getElementById('appearance');
+    if(!b) return;
+    b.addEventListener('click',function(){
+      mode=N[mode];
+      try{ localStorage.setItem('jobseeker.appearance',mode); }catch(e){}
+      apply();
+    });
+    apply();
+  });
+})();`;
+
 const HEAD_ICONS = `<link rel="icon" href="${v("/favicon.ico")}" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="${v("/favicon-32.png")}">
 <link rel="icon" type="image/png" sizes="16x16" href="${v("/favicon-16.png")}">
 <link rel="apple-touch-icon" href="${v("/apple-touch-icon.png")}">
-<meta name="theme-color" content="#0f1220">`;
+<meta name="theme-color" content="#0f1220">
+<script>${APPEARANCE_JS}</script>`;
+
+// One button, three states, shown as one silhouette at three fill levels: empty is light, half is
+// auto, full is dark. Auto sits visually between the two states it chooses from, which is what it
+// does -- a sun/moon pair has no natural third member, and adding a monitor glyph for Auto puts
+// three unrelated shapes in a 16px box.
+
+// ---------------------------------------------------------------------------- first-run tour
+// Anchored to elements that already exist rather than to markup added for the tour, so nothing
+// here changes the page it is describing. If a target is missing (a narrower layout, a future
+// change) that step is skipped rather than pointing at nothing.
+const TOUR_JS = `(function(){
+  var STEPS = [
+    { sel: 'nav.tabs', title: 'Everything lives behind these five',
+      body: 'Today is what needs you now. Jobs are roles found for you, Pipeline is what you have applied to, People is who you have spoken to.' },
+    { sel: '.statbar', title: 'The count that matters',
+      body: 'Due today, overdue, approvals waiting. If these are all zero, there is nothing for you to do.' },
+    { sel: '.runmenu-btn', title: 'Run something now',
+      body: 'A job search, a check of your channels, or your follow-ups — without waiting for the morning run.' },
+    { sel: '#appearance', title: 'Light or dark',
+      body: 'Follows your Mac by default. Click to pin it one way.' },
+    { sel: '.gearlink', title: 'Your CV and your targets',
+      body: 'Everything the agents read about you, and the boards they search, live in Settings.' }
+  ];
+  var KEY = 'jobseeker.tour';
+  var i = 0, veil, spot, bub, steps;
+
+  function seen(){ try { return localStorage.getItem(KEY) === 'done'; } catch(e){ return true; } }
+  function markSeen(){ try { localStorage.setItem(KEY, 'done'); } catch(e){} }
+
+  function stop(){
+    markSeen();
+    [veil, spot, bub].forEach(function(el){ if (el && el.parentNode) el.parentNode.removeChild(el); });
+    veil = spot = bub = null;
+    window.removeEventListener('resize', place);
+    window.removeEventListener('keydown', onKey);
+  }
+  function onKey(e){ if (e.key === 'Escape') stop(); }
+
+  function place(){
+    var st = steps[i], t = document.querySelector(st.sel);
+    if (!t) { next(); return; }
+    var r = t.getBoundingClientRect();
+    spot.style.top = (r.top - 4) + 'px';
+    spot.style.left = (r.left - 4) + 'px';
+    spot.style.width = (r.width + 8) + 'px';
+    spot.style.height = (r.height + 8) + 'px';
+
+    // Prefer sitting under the target; flip above when there is no room.
+    var below = r.bottom + 14, bh = bub.offsetHeight || 150;
+    var goBelow = (below + bh) < (window.innerHeight - 12);
+    bub.className = 'tour-bub ' + (goBelow ? 'below' : 'above');
+    bub.style.top = (goBelow ? below : Math.max(12, r.top - 14 - bh)) + 'px';
+    var left = Math.min(Math.max(12, r.left), window.innerWidth - bub.offsetWidth - 12);
+    bub.style.left = left + 'px';
+    var arrow = bub.querySelector('i');
+    var ax = Math.min(Math.max(14, r.left + r.width / 2 - left - 6), bub.offsetWidth - 26);
+    arrow.style.left = ax + 'px';
+  }
+
+  function render(){
+    var st = steps[i];
+    bub.innerHTML = '<i></i><h4></h4><p></p><footer><span class="tour-step"></span>' +
+      '<span class="tour-acts"><button type="button" data-skip>Skip</button>' +
+      '<button type="button" class="go" data-next></button></span></footer>';
+    bub.querySelector('h4').textContent = st.title;
+    bub.querySelector('p').textContent = st.body;
+    bub.querySelector('.tour-step').textContent = (i + 1) + ' of ' + steps.length;
+    bub.querySelector('[data-next]').textContent = (i === steps.length - 1) ? 'Done' : 'Next';
+    bub.querySelector('[data-skip]').onclick = stop;
+    bub.querySelector('[data-next]').onclick = next;
+    place();
+  }
+  function next(){ i++; if (i >= steps.length) { stop(); return; } render(); }
+
+  function start(){
+    steps = STEPS.filter(function(s){ return document.querySelector(s.sel); });
+    if (!steps.length) return;
+    i = 0;
+    veil = document.createElement('div'); veil.className = 'tour-veil';
+    veil.onclick = stop;
+    spot = document.createElement('div'); spot.className = 'tour-spot';
+    bub = document.createElement('div'); bub.className = 'tour-bub below';
+    document.body.appendChild(veil); document.body.appendChild(spot); document.body.appendChild(bub);
+    requestAnimationFrame(function(){ veil.classList.add('on'); });
+    window.addEventListener('resize', place);
+    window.addEventListener('keydown', onKey);
+    render();
+  }
+
+  window.__tourReplay = function(){ try { localStorage.removeItem(KEY); } catch(e){} start(); };
+  if (!seen()) setTimeout(start, 450);   // let the page settle before dimming it
+})();`;
+
+const APPEARANCE_BTN = `<button type="button" id="appearance" class="moonbtn"></button>`;
 
 // The ATS/careers-board registry (see server/record.mjs and AGENT-RULES §12). Mirrored here rather
 // than shelling out to record.mjs: handlePost already holds the data/ lock, and record.mjs takes
@@ -1371,12 +1501,13 @@ function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = ""
     .map((s) => `<option value="${esc(s)}"></option>`)
     .join("");
   return `<div class="chipfield" data-name="${esc(name)}" data-sep="${sep}">
-    <label class="chiplabel">${label}${hint ? `<span class="muted chiphint">${hint}</span>` : ""}</label>
+    <label class="chiplabel">${label}</label>
     <div class="chipbox">
       ${chips}
       <input type="text" class="chipin" ${suggestions.length ? `list="${listId}"` : ""}
              placeholder="${esc(placeholder)}" autocomplete="off" aria-label="${esc(label)}">
     </div>
+    ${hint ? `<p class="muted chiphint">${hint}</p>` : ""}
     ${suggestions.length ? `<datalist id="${listId}">${opts}</datalist>` : ""}
     <input type="hidden" name="${esc(name)}" value="${esc(values.join(sep + " "))}">
   </div>`;
@@ -2548,6 +2679,7 @@ ${HEAD_ICONS}
 <header>
   ${BRAND("Job Seeker")}
   <div class="head-actions">
+    ${APPEARANCE_BTN}
     <a class="gearlink" href="/settings" title="Criteria, markets, careers boards, CV">⚙ Settings</a>
   </div>
 </header>
@@ -2577,7 +2709,7 @@ ${tabPanel("people", on("people"), sec("people", `People <span class="muted">—
 ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="muted">— append-only audit log (filter by kind · search · run boundaries highlighted)</span>`, activitySection(all.activity)))}
 </div>
 
-<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). Agent actions run as Claude Code slash commands. Configuration lives in <a href="/settings">Settings</a>.</footer>
+<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). Agent actions run as Claude Code slash commands. Configuration lives in <a href="/settings">Settings</a>. <button type="button" class="tour-replay" onclick="window.__tourReplay&&window.__tourReplay()">Show me around again</button></footer>
 
 <div id="overlay" class="overlay" onclick="if(event.target===this)closeDetail()">
   <div class="modal"><button class="mclose" onclick="closeDetail()" aria-label="Close">×</button><div id="mbody"></div></div>
@@ -2610,6 +2742,7 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
   </div>
 </div>
 <script>window.__DETAILS__=${detailsJSON};</script>
+<script>${TOUR_JS}</script>
 <script>${JS}</script>
 </body></html>`;
 }
@@ -2646,7 +2779,7 @@ ${HEAD_ICONS}
 </head><body>
 <header>
   ${BRAND("Settings")}
-  <div class="head-actions"><a class="gearlink" href="/">← Back to work</a></div>
+  <div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="/">← Back to work</a></div>
 </header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <div class="topbar">
@@ -2678,7 +2811,15 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
 
 const CSS = `
 :root{--bg:#0f1220;--card:#181c2f;--line:#2a2f48;--fg:#e7e9f3;--mut:#9aa0bd;--acc:#6ea8fe;}
-@media (prefers-color-scheme: light){:root{--bg:#f6f7fb;--card:#fff;--line:#e3e6f0;--fg:#1a1c28;--mut:#5b6178;--acc:#2563eb;}}
+/* Appearance, three states. The base :root above is dark, so the ONLY thing that needs saying
+   twice is light. No data-theme attribute means Auto: the media query alone decides, so the page
+   really does follow the OS instead of guessing once at load. An explicit choice writes the
+   attribute and must beat the OS in both directions -- the :not() guard is what stops a light Mac
+   overriding someone who asked for dark, and the attribute rule after it is what lets a light
+   choice win on a dark Mac. color-scheme rides along so scrollbars and form controls follow too. */
+:root{color-scheme:dark;}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f7f5f0;--card:#fffdf9;--line:#e8e3d9;--fg:#1f1c17;--mut:#6b6355;--acc:#2f5fd0;color-scheme:light;}}
+:root[data-theme="light"]{--bg:#f7f5f0;--card:#fffdf9;--line:#e8e3d9;--fg:#1f1c17;--mut:#6b6355;--acc:#2f5fd0;color-scheme:light;}
 *{box-sizing:border-box}body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
 header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
 h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 12px;letter-spacing:.02em}
@@ -2713,6 +2854,55 @@ body>footer{padding-top:22px;padding-bottom:40px;border-top:1px solid var(--line
 .gearlink{display:inline-block;padding:6px 12px;border:1px solid var(--line);border-radius:8px;
   color:var(--acc);text-decoration:none;font-size:13px;white-space:nowrap}
 .gearlink:hover{background:var(--line)}
+/* Same shell as .gearlink -- 8px radius, 1px --line border, 13px accent -- so the two sit as a
+   pair. The 1.5 line-height is what makes the heights match without hard-coding a pixel value. */
+.moonbtn{display:inline-block;padding:6px 9px;border:1px solid var(--line);border-radius:8px;
+  color:var(--acc);background:none;cursor:pointer;font:inherit;font-size:13px;line-height:1.5}
+.moonbtn:hover{background:var(--line)}
+.moonbtn svg{display:block}
+.moonbtn:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+/* ---- First-run tour ---------------------------------------------------------------------------
+   Coach marks: a dimmed page, the element being described left bright, and a bubble with a pointer
+   aimed at it. Shown once, on the first open of the dashboard, and replayable from the footer --
+   a tour you cannot get back is one people click past and then wish they had not. */
+.tour-veil{position:fixed;inset:0;z-index:60;background:rgba(8,10,20,.55);
+  opacity:0;transition:opacity .18s ease;pointer-events:auto}
+.tour-veil.on{opacity:1}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]) .tour-veil{background:rgba(31,28,23,.38)}}
+:root[data-theme="light"] .tour-veil{background:rgba(31,28,23,.38)}
+
+/* The spotlight is a ring drawn around the target rather than a hole punched through the veil:
+   one element, no clip-path, and it survives the target moving or resizing. */
+.tour-spot{position:fixed;z-index:61;border-radius:12px;pointer-events:none;
+  box-shadow:0 0 0 4px var(--acc),0 0 0 9999px rgba(8,10,20,.55);
+  transition:top .2s ease,left .2s ease,width .2s ease,height .2s ease}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]) .tour-spot{box-shadow:0 0 0 4px var(--acc),0 0 0 9999px rgba(31,28,23,.38)}}
+:root[data-theme="light"] .tour-spot{box-shadow:0 0 0 4px var(--acc),0 0 0 9999px rgba(31,28,23,.38)}
+
+.tour-bub{position:fixed;z-index:62;max-width:330px;background:var(--card);color:var(--fg);
+  border:1px solid var(--line);border-radius:12px;padding:15px 17px 13px;
+  box-shadow:0 18px 44px -16px rgba(0,0,0,.55);transition:top .2s ease,left .2s ease}
+.tour-bub h4{margin:0 0 5px;font-size:14px;font-weight:650;letter-spacing:-.01em}
+.tour-bub p{margin:0 0 12px;font-size:13px;line-height:1.55;color:var(--mut)}
+.tour-bub footer{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border:0;padding:0;margin:0}
+.tour-step{font:500 11.5px/1 ui-monospace,Menlo,monospace;color:var(--mut)}
+.tour-acts{display:flex;gap:7px}
+.tour-bub button{appearance:none;border:1px solid var(--line);background:var(--bg);color:var(--fg);
+  font:inherit;font-size:12.5px;font-weight:550;padding:6px 13px;border-radius:7px;cursor:pointer}
+.tour-bub button.go{background:var(--acc);border-color:var(--acc);color:var(--bg)}
+.tour-bub button:hover{filter:brightness(1.08)}
+/* The pointed edge. A rotated square behind the bubble, so it inherits border and background. */
+.tour-bub i{position:absolute;width:12px;height:12px;background:var(--card);
+  border:1px solid var(--line);transform:rotate(45deg)}
+.tour-bub.below i{top:-7px;border-right:0;border-bottom:0}
+.tour-bub.above i{bottom:-7px;border-left:0;border-top:0}
+.tour-replay{background:none;border:0;padding:0;font:inherit;color:var(--acc);cursor:pointer;
+  text-decoration:underline}
+@media (prefers-reduced-motion:reduce){.tour-veil,.tour-spot,.tour-bub{transition:none}}
+
 .statbar{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:10px 4px 14px;font-size:12.5px;color:var(--mut)}
 .statbar b{color:var(--fg);font-weight:700;font-variant-numeric:tabular-nums}
 .statbar .sb-sp{flex:1;min-width:0}
@@ -2737,12 +2927,19 @@ body>footer{padding-top:22px;padding-bottom:40px;border-top:1px solid var(--line
   --ton-bg-l:0.470; --ton-bg-c:0.120; --ton-fg-l:0.985; --ton-fg-c:0.020;
   --tring-l:0.640; --tring-c:0.130;
 }
+/* Chroma pulled back a little against the warmer ground: the same pill saturation that
+   reads as crisp on cool grey reads as garish on cream. */
 @media (prefers-color-scheme: light){
-  :root{
-    --tbg-l:0.945; --tbg-c:0.045; --tfg-l:0.430; --tfg-c:0.130;
-    --ton-bg-l:0.855; --ton-bg-c:0.095; --ton-fg-l:0.300; --ton-fg-c:0.070;
+  :root:not([data-theme="dark"]){
+    --tbg-l:0.955; --tbg-c:0.035; --tfg-l:0.440; --tfg-c:0.110;
+    --ton-bg-l:0.870; --ton-bg-c:0.080; --ton-fg-l:0.310; --ton-fg-c:0.060;
     --tring-l:0.550; --tring-c:0.130;
   }
+}
+:root[data-theme="light"]{
+    --tbg-l:0.955; --tbg-c:0.035; --tfg-l:0.440; --tfg-c:0.110;
+    --ton-bg-l:0.870; --ton-bg-c:0.080; --ton-fg-l:0.310; --ton-fg-c:0.060;
+    --tring-l:0.550; --tring-c:0.130;
 }
 nav.tabs{display:flex;gap:7px;border-bottom:0;margin:0;padding-block:2px;overflow-x:auto;scrollbar-width:none}
 nav.tabs::-webkit-scrollbar{display:none}
@@ -2783,9 +2980,12 @@ th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
 /* Chip fields. The box looks and focuses like one input; the chips live inside it. */
 .chipgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px 18px}
+/* The label is one line in every column and the hint sits UNDER the field, so the boxes line up
+   across the row. With the hint inside the label, one longer note pushed its own column's input
+   down and nothing else's -- which read as a misaligned box rather than as a longer label. */
 .chipfield{display:flex;flex-direction:column;gap:5px;min-width:0}
 .chiplabel{font-size:12.5px;color:var(--mut)}
-.chiphint{font-size:11px;margin-left:5px}
+.chiphint{font-size:11px;line-height:1.45;margin:1px 0 0}
 .chipbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;min-height:38px;
   border:1px solid var(--line);border-radius:8px;background:var(--bg);cursor:text}
 .chipbox:focus-within{border-color:var(--acc)}
@@ -2860,10 +3060,13 @@ details.orphans{border-style:dashed}
 .subpill:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .subpill.on{background:#2f3757;color:#f2f4ff;font-weight:700;box-shadow:inset 0 0 0 1px #5a67a0}
 @media (prefers-color-scheme: light){
-  .subpill{background:#eef0f7;color:#5b6178}
-  .subpill:hover{box-shadow:inset 0 0 0 1px #c9cfe2}
-  .subpill.on{background:#dfe4f2;color:#1a1c28;box-shadow:inset 0 0 0 1px #a9b2cf}
+  :root:not([data-theme="dark"]) .subpill{background:#f0ece3;color:#6b6355}
+  :root:not([data-theme="dark"]) .subpill:hover{box-shadow:inset 0 0 0 1px #ddd6c8}
+  :root:not([data-theme="dark"]) .subpill.on{background:#e4ddcf;color:#1f1c17;box-shadow:inset 0 0 0 1px #c3b9a4}
 }
+:root[data-theme="light"] .subpill{background:#f0ece3;color:#6b6355}
+:root[data-theme="light"] .subpill:hover{box-shadow:inset 0 0 0 1px #ddd6c8}
+:root[data-theme="light"] .subpill.on{background:#e4ddcf;color:#1f1c17;box-shadow:inset 0 0 0 1px #c3b9a4}
 .subblurb{font-size:12.5px;margin:10px 0 18px}
 .subpane[hidden]{display:none}
 .paneacts{margin-top:22px}
@@ -4975,7 +5178,7 @@ function welcomeStandalonePage(st, ix, back, flash) {
 ${HEAD_ICONS}
 <style>${CSS}${WELCOME_CSS}</style>
 </head><body class="wbody">
-<header>${BRAND("Job Seeker")}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a></header>
+<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a></div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
   <form method="POST" action="/welcome-step" class="wform">
@@ -5023,7 +5226,7 @@ function welcomePage(st, ix, flash) {
 ${HEAD_ICONS}
 <style>${CSS}${WELCOME_CSS}</style>
 </head><body class="wbody">
-<header>${BRAND("Job Seeker")}</header>
+<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}</div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
   ${welcomeStepper(ix, st)}
@@ -6338,6 +6541,16 @@ const server = http.createServer(async (req, res) => {
     }
     // What a dismissal would take with it. A GET so the dialog can ask before anything is written,
     // and so it costs nothing if the user backs out.
+    // Which install is answering on this port. The setup window uses it to tell "JobSeeker is
+    // already running" apart from "a DIFFERENT JobSeeker is squatting the port" -- a stale server
+    // from another checkout answers a plain request identically, and the window then hands over to
+    // somebody else's build, which looks exactly like the update having failed.
+    if (req.method === "GET" && url.pathname === "/_whoami") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8",
+                           "cache-control": "no-store" });
+      return res.end(JSON.stringify({ app: "jobseeker", root: ROOT }));
+    }
+
     if (req.method === "GET" && url.pathname === "/dismiss-impact") {
       const id = String(url.searchParams.get("id") || "").trim();
       let out = { tasks: 0, messages: 0, contacts: 0 };

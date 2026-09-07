@@ -91,10 +91,9 @@ async function main() {
   <nav>
     <a href="how-it-works.html">How it works</a>
     <a href="privacy.html">Privacy</a>
-    <a href="install.html">Install</a>
     <a class="on" href="whats-new.html">What's new</a>
     <a href="https://github.com/cventour/jobseeker">GitHub</a>
-    <a class="navbtn" href="https://github.com/cventour/jobseeker/releases/latest/download/JobSeeker-Installer.zip" download>Download Latest Release</a>
+    <a class="navbtn" href="install.html">Install</a>
   </nav>
 </header>
 <main>
@@ -145,7 +144,7 @@ ${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
     process.exit(1);
   }
   // Exactly what goes in the GitHub release body.
-  process.stdout.write(`${r.body}\n\n---\n\nInstall or upgrade: download below, unzip, double-click **JobSeeker Setup.command**. First time, right-click it and choose Open — macOS asks that of anything not signed by a registered developer. Your existing data and settings are untouched.\n`);
+  process.stdout.write(`${r.body}\n\n---\n\nInstall or upgrade — paste this into Terminal:\n\n\`\`\`\ncurl -fsSL https://myjobseeker.ai/install.sh | bash\n\`\`\`\n\nIt builds JobSeeker.app on your Mac, so there is no security warning to click through. Your existing data and settings are untouched.\n`);
 }
 
 main().catch((e) => {

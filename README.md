@@ -144,19 +144,28 @@ Then, inside Claude Code, pair it to your own WhatsApp:
 `config/job-seeker.config.md`. Skip all of this and JobSeeker still works exactly the same — the
 digest is written to `data/.last-digest.md` and shown in the dashboard either way.
 
-**The short way.** Download the latest release, unzip it, and double-click
-**`JobSeeker Setup.command`**.
+**The short way.** Open Terminal, paste this, press Return:
 
-> The first time, macOS will refuse to open it — it was downloaded from the internet and is not
-> signed by a registered developer. **Right-click the file and choose Open**, then Open again in the
-> dialog. That is macOS asking you to confirm you meant it, and it only happens once.
+```bash
+curl -fsSL https://myjobseeker.ai/install.sh | bash
+```
 
-It checks this Mac, installs what it legitimately can, starts JobSeeker, and opens it in its own
-window — no address bar, no tabs. From there the setup wizard takes over. If Node or Chrome is
-missing it says so and points you at the download, rather than installing a runtime or a browser
-behind your back.
+It downloads JobSeeker to `~/JobSeeker`, builds `JobSeeker.app` **on your Mac** out of tools macOS
+already ships, and opens it. Setup then takes over in its own window: it checks what you have,
+shows you exactly what it proposes to install and where each download comes from, waits for you to
+agree, and installs only what is missing. When it finishes, that same window becomes JobSeeker.
 
-Closing that Terminal window stops JobSeeker. That is the whole quit story.
+There is no Gatekeeper warning to click through, and nothing about macOS security is being
+disabled. macOS quarantines files downloaded by a *browser*; `curl` does not set that flag, and an
+app compiled on the machine it runs on was never downloaded at all. Afterwards `JobSeeker.app`
+lives in `~/Applications` and opens by double-click like anything else — the command above is a
+first-run step, not how you launch it. Re-running it updates in place and leaves `data/` and
+`config/` alone.
+
+Quit the app to quit JobSeeker. Closing the window stops the server with it; there is no Terminal
+window to leave open.
+
+Read [`install.sh`](install.sh) before you run it if you like — it is short, and deliberately so.
 
 **The developer way**, which does the same thing with more output:
 
