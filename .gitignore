@@ -18,3 +18,6 @@ templates/cv/
 templates/answers.md
 templates/*.bak*
 
+
+# Design working files (the seeded canvas is a 2 MB generated payload).
+.design/

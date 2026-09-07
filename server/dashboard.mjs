@@ -152,6 +152,7 @@ async function loadAll() {
   ]);
   const markets = await loadMarkets();
   const marketAskDismissed = await readMarketAskDismissed();
+  const dismissedNotices = await readDismissedNotices();
   // Roles left behind by a vertical dropped from criteria. Computed here because page() is
   // synchronous and this needs to read the proposal records.
   const orphans = await orphanedProposals().catch(() => ({ count: 0, ids: [], byMarket: {} }));
@@ -175,23 +176,7 @@ async function loadAll() {
   // Without the first, the buttons invite a second run that scripts/run-now.sh would only refuse
   // after the click; without the second, a run that failed at 08:03 looks exactly like one that
   // worked.
-  let runNow = null;
-  try {
-    const raw = await fs.readFile(path.join(DATA, ".run-now.lock"), "utf8");
-    const [pid, slug, started] = raw.trim().split(/\s+/);
-    // A lock whose process is gone is stale — a crashed run must not wedge the button forever.
-    // process.kill(pid, 0) throws ESRCH when there is no such process; it sends no signal.
-    let alive = false;
-    try {
-      process.kill(Number(pid), 0);
-      alive = true;
-    } catch {
-      alive = false;
-    }
-    if (alive) runNow = { pid: Number(pid), slug, started };
-  } catch {
-    /* nothing running */
-  }
+  const runNow = await readRunLock();
   let lastRunNow = null;
   try {
     lastRunNow = JSON.parse(await fs.readFile(path.join(DATA, ".run-now.status.json"), "utf8"));
@@ -234,6 +219,7 @@ async function loadAll() {
     activity,
     markets,
     marketAskDismissed,
+    dismissedNotices,
     boards,
     orphans,
     lastRun,
@@ -562,7 +548,11 @@ function tasksSection(rows, appTok, appIds, dueRows = null) {
            Deciding on them is the point — but if they have gone stale, clear them in one go rather
            than scrolling past them every morning. They stay under <b>Dismissed</b> with ↺ to restore.
            <form method="POST" action="/dismiss-stale-tasks" class="inline" style="margin-left:8px"
-                 onsubmit="return confirm('Dismiss ${staleRows.length} follow-up(s) more than ${STALE_TASK_DAYS} days overdue? Nothing is deleted — they move to Dismissed and can be restored.')">
+                 data-confirm-title="Dismiss ${staleRows.length} stale follow-up${staleRows.length === 1 ? "" : "s"}?"
+                 data-confirm-ok="Dismiss all ${staleRows.length}" data-confirm-danger
+                 data-confirm="Every follow-up more than ${STALE_TASK_DAYS} days overdue is cleared in one go.
+
+Nothing is deleted — they move to Dismissed, where ↺ restores any of them.">
              <button type="submit" class="btn-small">Dismiss all ${staleRows.length}</button>
            </form>
          </div>`
@@ -882,7 +872,11 @@ function proposalsSection(propRecords, appliedByCompany, reposts = {}, orphans =
            — ${Object.entries(orphans.byMarket).map(([m, n]) => `${n} from ${esc(m)}`).join(", ")}.
            Removing a market stops new roles being found there, but these were already on the list.
            <form method="POST" action="/dismiss-orphaned-proposals" class="inline" style="margin-left:8px"
-                 onsubmit="return confirm('Dismiss ${orphans.count} role(s) from markets you no longer target? They can be restored from the Dismissed filter.')">
+                 data-confirm-title="Dismiss ${orphans.count} role${orphans.count === 1 ? "" : "s"}?"
+                 data-confirm-ok="Dismiss all ${orphans.count}" data-confirm-danger
+                 data-confirm="These are open roles from markets you no longer target.
+
+They can be restored at any time from the Dismissed filter.">
              <button type="submit" class="btn-small">Dismiss all ${orphans.count}</button>
            </form>
          </div>`
@@ -1020,7 +1014,11 @@ function companiesHTML(all) {
          ${empties
            .map(
              (m) => `<form method="POST" action="/research-market" class="inline" style="margin-left:6px"
-                 onsubmit="return confirm('Research ${esc(m).replace(/'/g, "\\'")} now?\\n\\nThis runs a Claude pass to find and rank vendors — it takes a few minutes and costs roughly a dollar, charged to your usual spend cap. It runs in the background; reload this page to see the results.')">
+                 data-confirm-title="Research ${esc(m)} now?"
+                 data-confirm-ok="Research it now"
+                 data-confirm="This runs a Claude pass to find and rank vendors in ${esc(m)}. It takes a few minutes and costs roughly a dollar, charged to your usual spend cap.
+
+It runs in the background — reload this page to see the results.">
                  <input type="hidden" name="market" value="${esc(m)}">
                  <button type="submit" class="btn-small">Research ${esc(m)} now</button>
                </form>`
@@ -1107,7 +1105,12 @@ function companiesHTML(all) {
         <button class="bedit" onclick="bToggle('${id}')" title="Paste the careers website for ${esc(e.company)}">✏️</button>
         ${
           e.board
-            ? `<form method="POST" action="/dismiss-board" class="inline" onsubmit="return confirm('Remove ${esc(e.company).replace(/'/g, "\\'")} from the registry? It will stop appearing here and scouts will skip it. You can restore it from data/boards.md.')">
+            ? `<form method="POST" action="/dismiss-board" class="inline"
+                 data-confirm-title="Remove ${esc(e.company)}?"
+                 data-confirm-ok="Remove it" data-confirm-danger
+                 data-confirm="It stops appearing here and scouts will skip it.
+
+It stays in data/boards.md and can be restored from there.">
                  <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="companies">
                  <input type="hidden" name="company" value="${esc(e.company)}">
                  <button type="submit" class="btrash" aria-label="Remove ${esc(e.company)}" title="No careers page exists — remove it for good"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6.5 1a.5.5 0 0 0-.5.5V2H3.5a.5.5 0 0 0 0 1H4v9.5A1.5 1.5 0 0 0 5.5 14h5a1.5 1.5 0 0 0 1.5-1.5V3h.5a.5.5 0 0 0 0-1H10v-.5a.5.5 0 0 0-.5-.5h-3ZM5 3h6v9.5a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5V3Zm1.5 1.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5Z"/></svg></button>
@@ -1168,7 +1171,11 @@ function companiesHTML(all) {
          address. Use the 🔎 on a row to check before removing it, and remove in bulk only once you
          are satisfied.
          <form method="POST" action="/dismiss-board" class="inline" style="margin-left:8px"
-               onsubmit="return confirm('Remove all ${noBoard.length}? Some of these DO have a careers page — the \'no board\' verdict came from agents that only guessed ATS slugs. They stay in data/boards.md and can be restored.')">
+               data-confirm-title="Remove all ${noBoard.length}?"
+               data-confirm-ok="Remove all ${noBoard.length}" data-confirm-danger
+               data-confirm="Some of these DO have a careers page — the &quot;no board&quot; verdict came from agents that only guessed ATS slugs.
+
+They stay in data/boards.md and can be restored.">
            <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="companies">
            <input type="hidden" name="scope" value="none">
            <button type="submit" class="btn-small">Remove all ${noBoard.length}</button>
@@ -1245,6 +1252,7 @@ const ACTIVITY_FAMILY = {
   close:   { hue: 12,  types: ["proposal-dismissed", "lead-dismissed", "lead-superseded", "task-dismissed", "advance-dismissed", "approval-rejected"] },
   done:    { hue: 70,  types: ["task-done", "task-open", "task-add", "task-add-nl", "task-in-progress"] },
   config:  { hue: 322, types: ["criteria-edit", "cv-upload", "cv-parse", "correction"] },
+  notice:  { hue: 45,  types: ["notification"] },
 };
 const ACTIVITY_HUE = (() => {
   const m = {};
@@ -1283,7 +1291,7 @@ function activitySection(table) {
     key === "all"
       ? table.rows.length
       : table.rows.filter((r) => ACTIVITY_FAMILY[key]?.types.includes(String(r.type || "").trim())).length;
-  const label = { run: "Runs", track: "Tracking", find: "Finding", apply: "Applying", close: "Dismissals", done: "Tasks", config: "Config" };
+  const label = { run: "Runs", track: "Tracking", find: "Finding", apply: "Applying", close: "Dismissals", done: "Tasks", config: "Config", notice: "Notifications" };
   return `<div class="taskfilters afilters">
       <button type="button" class="tf active" data-f="all">All (${table.rows.length})</button>
       ${fams.map(([k]) => `<button type="button" class="tf" data-f="${k}" style="--h:${ACTIVITY_FAMILY[k].hue}">${label[k]} (${count(k)})</button>`).join("")}
@@ -1374,11 +1382,12 @@ function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = ""
   </div>`;
 }
 
-function criteriaFormHTML(criteria, marketNames = []) {
+function criteriaFormHTML(criteria, marketNames = [], extraHidden = "") {
   const d = criteria.data ?? {};
   const val = (k) => esc(d[k] ?? "");
   const raw = (k) => d[k] ?? "";
   return `<form method="POST" action="/save-criteria" class="grid chipgrid" id="criteriaform">
+    ${extraHidden}
     ${chipsFieldHTML("markets", "Markets", raw("markets"), {
       // The market files on disk ARE the valid options, so the dropdown cannot drift from reality.
       // Picking rather than typing is what stops a second "fintech" appearing beside "Fintech".
@@ -1485,9 +1494,9 @@ function addContactFormHTML() {
 // JS (tasks / proposals / leads chips + text search) selects on it, so preserving the wrapper keeps
 // all of that working untouched. Sections are always open now — collapsing was a workaround for the
 // 13-section scroll that tabs replace, and drag-to-reorder went with it.
-function sec(id, titleHTML, bodyHTML) {
+function sec(id, titleHTML, bodyHTML, actionsHTML = "") {
   return `<section class="sec open" data-id="${id}">
-    ${titleHTML ? `<div class="sechead"><h2>${titleHTML}</h2></div>` : ""}
+    ${titleHTML ? `<div class="sechead"><h2>${titleHTML}</h2>${actionsHTML}</div>` : ""}
     <div class="secbody">${bodyHTML}</div>
   </section>`;
 }
@@ -1499,7 +1508,7 @@ function tabPanel(id, active, inner) {
 
 // The tab strip. `tabs` = [{id, label, count}]. Rendered server-side with the active tab already
 // chosen, so there is no flash of the wrong pane on load.
-function tabStrip(tabs, activeId) {
+function tabStrip(tabs, activeId, trailingHTML = "") {
   return `<nav class="tabs" role="tablist">${tabs
     .map(
       (t) =>
@@ -1508,7 +1517,139 @@ function tabStrip(tabs, activeId) {
           t.count != null ? `<span class="tn">${t.count}</span>` : ""
         }</button>`
     )
-    .join("")}</nav>`;
+    .join("")}${trailingHTML ? `<span class="tabs-end">${trailingHTML}</span>` : ""}</nav>`;
+}
+
+// ---------- Notices ----------
+// The banners at the top of Today. Each one is a fact about the machinery — the run was partial,
+// the schedule switched itself off, Chrome cannot be read — and each one used to occupy a fifth of
+// the screen with no way to put it away short of fixing it.
+//
+// So every notice carries a key and an × . Dismissing writes the key (see readDismissedNotices for
+// why it is a key and not a deletion) and logs the notice's own words to the activity table as a
+// `notification`, where the Notifications filter finds it. Nothing is lost by pressing ×; it moves.
+//
+// `summary` is what Activity will show, so it is written as a whole sentence rather than a slug —
+// the log is read weeks later, without the banner beside it.
+function notice({ key, kind = "warn", title, body, summary, dismissed, tab = "today" }) {
+  if (!key || (dismissed || {})[key]) return "";
+  return `<div class="alert ${kind} noticebox">
+    <div class="notice-body"><strong>${title}</strong> ${body}</div>
+    <form method="POST" action="/dismiss-notice" class="notice-x">
+      <input type="hidden" name="_tab" value="${esc(tab)}">
+      <input type="hidden" name="key" value="${esc(key)}">
+      <input type="hidden" name="summary" value="${esc(summary)}">
+      <button type="submit" class="xbtn" aria-label="Dismiss this notice"
+        title="Dismiss — kept in Activity under Notifications">&times;</button>
+    </form>
+  </div>`;
+}
+
+// ---------- Run now ----------
+// The manual half of the product. Everything the 08:00 schedule does can also be started by hand,
+// and there is exactly ONE menu of what can be started, one endpoint that starts it, and one busy
+// state — rendered in two shapes. Today carries the whole menu behind a dropdown; each tab carries
+// the single run that fills that tab, where its result will actually land.
+//
+// Order matters: "Everything" is first so it is the pre-selected option. Someone who opens the
+// dropdown and hits Run without reading gets the full pipeline, which is the safe wrong answer —
+// it queues approvals and sends nothing.
+const RUN_MENU = [
+  ["job-run", "Everything", "The full daily pipeline — 10–40 min"],
+  ["track", "Read my channels", "Gmail, Calendar, WhatsApp and LinkedIn — 2–5 min"],
+  ["curate", "Find new roles", "Scores openings at your target companies — 3–8 min"],
+  ["followup", "Draft follow-ups", "Writes what is due, for you to approve — 1–3 min"],
+];
+const runLabel = (slug) => RUN_MENU.find((r) => r[0] === slug)?.[1] || slug;
+
+// "2 min" beats a UTC timestamp for the only question being asked: has this hung, or did I start it
+// a moment ago? Computed at render — the page is reloaded to find out anyway.
+function runElapsed(started) {
+  const t = Date.parse(started || "");
+  if (!Number.isFinite(t)) return "";
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+  return m < 1 ? "just now" : m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// One running job, said the same way everywhere it appears.
+function runBadge(busy, { own = false } = {}) {
+  if (!busy) return "";
+  const el = runElapsed(busy.started);
+  const what = own ? "Already running" : `${runLabel(busy.slug)} is running`;
+  return `<span class="runbadge" title="Started ${esc(String(busy.started).slice(0, 16).replace("T", " "))} · pid ${esc(String(busy.pid))}">
+    <span class="rdot"></span>${esc(what)}${el ? ` · ${esc(el)}` : ""}</span>`;
+}
+
+// Two shapes, one form. `slugs` of length 1 is a plain button — the per-tab trigger, sitting in the
+// section header of the tab its result lands in. The full menu is a popover: one "Run now" button in
+// the tab bar that unfolds into the list, so four commands cost one button of screen until asked for.
+//
+// Everything is disabled while ANY run is live: Chrome is serial (AGENT-RULES §13) and two runs
+// reading WhatsApp at once read each other's tabs. run-now.sh refuses a second run regardless, and
+// so does the endpoint — disabling, and saying what is running, is so the refusal is never a surprise.
+function runNowButton({ slug, tab, busy }) {
+  const row = RUN_MENU.find((r) => r[0] === slug);
+  if (!row) return "";
+  const own = Boolean(busy && busy.slug === slug);
+  const tip = busy ? `${runLabel(busy.slug)} is already running — only one run at a time` : row[2];
+  return `<div class="runctl compact">
+    <form method="POST" action="/run-now" class="inline">
+      <input type="hidden" name="_tab" value="${esc(tab)}">
+      <input type="hidden" name="slug" value="${esc(slug)}">
+      <button type="submit" class="btn-small"${busy ? " disabled" : ""} title="${esc(tip)}">${esc(row[1])}</button>
+    </form>
+    ${busy ? runBadge(busy, { own }) : ""}
+  </div>`;
+}
+
+// The menu, folded. Rides in the tab bar on the far right, on every tab, next to the badge that says
+// what is already running — so the answer to "is this worth clicking" is beside the button itself.
+function runNowMenu({ tab, busy, lastNow }) {
+  const lastLine = (() => {
+    if (!lastNow || busy) return "";
+    const st = String(lastNow.state || "");
+    const pill =
+      st === "ok"
+        ? `<span class="ok-pill">finished</span>`
+        : st === "partial"
+          ? `<span class="warn-pill">finished, partly</span>`
+          : st.startsWith("skipped-")
+            ? `<span class="warn-pill">${esc(st.replace("skipped-", "skipped: "))}</span>`
+            : `<span class="bad-pill">${esc(st)}</span>`;
+    return `<p class="runmenu-last">Last run from here: <b>${esc(lastNow.label || lastNow.slug)}</b> ${pill}
+      <span class="muted">${esc(String(lastNow.finished || "").slice(0, 16).replace("T", " "))}</span></p>`;
+  })();
+  return `<span class="popwrap runmenu-wrap">
+    <button type="button" class="runmenu-btn" aria-haspopup="dialog" aria-expanded="false"
+      onclick="popToggle('runmenu', this)"
+      title="${esc(busy ? `${runLabel(busy.slug)} is already running` : "Start one of the job-search commands now")}">
+      Run now <span class="caret" aria-hidden="true">▾</span></button>
+    <div id="runmenu" class="pop pop-run hide" role="dialog" aria-label="Run now">
+      <p class="pop-h">Run now</p>
+      <p class="pop-sub">Nothing here applies or sends — it queues approvals for you, exactly as the
+        scheduled run does. One at a time: Chrome cannot be driven by two.</p>
+      ${
+        busy
+          ? `<div class="runmenu-busy">${runBadge(busy)}
+               <span class="muted">Started ${esc(String(busy.started).slice(0, 16).replace("T", " "))}${
+                 busy.starting ? ", starting up" : ""
+               } · pid ${esc(String(busy.pid))}. Progress is in <code>data/.run-now.log</code>.</span></div>`
+          : ""
+      }
+      <div class="runmenu-list">
+        ${RUN_MENU.map(
+          ([slug, label, sub]) => `<form method="POST" action="/run-now">
+            <input type="hidden" name="_tab" value="${esc(tab)}">
+            <input type="hidden" name="slug" value="${esc(slug)}">
+            <button type="submit" class="runmenu-item"${busy ? " disabled" : ""}>
+              <span class="rmi-label">${esc(label)}</span>
+              <span class="rmi-sub">${esc(sub)}</span>
+            </button></form>`
+        ).join("")}
+      </div>
+      ${lastLine}
+    </div>
+  </span>`;
 }
 
 // ---------- Today ----------
@@ -1571,7 +1712,7 @@ function unfinishedHTML(w, markets) {
     </div>`;
 }
 
-function setupHTML(st, criteria, marketNames = []) {
+function setupHTML(st, criteria, marketNames = [], subReq = "") {
   if (!st) return `<p class="empty">Status unavailable.</p>`;
   const cfg = st.config || {};
   const b = st.browser;
@@ -1666,82 +1807,136 @@ function setupHTML(st, criteria, marketNames = []) {
 
   // --- spend ----------------------------------------------------------------------------------
   const sp = st.spend || {};
-  const spendRows = (sp.recent || []).length
-    ? (sp.recent || []).map((r) => `<tr><td class="nw">${esc(r.date)}</td><td class="nw">$${(r.cost_usd || 0).toFixed(2)}</td><td>${esc(r.outcome)}</td></tr>`).join("")
-    : `<tr><td colspan="3" class="muted">No runs recorded yet. Cost tracking starts from the next run — earlier runs were never measured.</td></tr>`;
+
+  // ---- panes -----------------------------------------------------------------------------------
+  //
+  // Setup was one scroll: criteria, spend, channels, a collapsed Advanced, the system table and a
+  // spend-history table, in that order, with no way to see any one of them without the other five.
+  // It is now four sub-panes behind a pill row.
+  //
+  // Two things constrain the markup, and both are why the panes are plain <div>s rather than
+  // separate forms:
+  //   * Roles posts to /save-criteria; Channels, Advanced and Spend all post to /save-config. So
+  //     ONE cfgform wraps those three — a hidden <div> still submits its inputs, which is what keeps
+  //     saving from Channels from blanking what Advanced holds.
+  //   * The Advanced weight sliders mirror hidden inputs inside the CRITERIA form (see
+  //     criteriaFormHTML). They are in different panes but the same document, so the existing sync
+  //     script still finds both.
+  //
+  // Spend is built and last, but not shown: on a paid Claude plan a running total reads as a second
+  // bill for the same work. Its inputs stay in the form so the values survive every save. One flag
+  // brings it back.
+  const SPEND_HIDDEN = true;
+  const PANES = [
+    ["roles", "Roles", "what you are looking for"],
+    ["channels", "Channels", "what JobSeeker may read, and where it asks you"],
+    ["advanced", "Advanced", "scoring, privacy and applying"],
+    ["system", "System checks", "whether it is actually working"],
+    ["spend", "Spend", "what a run is allowed to cost"],
+  ].filter(([id]) => !(SPEND_HIDDEN && id === "spend"));
+
+  const activeSub = PANES.some(([id]) => id === subReq) ? subReq : PANES[0][0];
+  const subStrip = `<div class="subtabs" role="tablist" aria-label="Setup sections">
+    ${PANES.map(
+      ([id, label, blurb]) => `<button type="button" class="subpill${id === activeSub ? " on" : ""}"
+        role="tab" data-sub="${esc(id)}" data-blurb="${esc(blurb)}"
+        aria-selected="${id === activeSub}">${esc(label)}</button>`
+    ).join("")}
+  </div>`;
+  const blurbOf = (id) => (PANES.find(([p]) => p === id) || ["", "", ""])[2];
+  const pane = (id, inner) =>
+    `<div class="subpane${id === activeSub ? " on" : ""}" data-sub="${esc(id)}"${
+      id === activeSub ? "" : " hidden"
+    }>${inner}</div>`;
+
+  // Every form in here is stamped with the pane it was submitted from, so a save comes back to it.
+  const subField = (id) => `<input type="hidden" name="_sub" value="${esc(id)}">`;
+
+  const spendPane = `
+    <div class="cfggrid" style="max-width:640px">
+      <label>Cap per run (USD)<input name="max_spend_per_run_usd" value="${esc(cfg.max_spend_per_run_usd ?? "5")}" inputmode="decimal"></label>
+      <label>Monthly ceiling (USD, blank = none)<input name="max_spend_per_month_usd" value="${esc(cfg.max_spend_per_month_usd ?? "")}" inputmode="decimal" placeholder="no ceiling"></label>
+    </div>
+    <div class="spendcard">
+      <div class="spendrow"><span class="muted">Spent this month</span>
+        <span class="spendnum">$${(sp.month_total_usd || 0).toFixed(2)}</span></div>
+      <div class="muted tiny">across ${sp.month_runs || 0} run${sp.month_runs === 1 ? "" : "s"}.
+        Past the ceiling the daily run does not start, and tells you why.</div>
+    </div>
+    <p class="muted panenote">This is what JobSeeker's own runs cost through your Claude plan. It is
+      not a second bill.</p>`;
 
   return `
-  <p class="th">What you are looking for</p>
-  ${criteriaFormHTML(criteria, marketNames)}
+  ${subStrip}
+  <p class="subblurb muted">${esc(blurbOf(activeSub))}</p>
+  <div class="subpanes">
 
-  <form method="POST" action="/save-config" class="cfgform">${hidden}
-    <p class="th">Spend</p>
-    <div class="cfggrid">
-      <label>Cap per run (USD)<input name="max_spend_per_run_usd" value="${esc(cfg.max_spend_per_run_usd ?? "5")}" inputmode="decimal"></label>
-      <label>Monthly ceiling (USD, blank = none)<input name="max_spend_per_month_usd" value="${esc(cfg.max_spend_per_month_usd ?? "")}" inputmode="decimal"></label>
-    </div>
-    <p class="muted">This month: <b>$${(sp.month_total_usd || 0).toFixed(2)}</b> across ${sp.month_runs || 0} run(s).
-      Past the ceiling the daily run does not start, and tells you why.</p>
+    ${pane("roles", criteriaFormHTML(criteria, marketNames, subField("roles")))}
 
-    <p class="th">Channels</p>
-    <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled,linkedin_open_tab">
-    <div class="tglgrid">
-      ${toggleHTML("whatsapp_web_enabled", "Read WhatsApp Web", isOn(cfg.whatsapp_web_enabled), "Reads threads you have already read; never opens an unread chat.")}
-      ${toggleHTML("linkedin_enabled", "Read LinkedIn", isOn(cfg.linkedin_enabled), "Same rule, through your logged-in Chrome.")}
-      ${toggleHTML("linkedin_open_tab", "Open a LinkedIn messaging tab", isOn(cfg.linkedin_open_tab, false), "Off: only reads a tab you leave open. On: opens one, which can mark the first conversation read.")}
-    </div>
-    <div class="cfggrid">
-      ${chipsFieldHTML("approval_channels", "Where to send approvals", cfg.approval_channels ?? "", {
-        suggestions: ["whatsapp", "chat"],
-        placeholder: "add a channel…",
-      })}
-      <label>Your WhatsApp number<input name="whatsapp_owner_jid" value="${esc(cfg.whatsapp_owner_jid ?? "")}" placeholder="971xxxxxxxxx@s.whatsapp.net"></label>
-    </div>
+    <form method="POST" action="/save-config" class="cfgform">${hidden}
+      <input type="hidden" name="_sub" id="cfg_sub" value="${esc(activeSub)}">
+      <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled,linkedin_open_tab">
 
-    <!-- Everything below is real, but nobody needs it on day one. Collapsed by default so the
-         first screen asks only for what the system genuinely cannot work without. -->
-    <details class="adv">
-      <summary>Advanced</summary>
+      ${pane("channels", `
+        <div class="tglgrid">
+          ${toggleHTML("whatsapp_web_enabled", "Read WhatsApp Web", isOn(cfg.whatsapp_web_enabled), "Reads threads you have already read; never opens an unread chat.")}
+          ${toggleHTML("linkedin_enabled", "Read LinkedIn", isOn(cfg.linkedin_enabled), "Same rule, through your logged-in Chrome.")}
+          ${toggleHTML("linkedin_open_tab", "Open a LinkedIn messaging tab", isOn(cfg.linkedin_open_tab, false), "Off: only reads a tab you leave open. On: opens one, which can mark the first conversation read.")}
+        </div>
+        <div class="panerule"></div>
+        <div class="cfggrid">
+          ${chipsFieldHTML("approval_channels", "Where to send approvals", cfg.approval_channels ?? "", {
+            suggestions: ["whatsapp", "chat"],
+            placeholder: "add a channel…",
+          })}
+          <label>Your WhatsApp number<input name="whatsapp_owner_jid" value="${esc(cfg.whatsapp_owner_jid ?? "")}" placeholder="971xxxxxxxxx@s.whatsapp.net"></label>
+        </div>
+        <div class="paneacts"><button type="submit">Save settings</button></div>`)}
 
-      <p class="th">Scoring weights</p>
-      ${weightsHTML(criteria)}
+      ${pane("advanced", `
+        <p class="th">Scoring weights</p>
+        ${weightsHTML(criteria)}
 
-      <p class="th">Privacy</p>
-      <div class="cfggrid">
-        ${chipsFieldHTML("ignored_chats", "Chats never to log", cfg.ignored_chats ?? "", {
-          placeholder: "add a chat name…",
-          hint: "— matched as a case-insensitive prefix",
-        })}
-        <label>Company aliases<input name="company_aliases" value="${esc(cfg.company_aliases ?? "")}" placeholder="oldname=New Name"></label>
-      </div>
+        <p class="th">Privacy</p>
+        <div class="cfggrid">
+          ${chipsFieldHTML("ignored_chats", "Chats never to log", cfg.ignored_chats ?? "", {
+            placeholder: "add a chat name…",
+            hint: "— matched as a case-insensitive prefix",
+          })}
+          <label>Company aliases<input name="company_aliases" value="${esc(cfg.company_aliases ?? "")}" placeholder="oldname=New Name"></label>
+        </div>
 
-      <p class="th">Applying</p>
-      <div class="cfggrid">
-        ${chipsFieldHTML("apply_stop_before", "Pause applying before", cfg.apply_stop_before ?? "", {
-          suggestions: ["each_section", "file_upload", "unknown_question", "submit"],
-          placeholder: "add a checkpoint…",
-        })}
-      </div>
-      <p class="muted">Checkpoints where an application pauses for you. Removing <code>submit</code>
-        does <b>not</b> let anything be sent without approval — that gate is in the agent rules, not here.</p>
-    </details>
+        <p class="th">Applying</p>
+        <div class="cfggrid" style="max-width:440px">
+          ${chipsFieldHTML("apply_stop_before", "Pause applying before", cfg.apply_stop_before ?? "", {
+            suggestions: ["each_section", "file_upload", "unknown_question", "submit"],
+            placeholder: "add a checkpoint…",
+          })}
+        </div>
+        <p class="muted panenote">Checkpoints where an application pauses for you. Removing <code>submit</code>
+          does <b>not</b> let anything be sent without approval — that gate is in the agent rules, not here.</p>
+        <div class="paneacts"><button type="submit">Save settings</button></div>`)}
 
-    <button type="submit" class="btn">Save settings</button>
-  </form>
+      ${
+        // Hidden, but still submitted: dropping these inputs would let a save from another pane
+        // rewrite the config file without them.
+        SPEND_HIDDEN
+          ? `<div class="subpane" data-sub="spend" hidden>${spendPane}</div>`
+          : pane("spend", `${spendPane}<div class="paneacts"><button type="submit">Save settings</button></div>`)
+      }
+    </form>
 
-  <p class="th">System</p>
-  <div class="scroll"><table><tbody>
-    ${rows.map(([k, v, act, note]) => `<tr><td class="nw"><b>${esc(k)}</b></td><td class="nw">${v}</td><td class="nw">${act}</td><td class="muted">${note}</td></tr>`).join("")}
-    ${chanRow("Gmail / Calendar", st.channels.gmail, "Connected in Claude Code, not here.")}
-    ${chanRow("WhatsApp", st.channels.whatsapp, "Read through Chrome by the daily run.")}
-    ${chanRow("LinkedIn", st.channels.linkedin, "Read through Chrome by the daily run.")}
-    <tr><td class="nw"><b>CV</b></td><td class="nw">${st.profileParsed ? `<span class="ok-pill">parsed</span>` : `<span class="bad-pill">not parsed</span>`}</td><td class="nw"></td><td class="muted">Upload on the CV tab, then run <code>/parse-cv</code> in Claude Code.</td></tr>
-  </tbody></table></div>
+    ${pane("system", `
+      <div class="scroll"><table><tbody>
+        ${rows.map(([k, v, act, note]) => `<tr><td class="nw"><b>${esc(k)}</b></td><td class="nw">${v}</td><td class="nw">${act}</td><td class="muted">${note}</td></tr>`).join("")}
+        ${chanRow("Gmail / Calendar", st.channels.gmail, "Connected in Claude Code, not here.")}
+        ${chanRow("WhatsApp", st.channels.whatsapp, "Read through Chrome by the daily run.")}
+        ${chanRow("LinkedIn", st.channels.linkedin, "Read through Chrome by the daily run.")}
+        <tr><td class="nw"><b>CV</b></td><td class="nw">${st.profileParsed ? `<span class="ok-pill">parsed</span>` : `<span class="bad-pill">not parsed</span>`}</td><td class="nw"></td><td class="muted">Upload on the CV tab, then run <code>/parse-cv</code> in Claude Code.</td></tr>
+      </tbody></table></div>
 
-  ${manual.length ? `<p class="th">Only you can do these</p>` + manual.map(([k, v]) => `<div class="alert warn"><b>${esc(k)}</b>${v}</div>`).join("") : ""}
-
-  <p class="th">Spend history</p>
-  <div class="scroll"><table><thead><tr><th>date</th><th>cost</th><th>outcome</th></tr></thead><tbody>${spendRows}</tbody></table></div>
+      ${manual.length ? `<p class="th">Only you can do these</p>` + manual.map(([k, v]) => `<div class="alert warn"><b>${esc(k)}</b>${v}</div>`).join("") : ""}`)}
+  </div>
   `;
 }
 
@@ -1830,6 +2025,7 @@ async function systemStatus() {
 
 function todayHTML(all, dueToday, appTok, appIds) {
   const t = today();
+  const NX = all.dismissedNotices || {};
   const tasks = all.tasks.rows.filter((r) => r.status === "open");
   const overdue = tasks.filter((r) => r.due_date && r.due_date < t);
   const advances = all.applications.filter((a) => a.data.pending_stage);
@@ -1851,14 +2047,28 @@ function todayHTML(all, dueToday, appTok, appIds) {
   // A digest that never reached the user is invisible by definition — so when delivery failed, the
   // digest itself is shown here rather than left in a log file.
   const d = all.lastDigest;
-  const digestBlock =
+  const digestNotice =
     d && d.delivered === false
-      ? `<div class="alert bad">
-           <strong>Your last digest was not delivered.</strong>
-           ${esc(d.reason || "reason not recorded")} — so it is reproduced here.
-         </div>
-         <div class="tblock"><pre class="digest">${esc(d.body)}</pre></div>`
+      ? notice({
+          // The reason is free text from the delivery layer; the key has to survive being written to
+          // JSON and matched by NOTICE_KEY_OK, so it carries a slug of the reason, not the reason.
+          key: `digest:undelivered:${String(d.reason || "none")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "")
+            .slice(0, 40) || "none"}`,
+          kind: "bad",
+          title: "Your last digest was not delivered.",
+          body: `${esc(d.reason || "reason not recorded")} — so it is reproduced below.`,
+          summary: `Digest not delivered — ${d.reason || "reason not recorded"}`,
+          dismissed: NX,
+        })
       : "";
+  // The digest body itself is not a notice: it is the content the failed delivery was carrying, and
+  // it goes on being shown until the next digest replaces it.
+  const digestBlock = digestNotice
+    ? `${digestNotice}<div class="tblock"><pre class="digest">${esc(d.body)}</pre></div>`
+    : "";
 
   // Reading messages can be blocked while the digest still sends — they are different capabilities
   // (AGENT-RULES §10). The blockers array carries the specific one-time fix, so it is shown verbatim
@@ -1869,10 +2079,17 @@ function todayHTML(all, dueToday, appTok, appIds) {
   const runCoversBrowser = run?.state === "partial" && (run.gaps || []).includes("browser-read");
   const browserBanner =
     !runCoversBrowser && b && b.capabilities && !b.capabilities.read_page_content
-      ? `<div class="alert warn"><strong>WhatsApp Web and LinkedIn messages cannot be READ.</strong>
-           ${b.whatsapp?.unread ? `<strong>${b.whatsapp.unread} unread</strong> waiting on WhatsApp Web. ` : ""}
+      ? notice({
+          // Keyed on the capability, not on the probe timestamp: the probe reruns constantly and a
+          // notice that returns every few minutes has not been dismissed at all.
+          key: "browser:cannot-read",
+          title: "WhatsApp Web and LinkedIn messages cannot be READ.",
+          body: `${b.whatsapp?.unread ? `<strong>${b.whatsapp.unread} unread</strong> waiting on WhatsApp Web. ` : ""}
            ${b.blockers?.length ? esc(b.blockers[0]) : "No mechanism available."}
-           <span class="muted">Sending still works — the digest goes over the WhatsApp API, which needs no browser.</span></div>`
+           <span class="muted">Sending still works — the digest goes over the WhatsApp API, which needs no browser.</span>`,
+          summary: `WhatsApp Web and LinkedIn cannot be read — ${b.blockers?.length ? String(b.blockers[0]).slice(0, 200) : "no mechanism available"}`,
+          dismissed: NX,
+        })
       : "";
 
   // What a run could not do, in the user's words rather than the slugs the machine passes around.
@@ -1888,9 +2105,16 @@ function todayHTML(all, dueToday, appTok, appIds) {
   const runBanner = (() => {
     if (!run) return "";
     if (run.state === "failed") {
-      return `<div class="alert bad"><strong>The last scheduled run failed.</strong>
-           ${esc(run.detail || "")} <span class="muted">(started ${esc(run.started || "?")})</span>
-           — check <code>data/.job-run.log</code>.</div>`;
+      return notice({
+        // Keyed on the run itself, so dismissing one failure never hides the next one.
+        key: `run:failed:${run.started || run.finished || ""}`,
+        kind: "bad",
+        title: "The last scheduled run failed.",
+        body: `${esc(run.detail || "")} <span class="muted">(started ${esc(run.started || "?")})</span>
+           — check <code>data/.job-run.log</code>.`,
+        summary: `Scheduled run failed (started ${run.started || "?"}) — ${run.detail || "no detail recorded"}`,
+        dismissed: NX,
+      });
     }
     // A run that finished but could not do half the job used to render as an unqualified success:
     // no banner at all, because only `failed` was handled. That is the whole reason `partial`
@@ -1898,10 +2122,17 @@ function todayHTML(all, dueToday, appTok, appIds) {
     if (run.state === "partial") {
       const gaps = Array.isArray(run.gaps) ? run.gaps : [];
       const blockers = run.coverage?.blockers ?? [];
-      return `<div class="alert warn"><strong>The last run finished, but not all of it ran.</strong>
-          <ul class="gaplist">${gaps.map((g) => `<li>${esc(GAP_SAYS[g] || g)}</li>`).join("")}</ul>
+      return notice({
+        key: `run:partial:${run.started || run.finished || ""}`,
+        title: "The last run finished, but not all of it ran.",
+        body: `<ul class="gaplist">${gaps.map((g) => `<li>${esc(GAP_SAYS[g] || g)}</li>`).join("")}</ul>
           ${blockers.length ? `<div class="ti-sub">${esc(String(blockers[0]).slice(0, 400))}</div>` : ""}
-          <span class="muted">Started ${esc(String(run.started || "?").slice(0, 16).replace("T", " "))}.</span></div>`;
+          <span class="muted">Started ${esc(String(run.started || "?").slice(0, 16).replace("T", " "))}.</span>`,
+        summary: `Run of ${String(run.started || "?").slice(0, 16).replace("T", " ")} finished partly — ${gaps
+          .map((g) => GAP_SAYS[g] || g)
+          .join(" ")}`,
+        dismissed: NX,
+      });
     }
     return "";
   })();
@@ -1914,27 +2145,47 @@ function todayHTML(all, dueToday, appTok, appIds) {
     const tier = Number(l.tier) || 1;
     const SCHEDULE = { 1: "every day", 2: "Mondays and Thursdays", 3: "Mondays only", 4: "not at all" };
     const NEXT = { 1: "Mondays and Thursdays", 2: "Mondays only", 3: "not at all" };
+    // Keyed on the state the ladder is IN, plus the day it moved there — so a further step down
+    // announces itself even though the previous one was dismissed.
+    const stamp = String(l.warned_at || l.changed_at || l.armed_on || "");
     if (l.warned_at) {
-      return `<div class="alert warn"><strong>JobSeeker is about to run less often.</strong>
-          ${esc(l.why || "")} On its next run it will drop from <b>${esc(SCHEDULE[tier])}</b> to
+      return notice({
+        key: `ladder:warned:${tier}:${stamp}`,
+        title: "JobSeeker is about to run less often.",
+        body: `${esc(l.why || "")} On its next run it will drop from <b>${esc(SCHEDULE[tier])}</b> to
           <b>${esc(NEXT[tier] || "not at all")}</b>.
           <span class="muted">Review a few roles on the Jobs tab and it stays as it is</span> —
-          or <a href="/settings?tab=setup">set the schedule yourself</a>.</div>`;
+          or <a href="/settings?tab=setup">set the schedule yourself</a>.`,
+        summary: `Schedule about to drop from ${SCHEDULE[tier]} to ${NEXT[tier] || "not at all"} — ${l.why || ""}`,
+        dismissed: NX,
+      });
     }
     if (tier >= 4) {
-      return `<div class="alert bad"><strong>The daily run is switched off.</strong>
-          ${esc(l.why || "")} Nothing is being read and nothing new will appear here until you turn it
+      return notice({
+        key: `ladder:off:${stamp}`,
+        kind: "bad",
+        title: "The daily run is switched off.",
+        body: `${esc(l.why || "")} Nothing is being read and nothing new will appear here until you turn it
           back on.
           <form method="POST" action="/restore-schedule" class="inline" style="margin-left:8px">
             <button type="submit" class="btn-small">Run it every day again</button></form>
-          <a class="btn-small linkbtn" href="/settings?tab=setup">Choose a different schedule</a></div>`;
+          <a class="btn-small linkbtn" href="/settings?tab=setup">Choose a different schedule</a>`,
+        summary: `Daily run switched off — ${l.why || "no reason recorded"}`,
+        dismissed: NX,
+      });
     }
     if (tier > 1) {
-      return `<div class="alert"><strong>JobSeeker now runs ${esc(SCHEDULE[tier])}.</strong>
-          ${esc(l.why || "")}
+      return notice({
+        key: `ladder:tier${tier}:${stamp}`,
+        kind: "",
+        title: `JobSeeker now runs ${esc(SCHEDULE[tier])}.`,
+        body: `${esc(l.why || "")}
           <form method="POST" action="/restore-schedule" class="inline" style="margin-left:8px">
             <button type="submit" class="btn-small">Back to every day</button></form>
-          <a class="btn-small linkbtn" href="/settings?tab=setup">Settings</a></div>`;
+          <a class="btn-small linkbtn" href="/settings?tab=setup">Settings</a>`,
+        summary: `Schedule stepped down to ${SCHEDULE[tier]} — ${l.why || ""}`,
+        dismissed: NX,
+      });
     }
     return "";
   })();
@@ -2123,53 +2374,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
   // command. The dashboard could set the 08:00 schedule but not run the thing it schedules — so on
   // any day you wanted an answer before tomorrow morning, the answer was "open a terminal".
   //
-  // Each button is one command, spending real money, so it says what it costs you in time and it
-  // is honest about what it will not do: nothing here applies to anything or sends anything, the
-  // same guarantee the scheduled run gives. While one is running the whole strip is disabled —
-  // Chrome is serial (AGENT-RULES §13), and two runs reading WhatsApp at once read each other's
-  // tabs. run-now.sh refuses a second run anyway; disabling is so the refusal is never a surprise.
-  const RUNS = [
-    ["track", "Read my channels", "Gmail, Calendar, WhatsApp and LinkedIn — 2–5 min"],
-    ["curate", "Find new roles", "Scores openings at your target companies — 3–8 min"],
-    ["followup", "Draft follow-ups", "Writes what is due, for you to approve above — 1–3 min"],
-    ["job-run", "Everything", "The full daily pipeline — 10–40 min"],
-  ];
   const busy = all.runNow;
-  const lastNow = all.lastRunNow;
-  const runNowBlock = `<div class="tblock runnow">
-      <p class="th">Run now <span class="muted">— nothing here applies or sends; it queues approvals for you</span></p>
-      ${
-        busy
-          ? `<div class="alert warn"><strong>${esc(RUNS.find((r) => r[0] === busy.slug)?.[1] || busy.slug)} is running.</strong>
-               Started ${esc(String(busy.started).slice(0, 16).replace("T", " "))} · pid ${esc(String(busy.pid))}.
-               <span class="muted">Only one run at a time — Chrome cannot be driven by two.</span></div>`
-          : ""
-      }
-      <div class="runbtns">
-        ${RUNS.map(
-          ([slug, label, sub]) => `<form method="POST" action="/run-now" class="inline">
-            <input type="hidden" name="_tab" value="today">
-            <input type="hidden" name="slug" value="${esc(slug)}">
-            <button type="submit" class="${slug === "job-run" ? "btn-secondary" : ""}"${busy ? " disabled" : ""} title="${esc(sub)}">${esc(label)}</button>
-          </form>`
-        ).join("")}
-      </div>
-      ${
-        lastNow && !busy
-          ? `<div class="ti-sub">Last run from here: <b>${esc(lastNow.label || lastNow.slug)}</b> —
-               ${
-                 lastNow.state === "ok"
-                   ? `<span class="ok-pill">finished</span>`
-                   : lastNow.state === "partial"
-                     ? `<span class="warn-pill">finished, partly</span> ${esc(lastNow.detail || "")}`
-                     : lastNow.state === "skipped-busy" || lastNow.state === "skipped-budget"
-                       ? `<span class="warn-pill">${esc(lastNow.state.replace("skipped-", "skipped: "))}</span> ${esc(lastNow.detail || "")}`
-                       : `<span class="bad-pill">${esc(lastNow.state)}</span> ${esc(lastNow.detail || "")}`
-               }
-               <span class="muted">${esc(String(lastNow.finished || "").slice(0, 16).replace("T", " "))}</span></div>`
-          : ""
-      }
-    </div>`;
 
   // The one question setup deliberately did not ask. A market with an empty table has never been
   // researched, and until it is there is nothing for anything else to work with — so this is asked
@@ -2215,9 +2420,15 @@ function todayHTML(all, dueToday, appTok, appIds) {
       : "";
 
   const boardsBlock = boardsNeeding
-    ? `<div class="alert warn"><strong>${boardsNeeding} careers boards have no readable URL.</strong>
-         Agents cannot fix these by trying harder — paste the real careers page and the next scout run
-         will use it. <a href="/settings?tab=companies">Open in Settings →</a></div>`
+    ? notice({
+        // The count is in the key: fix some, and the notice returns with the number that is left.
+        key: `boards:needs-url:${boardsNeeding}`,
+        title: `${boardsNeeding} careers boards have no readable URL.`,
+        body: `Agents cannot fix these by trying harder — paste the real careers page and the next scout run
+         will use it. <a href="/settings?tab=companies">Open in Settings →</a>`,
+        summary: `${boardsNeeding} careers boards have no readable URL — paste the real careers page in Settings`,
+        dismissed: NX,
+      })
     : "";
 
   return `${ladderBanner}
@@ -2230,7 +2441,20 @@ function todayHTML(all, dueToday, appTok, appIds) {
     ${approvalsBlock}
     ${decidedBlock}
     ${boardsBlock}
-    ${runNowBlock}
+    ${
+      // Dismissing must not mean losing. One muted line, and the way back, for however many notices
+      // are currently being hidden from this screen.
+      (() => {
+        const n = Object.keys(NX).length;
+        if (!n) return "";
+        // A <div>, not a <p>: a <form> start tag closes an open paragraph, which split this line
+        // in two and left the full stop stranded on a line of its own.
+        return `<div class="noticefoot muted">${n} notice${n === 1 ? "" : "s"} dismissed —
+          <button type="button" class="linkish" onclick="var b=document.querySelector('.tab[data-tab=activity]'); if(b) b.click();">see them under Notifications in Activity</button>,
+          or <form method="POST" action="/restore-notices" class="inline"><input type="hidden" name="_tab" value="today">
+          <button type="submit" class="linkish">show them again</button></form>.</div>`;
+      })()
+    }
     <div class="tblock taskblock">
       <p class="th">Follow-ups <span class="muted">— due on or before today; switch to All for the rest</span></p>
       ${/* The Tasks tab was this same table with the same five columns, filtered differently — so it
@@ -2337,14 +2561,19 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
   <span><b>${advances}</b> advances waiting</span>
   <span class="sb-sp"></span>
   <span class="muted">${applied.length} applications · ${activeLeads.length} leads · ${openProposals.length} proposals</span>
+  ${
+    // A run takes minutes to tens of minutes and reports nothing until it lands, so the one place
+    // it must be visible is every place — not only the tab you happened to start it from.
+    all.runNow ? runBadge(all.runNow) : ""
+  }
 </div>
-${tabStrip(TABS, active)}
+${tabStrip(TABS, active, runNowMenu({ tab: active, busy: all.runNow, lastNow: all.lastRunNow }))}
 </div>
 <div id="panels">
 ${tabPanel("today", on("today"), sec("today", "", todayHTML(all, dueToday, appTok, appIds)))}
-${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts, all.orphans)))}
-${tabPanel("pipeline", on("pipeline"), sec("pipeline", `Pipeline <span class="muted">— everything you have acted on, from CV sent to offer</span>`, statusBoardHTML(applied) + pipelineSection(all.applications)))}
-${tabPanel("people", on("people"), sec("people", `People <span class="muted">— who you are talking to, and every message logged with them</span>`, peopleHTML(all)))}
+${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts, all.orphans), runNowButton({ slug: "curate", tab: "proposals", busy: all.runNow })))}
+${tabPanel("pipeline", on("pipeline"), sec("pipeline", `Pipeline <span class="muted">— everything you have acted on, from CV sent to offer</span>`, statusBoardHTML(applied) + pipelineSection(all.applications), runNowButton({ slug: "followup", tab: "pipeline", busy: all.runNow })))}
+${tabPanel("people", on("people"), sec("people", `People <span class="muted">— who you are talking to, and every message logged with them</span>`, peopleHTML(all), runNowButton({ slug: "track", tab: "people", busy: all.runNow })))}
 ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="muted">— append-only audit log (filter by kind · search · run boundaries highlighted)</span>`, activitySection(all.activity)))}
 </div>
 
@@ -2368,6 +2597,16 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
         <button type="submit">Dismiss lead</button>
       </div>
     </form>
+  </div>
+</div>
+<div id="confirmOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="modal confirm-modal">
+    <h3 id="confirmTitle"></h3>
+    <div id="confirmBody" class="confirm-body"></div>
+    <div class="actions confirm-acts">
+      <button type="button" class="btn-secondary" id="confirmCancel">Cancel</button>
+      <button type="button" id="confirmOk"></button>
+    </div>
   </div>
 </div>
 <script>window.__DETAILS__=${detailsJSON};</script>
@@ -2418,11 +2657,21 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
-${tabPanel("setup", on("setup"), sec("setup", `Setup <span class="muted">— everything JobSeeker needs, and whether it is actually working</span>`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label))))}
+${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label), all.sub)))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
 <footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a></footer>
+<div id="confirmOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="modal confirm-modal">
+    <h3 id="confirmTitle"></h3>
+    <div id="confirmBody" class="confirm-body"></div>
+    <div class="actions confirm-acts">
+      <button type="button" class="btn-secondary" id="confirmCancel">Cancel</button>
+      <button type="button" id="confirmOk"></button>
+    </div>
+  </div>
+</div>
 <script>${JS}</script>
 </body></html>`;
 }
@@ -2598,6 +2847,34 @@ details.orphans{border-style:dashed}
 .tgl-text{display:flex;flex-direction:column;gap:2px;line-height:1.35}
 .tgl-hint{font-size:11.5px}
 
+/* Setup's sub-panes. Deliberately quieter than the tab strip above: one hue-coded pill row per
+   page is a navigation system, two is a competition. These are flat slate, smaller, and sit on a
+   rule that ties them to the pane below. */
+.subtabs{display:flex;gap:6px;padding:0 0 10px;border-bottom:1px solid var(--line);overflow-x:auto;
+  scrollbar-width:none}
+.subtabs::-webkit-scrollbar{display:none}
+.subpill{appearance:none;border:0;border-radius:999px;font:inherit;font-size:12.5px;font-weight:550;
+  padding:6px 13px;cursor:pointer;white-space:nowrap;background:#1b1f33;color:#b6bcd6;
+  transition:background .14s ease,color .14s ease,box-shadow .14s ease}
+.subpill:hover{box-shadow:inset 0 0 0 1px #3d4468}
+.subpill:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.subpill.on{background:#2f3757;color:#f2f4ff;font-weight:700;box-shadow:inset 0 0 0 1px #5a67a0}
+@media (prefers-color-scheme: light){
+  .subpill{background:#eef0f7;color:#5b6178}
+  .subpill:hover{box-shadow:inset 0 0 0 1px #c9cfe2}
+  .subpill.on{background:#dfe4f2;color:#1a1c28;box-shadow:inset 0 0 0 1px #a9b2cf}
+}
+.subblurb{font-size:12.5px;margin:10px 0 18px}
+.subpane[hidden]{display:none}
+.paneacts{margin-top:22px}
+.panenote{font-size:12.5px;max-width:640px;line-height:1.55;margin:10px 0 0}
+.panerule{height:1px;background:var(--line);margin:22px 0;max-width:900px}
+.spendcard{margin-top:22px;max-width:640px;background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:16px 18px}
+.spendrow{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
+.spendnum{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.tiny{font-size:12px}
+
 /* Advanced — collapsed by default; these are real controls, just not first-run ones. */
 details.adv{margin:4px 0 18px;border-top:1px solid var(--line);padding-top:12px}
 details.adv > summary{cursor:pointer;font-size:12.5px;font-weight:650;color:var(--mut);
@@ -2610,6 +2887,15 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .wname{color:var(--mut)}
 .wslider{width:100%;accent-color:var(--acc)}
 .wpct{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-size:12.5px}
+.noticebox{display:flex;align-items:flex-start;gap:10px}
+.noticebox .notice-body{flex:1;min-width:0}
+.noticebox .notice-x{margin:-2px -4px 0 0;flex:0 0 auto}
+.noticebox .notice-x .xbtn{font-size:17px;line-height:1;padding:2px 7px;opacity:.55}
+.noticebox .notice-x .xbtn:hover{opacity:1}
+.noticefoot{font-size:11.5px;margin:2px 0 0}
+.noticefoot form.inline{display:inline;margin:0}
+.linkish{background:none;border:0;padding:0;font:inherit;color:var(--acc);cursor:pointer;
+  text-decoration:underline;text-underline-offset:2px}
 .ok-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(46,160,67,.16);color:#3fb950}
 .bad-pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:rgba(214,138,0,.16);color:#d68a00}
 /* A send that is on its way is neither good news nor bad — it is unfinished, and reads as amber. */
@@ -2624,8 +2910,43 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .askh{font-size:16px;font-weight:700;margin:2px 0 6px;letter-spacing:-.01em}
 .asksub{color:var(--mut);font-size:13px;margin:0 0 12px;max-width:64ch;line-height:1.6}
 .askacts{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:9px}
-.runbtns{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 2px}
-.runbtns button[disabled]{opacity:.45;cursor:not-allowed}
+.runctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0}
+.runctl form.inline{display:flex;align-items:center;gap:8px;margin:0}
+.runctl button[disabled]{opacity:.45;cursor:not-allowed}
+.runctl.compact .runbadge{font-size:11.5px}
+/* Run now lives in the tab bar, hard right, so it is on every tab and never in the content. */
+/* Sticky to the right edge INSIDE the scrolling tab strip: on a narrow screen the tabs scroll
+   horizontally, and a plain margin-left:auto would carry Run now off the side of the screen. */
+.tabs-end{margin-left:auto;position:sticky;right:0;display:flex;align-items:center;gap:8px;
+  padding-left:14px;background:var(--bg);box-shadow:-10px 0 10px -6px var(--bg)}
+.runmenu-btn{font:inherit;font-size:12.5px;font-weight:650;padding:7px 14px;border-radius:99px;
+  border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.runmenu-btn:hover{border-color:var(--acc);color:var(--acc)}
+.runmenu-btn[aria-expanded=true]{border-color:var(--acc);color:var(--acc)}
+.runmenu-btn .caret{font-size:10px;opacity:.7}
+.pop-run{width:min(360px,calc(100vw - 32px))}
+.runmenu-busy{display:flex;flex-direction:column;gap:5px;margin:0 0 10px;padding:9px 10px;
+  border-radius:8px;background:rgba(214,138,0,.10)}
+.runmenu-busy .muted{font-size:11px;line-height:1.45}
+.runmenu-list{display:flex;flex-direction:column;gap:5px}
+.runmenu-list form{margin:0}
+.runmenu-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
+  text-align:left;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid transparent;
+  background:transparent;color:var(--fg);cursor:pointer}
+.runmenu-item:hover:not([disabled]){background:rgba(110,168,254,.12);border-color:var(--acc)}
+.runmenu-item[disabled]{opacity:.4;cursor:not-allowed}
+.rmi-label{font-size:13px;font-weight:650}
+.rmi-sub{font-size:11px;color:var(--mut);line-height:1.4}
+.runmenu-last{margin:10px 0 0;padding-top:9px;border-top:1px solid var(--line);font-size:11px;color:var(--mut)}
+/* One running job, said identically in the stat bar, on Today, and beside every per-tab trigger. */
+.runbadge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;
+  font-size:12px;font-weight:600;background:rgba(214,138,0,.16);color:#d68a00;white-space:nowrap}
+.runbadge .rdot{width:7px;height:7px;border-radius:50%;background:currentColor;
+  animation:rpulse 1.6s ease-in-out infinite}
+@keyframes rpulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.runbadge .rdot{animation:none}}
+.sechead .runctl{flex:0 0 auto}
 .apprev{margin-top:6px}
 .apprev summary{cursor:pointer;font-size:12px;color:var(--mut);width:max-content}
 .apprev summary:hover{color:var(--fg)}
@@ -2829,6 +3150,13 @@ tr.isnew td{background:rgba(46,160,110,.16)}tr.isnew td:first-child{box-shadow:i
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:flex-start;justify-content:center;padding:32px 16px}
 /* The drawer scrolls ITSELF, capped to the viewport, so the header stays put and you are reading a
    panel rather than pushing the whole page around. */
+.confirm-modal{max-width:440px;padding:20px 22px 18px}
+.confirm-modal h3{margin:0 0 10px;font-size:16px}
+.confirm-body p{margin:0 0 9px;font-size:13px;line-height:1.55;color:var(--mut)}
+.confirm-body p:last-child{margin-bottom:0}
+.confirm-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.btn-danger{background:#c0392b;border-color:#c0392b;color:#fff}
+.btn-danger:hover{background:#a93226;border-color:#a93226}
 .modal{background:var(--card);border:1px solid var(--line);border-radius:14px;max-width:760px;width:100%;
   padding:0 26px 26px;position:relative;max-height:calc(100vh - 64px);overflow-y:auto;overscroll-behavior:contain}
 .mclose{position:absolute;top:10px;right:12px;background:transparent;color:var(--mut);font-size:22px;padding:2px 8px;z-index:2}
@@ -2918,7 +3246,9 @@ function popToggle(id, btn){
   } else if(popOpener){ popOpener.focus(); popOpener=null; }
 }
 document.addEventListener('click', function(e){
-  if(e.target.closest && (e.target.closest('.pop') || e.target.closest('.dismbtn'))) return;
+  /* Any popover opener, not just .dismbtn: without this the document handler closes the popover in
+     the same click that popToggle opened it, and the menu never appears. */
+  if(e.target.closest && (e.target.closest('.pop') || e.target.closest('[aria-haspopup=dialog]'))) return;
   popCloseAll();
 });
 document.addEventListener('keydown', function(e){
@@ -2937,6 +3267,84 @@ function bToggle(id){
     if (inp) { inp.focus(); inp.select(); }
   }
 }
+
+/* ---------- Confirmations ----------
+   Every "are you sure" in this app is an in-app modal. window.confirm() is not used anywhere: the
+   browser's own dialog says "localhost:4319 says", cannot be styled or laid out, breaks the visual
+   language of the page and reads like a phishing prompt or a bug.
+
+   uiConfirm() returns a Promise<boolean>, so an async caller (the criteria form, which asks the
+   server what a change would cost before asking the user) reads the same as a plain one. The modal
+   is built once and reused; both pages carry the same markup. */
+function uiConfirm(opts){
+  opts = opts || {};
+  return new Promise(function(resolve){
+    var ov = document.getElementById('confirmOverlay');
+    if (!ov) { resolve(true); return; }               /* no modal on the page: never block the action */
+    var body = document.getElementById('confirmBody');
+    var okBtn = document.getElementById('confirmOk');
+    var cancelBtn = document.getElementById('confirmCancel');
+    document.getElementById('confirmTitle').textContent = opts.title || 'Are you sure?';
+    /* Plain text, split on blank lines into paragraphs: callers write prose, never markup. */
+    body.textContent = '';
+    String(opts.body || '').split(/\\n\\s*\\n/).forEach(function(para){
+      if (!para.trim()) return;
+      var p = document.createElement('p');
+      p.textContent = para.trim();
+      body.appendChild(p);
+    });
+    okBtn.textContent = opts.ok || 'Confirm';
+    okBtn.className = opts.danger ? 'btn-danger' : '';
+    var prev = document.activeElement;
+    function done(v){
+      ov.style.display = 'none';
+      document.removeEventListener('keydown', onKey, true);
+      ov.onclick = null; okBtn.onclick = null; cancelBtn.onclick = null;
+      if (prev && prev.focus) prev.focus();
+      resolve(v);
+    }
+    function onKey(e){
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      /* Trap Tab inside the dialog: a confirmation you can tab out of is a confirmation you can
+         answer by accident, with the page underneath still fully interactive. */
+      if (e.key === 'Tab'){
+        var f = [cancelBtn, okBtn];
+        var i = f.indexOf(document.activeElement);
+        e.preventDefault();
+        f[(i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus();
+      }
+    }
+    ov.onclick = function(e){ if (e.target === ov) done(false); };
+    okBtn.onclick = function(){ done(true); };
+    cancelBtn.onclick = function(){ done(false); };
+    document.addEventListener('keydown', onKey, true);
+    ov.style.display = 'flex';
+    cancelBtn.focus();
+  });
+}
+
+/* Any form carrying data-confirm asks before it submits.
+   Capture phase, so this runs BEFORE the row-action handler further down — otherwise that handler
+   would fetch-submit the form while this one was still asking. stopImmediatePropagation is what
+   holds the other listeners off; the re-submit after OK goes through requestSubmit so they run
+   normally on the second pass. */
+document.addEventListener('submit', function(e){
+  var f = e.target;
+  if (!f || !f.getAttribute || !f.getAttribute('data-confirm')) return;
+  if (f.dataset.confirmed === '1') { delete f.dataset.confirmed; return; }
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  uiConfirm({
+    title: f.getAttribute('data-confirm-title') || 'Are you sure?',
+    body: f.getAttribute('data-confirm'),
+    ok: f.getAttribute('data-confirm-ok') || 'Confirm',
+    danger: f.hasAttribute('data-confirm-danger')
+  }).then(function(go){
+    if (!go) return;
+    f.dataset.confirmed = '1';
+    if (f.requestSubmit) f.requestSubmit(); else f.submit();
+  });
+}, true);
 
 // Auto-hide the flash toast: keep it visible for 5s, then fade out and remove it.
 (function(){
@@ -3135,6 +3543,37 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
   b.addEventListener('click', function(e){ e.stopPropagation(); window.openDismiss(b.getAttribute('data-id'), b.getAttribute('data-label')); });
 });
 
+/* Setup's sub-panes. Same shape as the tab strip below, one level down and scoped to Settings.
+   The server has already chosen the pane from ?sub=, so this only handles clicking — and stamping
+   the current pane onto every POST, so a save returns to the pane it was made from. */
+(function(){
+  var strip=document.querySelector('.subtabs');
+  if(!strip) return;
+  var pills=Array.prototype.slice.call(strip.querySelectorAll('.subpill'));
+  var panes=Array.prototype.slice.call(document.querySelectorAll('.subpane'));
+  var blurb=document.querySelector('.subblurb');
+  var stamp=document.getElementById('cfg_sub');
+  function show(id){
+    pills.forEach(function(b){
+      var on=b.getAttribute('data-sub')===id;
+      b.classList.toggle('on',on); b.setAttribute('aria-selected',on?'true':'false');
+      if(on && blurb) blurb.textContent=b.getAttribute('data-blurb')||'';
+    });
+    panes.forEach(function(p){
+      var on=p.getAttribute('data-sub')===id;
+      /* The hidden Spend pane must STAY hidden: its inputs still submit, which is the point. */
+      if(p.getAttribute('data-sub')==='spend' && !pills.some(function(b){return b.getAttribute('data-sub')==='spend';})) return;
+      p.classList.toggle('on',on);
+      if(on){ p.removeAttribute('hidden'); } else { p.setAttribute('hidden',''); }
+    });
+    if(stamp) stamp.value=id;
+    var u=new URL(location.href); u.searchParams.set('sub',id); history.replaceState(null,'',u);
+  }
+  pills.forEach(function(b){
+    b.addEventListener('click', function(){ show(b.getAttribute('data-sub')); });
+  });
+})();
+
 // Tabs. The active pane is already chosen server-side; this handles clicking and deep links.
 // Precedence on load: ?tab= (set by a POST redirect, so an action returns you to its pane) > #hash
 // (bookmark / refresh) > Today. Deliberately NOT restoring the last-used tab from storage: opening
@@ -3186,10 +3625,15 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
     if((f.getAttribute('method')||'').toLowerCase()!=='post') return;
     var cur=(strip.querySelector('.tab.on')||{}).getAttribute
           ? strip.querySelector('.tab.on').getAttribute('data-tab') : '';
-    ['_tab','_page'].forEach(function(n){
+    /* The Setup sub-pane, on the same principle: a re-check from System checks must come back to
+       System checks, not to Roles. Absent on the work page, where there are no sub-panes. */
+    var subOn=document.querySelector('.subpill.on');
+    var curSub=subOn ? subOn.getAttribute('data-sub') : '';
+    ['_tab','_page','_sub'].forEach(function(n){
+      if(n==='_sub' && !curSub) return;
       var ex=f.querySelector('input[name="'+n+'"]');
       if(!ex){ ex=document.createElement('input'); ex.type='hidden'; ex.name=n; f.appendChild(ex); }
-      ex.value = n==='_tab' ? cur : PAGE;
+      ex.value = n==='_tab' ? cur : (n==='_page' ? PAGE : curSub);
     });
     // Remember where you were reading. Every one of these actions is a POST -> 303 -> full reload,
     // so dismissing the ninth follow-up threw you back to the top of the page and you had to scroll
@@ -3348,13 +3792,15 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
         // Nothing being dropped, or nothing to clear: save without interrupting.
         if (!d || !d.removed.length || !d.proposals) return true;
         var per = Object.keys(d.byMarket).map(function(m){ return d.byMarket[m] + ' from ' + m; }).join(', ');
-        return confirm(
-          'Removing ' + d.removed.join(', ') + ' from your target markets.\\n\\n' +
-          'This will also dismiss ' + d.proposals + ' open role' + (d.proposals === 1 ? '' : 's') +
-          ' you have not acted on (' + per + ').\\n\\n' +
-          'Applications and leads you already acted on are kept, and so is the vendor research for ' +
-          'that market. Dismissed roles can be restored from the Dismissed filter.'
-        );
+        return uiConfirm({
+          title: 'Removing ' + d.removed.join(', ') + ' from your target markets',
+          ok: 'Save anyway',
+          danger: true,
+          body: 'This will also dismiss ' + d.proposals + ' open role' + (d.proposals === 1 ? '' : 's') +
+            ' you have not acted on (' + per + ').\\n\\n' +
+            'Applications and leads you already acted on are kept, and so is the vendor research for ' +
+            'that market. Dismissed roles can be restored from the Dismissed filter.'
+        });
       })
       .then(function(go){
         if (go === false) return;                // cancelled: criteria unchanged
@@ -3623,6 +4069,9 @@ function redirect(res, flash) {
     parts.push(`flash=${encodeURIComponent(flash.kind)}`, `msg=${encodeURIComponent(flash.msg)}`);
   }
   if (res._returnTab) parts.push(`tab=${encodeURIComponent(res._returnTab)}`);
+  // Settings' sub-panes are a second axis: without this, saving from Channels lands you back on
+  // Roles and you have to find your way to what you just changed.
+  if (res._returnSub) parts.push(`sub=${encodeURIComponent(res._returnSub)}`);
   const base = res._returnPage === "settings" ? "/settings" : "/";
   res.writeHead(303, { Location: base + (parts.length ? `?${parts.join("&")}` : "") });
   res.end();
@@ -4931,11 +5380,30 @@ async function snapshotProfile() {
   );
 }
 
+const NOTICES_FILE = path.join(DATA, ".notices-dismissed.json");
+
 async function readCVPrevious() {
   try {
     return JSON.parse(await fs.readFile(CV_PREVIOUS_FILE, "utf8"));
   } catch {
     return null;
+  }
+}
+
+// Which notices Today has been told to stop showing.
+//
+// A notice is DERIVED state, not a record: it is recomputed from the run status, the ladder and the
+// browser probe on every render, so it cannot be "deleted". What is stored instead is the identity
+// of the exact fact that was dismissed — a key carrying the tier, the run timestamp, the board
+// count. When the underlying fact changes the key changes and the notice comes back, which is the
+// behaviour you want: dismissing "the 4 Sep run was partial" must not also hide "the 5 Sep run
+// failed".
+async function readDismissedNotices() {
+  try {
+    const j = JSON.parse(await fs.readFile(NOTICES_FILE, "utf8"));
+    return j && typeof j.dismissed === "object" && j.dismissed ? j.dismissed : {};
+  } catch {
+    return {};
   }
 }
 
@@ -4946,6 +5414,33 @@ async function readMarketAskDismissed() {
   } catch {
     return [];
   }
+}
+
+// Put a Today notice away. The fact itself is untouched — this records that you have seen it, and
+// copies its words into the activity log so the Notifications filter can find them later.
+//
+// The key is checked against the shapes the page actually renders. Same-origin POSTs are already
+// enforced (see sameOrigin), but this file is the durable record of what the UI decided, and an
+// unconstrained key would let a stray form write arbitrary JSON keys into it.
+const NOTICE_KEY_OK = /^(run:(failed|partial)|ladder:(warned|off|tier[0-9]+)|browser:cannot-read|boards:needs-url|digest:undelivered)(:[\w :.+-]{0,80})?$/;
+
+async function handleDismissNotice(form) {
+  const key = String(form.key || "").trim();
+  if (!NOTICE_KEY_OK.test(key)) return { kind: "bad", msg: "Unknown notice — nothing changed." };
+  const summary = sanitizeCell(String(form.summary || "").trim()).slice(0, 300) || key;
+  const dismissed = await readDismissedNotices();
+  if (!dismissed[key]) {
+    dismissed[key] = nowISO();
+    await writeFileAtomic(NOTICES_FILE, JSON.stringify({ dismissed }, null, 2));
+    await logActivity("notification", summary);
+  }
+  return { kind: "ok", msg: "Dismissed — it is in Activity under Notifications." };
+}
+
+// Bring every dismissed notice back. The escape hatch for the one that mattered.
+async function handleRestoreNotices() {
+  await writeFileAtomic(NOTICES_FILE, JSON.stringify({ dismissed: {} }, null, 2));
+  return { kind: "ok", msg: "Notices restored — anything still true is back on Today." };
 }
 
 async function handleDeferMarketAsk(form) {
@@ -5398,10 +5893,62 @@ const RUN_SLUGS = new Map([
   ["job-run", "Running the full daily pipeline"],
 ]);
 
+// Is a run live right now? Two files, because neither alone covers the whole run:
+//
+//   .run-now.lock          scripts/run-now.sh writes it, but only after it has checked for the
+//                          claude CLI — several seconds in. Nothing holds the lock before that.
+//   .run-now.pending.json  written HERE the moment we spawn, so the gap is covered.
+//
+// Both are validated the same way: the recorded pid must still exist. A crashed run must not wedge
+// the buttons forever, and a finished run leaves a pending file behind that answers "dead" by
+// itself. process.kill(pid, 0) sends no signal; it throws ESRCH when there is no such process.
+function pidAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readRunLock() {
+  try {
+    const raw = await fs.readFile(path.join(DATA, ".run-now.lock"), "utf8");
+    const [pid, slug, started] = raw.trim().split(/\s+/);
+    if (pidAlive(Number(pid))) return { pid: Number(pid), slug, started, starting: false };
+  } catch {
+    /* no lock yet, or none any more */
+  }
+  try {
+    const pend = JSON.parse(await fs.readFile(path.join(DATA, ".run-now.pending.json"), "utf8"));
+    if (pidAlive(Number(pend.pid))) {
+      return { pid: Number(pend.pid), slug: pend.slug, started: pend.started, starting: true };
+    }
+  } catch {
+    /* never started from here */
+  }
+  return null;
+}
+
 async function handleRunNow(form) {
   const slug = String(form.slug || "").trim();
   const label = RUN_SLUGS.get(slug);
   if (!label) return { kind: "bad", msg: `Unknown run ${JSON.stringify(slug).slice(0, 30)} — nothing started.` };
+
+  // The buttons are disabled while a run is live, but the page is a snapshot: a second tab, a stale
+  // reload, or the back button can all post anyway. Refuse here, where the answer is current —
+  // run-now.sh would refuse too, but only after the click has already looked like it worked.
+  const live = await readRunLock();
+  if (live) {
+    const same = live.slug === slug;
+    return {
+      kind: "bad",
+      msg: same
+        ? `${label} is already running (started ${String(live.started).slice(0, 16).replace("T", " ")}) — nothing started a second time.`
+        : `${RUN_SLUGS.get(live.slug) || live.slug} is already running — only one at a time, so ${label.toLowerCase()} was not started.`,
+    };
+  }
 
   // Detached: these take minutes to tens of minutes. The page must come straight back, and the
   // run's own log and status file are how it reports, not this response.
@@ -5411,6 +5958,14 @@ async function handleRunNow(form) {
     stdio: "ignore",
   });
   child.unref();
+  // Claim the run immediately: run-now.sh takes its own lock seconds later, and until it does this
+  // is the only record that something is starting.
+  await fs
+    .writeFile(
+      path.join(DATA, ".run-now.pending.json"),
+      JSON.stringify({ pid: child.pid, slug, started: new Date().toISOString().replace(/\.\d+Z$/, "Z") })
+    )
+    .catch(() => {});
   await logActivity("run-now", `${slug} started from the dashboard`);
   return {
     kind: "ok",
@@ -5766,6 +6321,9 @@ const server = http.createServer(async (req, res) => {
       // The active tab is chosen server-side from ?tab= so there is no flash of the wrong pane, and
       // so a POST redirect can put you back where you were.
       all.tab = url.searchParams.get("tab") || "";
+      // Settings' second axis: which sub-pane of Setup. Chosen server-side for the same reason as
+      // the tab — no flash of the wrong pane, and a POST redirect can return you to it.
+      all.sub = url.searchParams.get("sub") || "";
       const flash = url.searchParams.get("flash")
         ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
         : null;
@@ -5859,6 +6417,7 @@ async function handlePost(req, res, url) {
   const form = parseForm(await readBody(req));
   // Stamped by the client on every POST form so redirect() can return you to the same pane.
   res._returnTab = form._tab || "";
+  res._returnSub = form._sub || "";
   res._returnPage = form._page || "";
   if (url.pathname === "/save-config") {
     try {
@@ -5948,6 +6507,12 @@ async function handlePost(req, res, url) {
   }
   if (url.pathname === "/defer-market-ask") {
     return redirect(res, await handleDeferMarketAsk(form));
+  }
+  if (url.pathname === "/dismiss-notice") {
+    return redirect(res, await handleDismissNotice(form));
+  }
+  if (url.pathname === "/restore-notices") {
+    return redirect(res, await handleRestoreNotices());
   }
   if (url.pathname === "/decide-approval") {
     return redirect(res, await handleDecideApproval(form));
