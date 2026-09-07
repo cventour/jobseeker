@@ -6,12 +6,13 @@ Every release, in plain language. Newest first.
 
 ## v0.5.0 — 7 September 2026
 
-- Install with one command. Paste one line into Terminal and it downloads JobSeeker, builds the app on your Mac and opens it. Nothing to unzip, and no security warning to click through.
-- Setup happens in a window now, not a Terminal. It shows everything it plans to install and where each download comes from, then waits for you.
-- It installs what is missing. Node, Claude Code and Chrome, if you do not already have them, each checked before it runs.
-- JobSeeker is an app. It sits in your Applications folder and opens by double-click. Quitting it quits JobSeeker — there is no Terminal window to leave open.
-- A light mode, and a switch beside Settings. It follows your Mac unless you tell it otherwise.
-- Connect WhatsApp from the setup window. Enter your number and it installs the plugin, shows you the pairing code and the taps to make on your phone. Optional, and it says so if your Mac is already connected.
+- Added a user friendly installer. One command, no download, no security warning to click through.
+- Added a setup window that walks you through the install, instead of a Terminal script.
+- Setup now installs Node, Claude Code and Chrome for you if you do not already have them.
+- JobSeeker is now a Mac app. It sits in your Applications folder and quits like any other app.
+- Added a light/dark mode switch, with autodetection of your Mac's setting.
+- Added WhatsApp setup to the wizard, including the pairing code and the steps for your phone.
+- Added a first-run tour of the dashboard.
 
 ## v0.4.0 — 30 August 2026
 
