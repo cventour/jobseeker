@@ -126,9 +126,23 @@ check_whatsapp() {
   local n; n="$(wa_number 2>/dev/null)"
   if [ -n "$n" ]; then printf 'connected as +%s' "$n"; else printf 'connected'; fi
 }
+# Whether OUR JobSeeker is answering -- not merely whether something is. A dashboard left running
+# from a different checkout answers a plain request exactly the same way, and handing the window
+# over to it shows the user another build entirely, which reads as "the update did nothing".
 check_start() {
-  curl -fsS -o /dev/null --max-time 2 "http://localhost:$(dashboard_port)" 2>/dev/null || return 1
-  printf 'answering on port %s' "$(dashboard_port)"
+  local port who
+  port="$(dashboard_port)"
+  who="$(curl -fsS --max-time 2 "http://localhost:$port/_whoami" 2>/dev/null)"
+  if [ -z "$who" ]; then
+    # Nothing there, or something too old to answer. Either way it is not a JobSeeker we can claim.
+    curl -fsS -o /dev/null --max-time 2 "http://localhost:$port" 2>/dev/null || return 1
+    printf 'something else is using port %s' "$port"
+    return 1
+  fi
+  case "$who" in
+    *"\"root\":\"$REPO\""*) printf 'answering on port %s' "$port" ;;
+    *) printf 'a different JobSeeker is using port %s' "$port"; return 1 ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------- elevation
@@ -405,6 +419,20 @@ do_start() {
   if check_start >/dev/null; then
     log "already answering on port $port"
     detail start "Already running on port $port"; step start ok; pct 100; finish ok
+  fi
+
+  # If the port is taken by another JobSeeker, ours cannot bind and the failure would read as
+  # "JobSeeker stopped while starting up". Name the real problem instead.
+  if curl -fsS -o /dev/null --max-time 2 "http://localhost:$port" 2>/dev/null; then
+    local other; other="$(curl -fsS --max-time 2 "http://localhost:$port/_whoami" 2>/dev/null \
+                          | sed -n 's/.*"root":"\([^"]*\)".*/\1/p')"
+    log "port $port is already in use by ${other:-an unknown server}"
+    if [ -n "$other" ]; then
+      detail start "Another JobSeeker is running from $other — quit it first."
+    else
+      detail start "Something else is already using port $port."
+    fi
+    step start fail; finish fail
   fi
 
   say "Starting JobSeeker"

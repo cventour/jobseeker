@@ -1501,12 +1501,13 @@ function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = ""
     .map((s) => `<option value="${esc(s)}"></option>`)
     .join("");
   return `<div class="chipfield" data-name="${esc(name)}" data-sep="${sep}">
-    <label class="chiplabel">${label}${hint ? `<span class="muted chiphint">${hint}</span>` : ""}</label>
+    <label class="chiplabel">${label}</label>
     <div class="chipbox">
       ${chips}
       <input type="text" class="chipin" ${suggestions.length ? `list="${listId}"` : ""}
              placeholder="${esc(placeholder)}" autocomplete="off" aria-label="${esc(label)}">
     </div>
+    ${hint ? `<p class="muted chiphint">${hint}</p>` : ""}
     ${suggestions.length ? `<datalist id="${listId}">${opts}</datalist>` : ""}
     <input type="hidden" name="${esc(name)}" value="${esc(values.join(sep + " "))}">
   </div>`;
@@ -2979,9 +2980,12 @@ th,td{padding:9px 12px}
 td.nw,th.nw{white-space:nowrap}
 /* Chip fields. The box looks and focuses like one input; the chips live inside it. */
 .chipgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px 18px}
+/* The label is one line in every column and the hint sits UNDER the field, so the boxes line up
+   across the row. With the hint inside the label, one longer note pushed its own column's input
+   down and nothing else's -- which read as a misaligned box rather than as a longer label. */
 .chipfield{display:flex;flex-direction:column;gap:5px;min-width:0}
 .chiplabel{font-size:12.5px;color:var(--mut)}
-.chiphint{font-size:11px;margin-left:5px}
+.chiphint{font-size:11px;line-height:1.45;margin:1px 0 0}
 .chipbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;min-height:38px;
   border:1px solid var(--line);border-radius:8px;background:var(--bg);cursor:text}
 .chipbox:focus-within{border-color:var(--acc)}
@@ -6537,6 +6541,16 @@ const server = http.createServer(async (req, res) => {
     }
     // What a dismissal would take with it. A GET so the dialog can ask before anything is written,
     // and so it costs nothing if the user backs out.
+    // Which install is answering on this port. The setup window uses it to tell "JobSeeker is
+    // already running" apart from "a DIFFERENT JobSeeker is squatting the port" -- a stale server
+    // from another checkout answers a plain request identically, and the window then hands over to
+    // somebody else's build, which looks exactly like the update having failed.
+    if (req.method === "GET" && url.pathname === "/_whoami") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8",
+                           "cache-control": "no-store" });
+      return res.end(JSON.stringify({ app: "jobseeker", root: ROOT }));
+    }
+
     if (req.method === "GET" && url.pathname === "/dismiss-impact") {
       const id = String(url.searchParams.get("id") || "").trim();
       let out = { tasks: 0, messages: 0, contacts: 0 };

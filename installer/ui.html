@@ -459,7 +459,9 @@ window.__render = function (st) {
   need.textContent = st.need || "";
 
   var lw = document.getElementById("logwrap");
-  lw.hidden = !st.log;
+  // The log is about installing things. On the welcome and on the WhatsApp screen it is a stray
+  // disclosure about work that already finished, so it stays out of the way there.
+  lw.hidden = !st.log || isWelcome || isWA;
   if (st.log) {
     var box = document.getElementById("logbox");
     var stuck = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
