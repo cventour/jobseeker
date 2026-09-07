@@ -21,6 +21,7 @@
 
 ObjC.import('Cocoa');
 ObjC.import('WebKit');
+ObjC.import('CoreGraphics');
 
 var FM = $.NSFileManager.defaultManager;
 
@@ -46,6 +47,24 @@ function writeFile(p, s) {
   return $(s).writeToFileAtomicallyEncodingError($(p), true, $.NSUTF8StringEncoding, null);
 }
 function appendFile(p, s) { writeFile(p, readFile(p) + s); }
+// Ask the window server whether this process actually has a window on screen.
+function onScreen() {
+  try {
+    // Two JXA traps here, both of which silently produce a wrong answer rather than an error:
+    // kCGNullWindowID is not bridged (it reads undefined), so pass its literal value 0; and the
+    // CFArrayRef must be cast before it behaves like an NSArray.
+    var ref = $.CGWindowListCopyWindowInfo(
+      $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0);
+    var arr = ObjC.castRefToObject(ref);
+    var pid = $.NSProcessInfo.processInfo.processIdentifier, n = 0;
+    for (var i = 0; i < arr.count; i++) {
+      var o = arr.objectAtIndex(i).objectForKey('kCGWindowOwnerPID');
+      if (!o.isNil() && o.js === pid) n++;
+    }
+    return n + ' window(s)';
+  } catch (e) { return 'unknown (' + e.message + ')'; }
+}
+
 function stamp() {
   var d = new Date();
   function two(n) { return (n < 10 ? '0' : '') + n; }
@@ -113,8 +132,36 @@ var app = $.NSApplication.sharedApplication;
 var win, wv;
 var mode = 'setup';
 
-function pump(seconds) {
-  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(seconds));
+// ------------------------------------------------------------------ window placement
+// NSWindow's own -center puts the window on the MAIN screen, which on a multi-monitor Mac is
+// wherever the menu bar lives -- not necessarily the display the user is looking at. A setup
+// window that opens on the other monitor looks exactly like a setup window that failed to open.
+// Put it on the screen holding the pointer instead, which is the best available guess at "here".
+function placeOnActiveScreen(w) {
+  try {
+    var mouse = $.NSEvent.mouseLocation;
+    var screens = $.NSScreen.screens;
+    var target = $.NSScreen.mainScreen;
+    for (var i = 0; i < screens.count; i++) {
+      var sc = screens.objectAtIndex(i);
+      var fr = sc.frame;
+      if (mouse.x >= fr.origin.x && mouse.x <= fr.origin.x + fr.size.width &&
+          mouse.y >= fr.origin.y && mouse.y <= fr.origin.y + fr.size.height) {
+        target = sc; break;
+      }
+    }
+    var vf = target.visibleFrame, f = w.frame;
+    // setFrameOrigin: takes ONE argument. An earlier version passed a second (display) flag,
+    // which does not match any selector -- it threw, the catch below swallowed it, and the window
+    // silently fell back to -center on every launch. A caught exception that changes behaviour is
+    // worse than a crash, so this stays a single, correct call.
+    w.setFrameOrigin($.NSMakePoint(
+      vf.origin.x + (vf.size.width - f.size.width) / 2,
+      // Slightly above true centre: a window pinned dead-centre reads as lower than it is.
+      vf.origin.y + (vf.size.height - f.size.height) * 0.58));
+  } catch (e) {
+    w.center;
+  }
 }
 
 // ------------------------------------------------------------------ page -> app
@@ -194,6 +241,8 @@ function drainStepLog() {
 // ------------------------------------------------------------------ the queue
 var queue = [];
 var skipped = {};
+var phase = 'boot';
+var openAt = 0;
 
 function enqueueAll() {
   queue = [];
@@ -257,8 +306,9 @@ function onQueueEmpty() {
       : 'Opening it now.';
     state.status = 'Done|— nothing has run yet, and nothing will without your say-so.';
     push();
-    pump(anySkipped ? 1.2 : 0.8);
-    openDashboard();
+    // A beat so the finished checklist is readable, then hand the window over. Scheduled rather
+    // than slept: idle() must return promptly or the window stops being drawn.
+    openAt = Date.now() + (anySkipped ? 1400 : 900);
     return;
   }
   state.view = 'work';
@@ -286,7 +336,7 @@ function openDashboard() {
   win.title = 'JobSeeker';
   win.styleMask = win.styleMask | $.NSWindowStyleMaskResizable;
   win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 1180, 900), true, false);
-  win.center;
+  placeOnActiveScreen(win);
   win.minSize = $.NSMakeSize(880, 620);
   wv.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString($(url))));
 }
@@ -371,7 +421,11 @@ function run() {
   win.titlebarAppearsTransparent = true;
   win.titleVisibility = 1;             // NSWindowTitleHidden — the page draws its own heading
   win.releasedWhenClosed = false;      // so polling isVisible after a close is safe
-  win.center;
+  try {
+    win.collectionBehavior = $.NSWindowCollectionBehaviorMoveToActiveSpace
+                           | $.NSWindowCollectionBehaviorManaged;
+  } catch (e) { /* older macOS: leave the default */ }
+  placeOnActiveScreen(win);
 
   var cfg = $.WKWebViewConfiguration.alloc.init;
   wv = $.WKWebView.alloc.initWithFrameConfiguration(rect, cfg);
@@ -379,123 +433,134 @@ function run() {
     $.NSURL.fileURLWithPath($(UI)), $.NSURL.fileURLWithPath($(RES)));
   win.contentView = wv;
   win.makeKeyAndOrderFront(null);
+  win.orderFrontRegardless;
   app.activateIgnoringOtherApps(true);
-  pump(0.6);
 
-  // Did the setup page actually load? A WKWebView that failed to load its HTML shows an empty
-  // window and accepts no buttons, and from the outside that is indistinguishable from a hang.
-  // The page's own <title> is proof it parsed and ran.
-  (function () {
-    for (var i = 0; i < 30 && (wv.title.isNil() || !wv.title.js); i++) pump(0.15);
-    var t = wv.title.isNil() ? '(none)' : wv.title.js;
-    appendFile(FULLLOG, stamp() + '  ui loaded: title=' + JSON.stringify(t) + '\n');
-  })();
-  push();   // first paint, now that the page exists to receive it
+  // AND THEN RETURN. This is the whole reason the window appears at all.
+  //
+  // An earlier version did the work in a `while (true)` loop here, pumping the run loop by hand.
+  // Everything about it seemed to function: the page loaded, scripts ran, evaluateJavaScript
+  // answered, the checklist rendered. But a blocking run() never gives the applet host its event
+  // loop back, AppKit never finishes launching, and the window server never composites the window
+  // -- so the app worked perfectly and invisibly. A WKWebView renders just as happily off screen,
+  // which is exactly why every other check passed.
+  //
+  // So: set up, return, and do the polling from idle() below.
+  phase = 'wait-ui';
+}
 
-  // ---- survey: what is already here? ----
-  launchStep('check-all');
-  while (task && task.isRunning) { pump(0.15); drainStepLog(); push(); }
-  drainStepLog();
-  appendFile(FULLLOG, readFile(STEPLOG) + '\n');
-  running = null; task = null;
-  state.busy = false; state.log = '';
+// Called repeatedly by the applet host, which owns the event loop. Must return quickly -- whatever
+// happens in here, the window is not redrawn until it returns.
+function idle() {
+  try {
+    tick();
+  } catch (e) {
+    appendFile(FULLLOG, stamp() + '  idle error: ' + e.message + '\n');
+  }
+  return 0.15;
+}
 
+function tick() {
+  if (!win) return;
+
+  // The user closed the window. Minimising is not closing -- isVisible goes false for both.
+  if (!win.isVisible && !win.isMiniaturized) { stopServer(); app.terminate(null); return; }
+
+  if (phase === 'wait-ui') {
+    if (wv.title.isNil() || !wv.title.js) return;   // page still parsing
+    appendFile(FULLLOG, stamp() + '  ui loaded, window on screen: ' + onScreen() + '\n');
+    push();
+    launchStep('check-all');
+    phase = 'survey';
+    return;
+  }
+
+  if (phase === 'survey') {
+    if (!task) return;
+    drainStepLog();
+    if (task.isRunning) return;
+    drainStepLog();
+    appendFile(FULLLOG, readFile(STEPLOG) + '\n');
+    running = null; task = null;
+    state.busy = false; state.log = '';
+    decideWhatToDo();
+    phase = 'ready';
+    return;
+  }
+
+  // ---- ready: the ordinary loop, one iteration per idle ----
+  if (openAt && Date.now() >= openAt) { openAt = 0; openDashboard(); return; }
+  if (openAt) return;
+
+  if (task) {
+    drainStepLog();
+    if (!task.isRunning) afterStep(task.terminationStatus === 0);
+    push();
+    return;
+  }
+
+  if (mode === 'app') return;   // the dashboard owns the web view now
+
+  var cmd = readCommand();
+  if (!cmd) return;
+
+  if (cmd.cmd === 'quit') { stopServer(); app.terminate(null); return; }
+  if (cmd.cmd === 'open') { openDashboard(); return; }
+  if (cmd.cmd === 'stop') { if (task) { try { task.terminate; } catch (e) {} } return; }
+  if (cmd.cmd === 'begin') { state.failed = false; enqueueAll(); startNext(); return; }
+  if (cmd.cmd === 'skip') {
+    skipped[cmd.id] = true;
+    var sk = stepById(cmd.id);
+    if (sk) { sk.state = 'skip'; sk.detail = 'Skipped — you can add this later.'; }
+    state.failed = false;
+    startNext();
+    return;
+  }
+  if (cmd.cmd === 'run') {
+    state.failed = false;
+    var one = stepById(cmd.id);
+    if (one) one.detail = '';
+    queue.unshift(cmd.id);
+    startNext();
+    return;
+  }
+}
+
+// What the survey found decides which of three things this launch is.
+function decideWhatToDo() {
   var missing = STEPS.filter(function (s) { return s.state !== 'ok'; });
   var onlyStartMissing = missing.length === 1 && missing[0].id === 'start';
   state.allInstalled = missing.length === 0;
 
   if (missing.length === 0) {
-    // Nothing to do at all: set up, and already answering. This is the ordinary launch of an app
-    // someone set up weeks ago -- showing them a setup screen would be absurd.
+    // Set up, and already answering: an ordinary launch of an app configured weeks ago.
     state.brandnote = '';
     openDashboard();
-  } else if (onlyStartMissing) {
-    // Set up, just not running yet. Start it and go; don't make them press Begin to open an app
-    // they have already configured.
+    return;
+  }
+  if (onlyStartMissing) {
     state.brandnote = '';
     queue = ['start'];
     queuedTotal = 1; queuedDone = 0;
     state.title = 'Starting JobSeeker';
     state.subtitle = 'One moment.';
     startNext();
-  } else {
-    state.view = 'plan';
-    state.title = 'Here is everything that will happen.';
-    var need = missing.filter(function (s) { return s.id !== 'start' && s.id !== 'configure'; });
-    state.subtitle = need.length
-      ? 'JobSeeker needs ' + need.length + ' thing' + (need.length > 1 ? 's' : '')
-        + ' this Mac does not have yet. Nothing is installed until you press Begin, and nothing '
-        + 'is sent anywhere.'
-      : 'Almost there — just your settings and a first start.';
-    state.status = 'Ready|— it checks first and skips whatever is already installed.';
-    push();
+    return;
   }
+  state.view = 'plan';
+  state.title = 'Here is everything that will happen.';
+  var need = missing.filter(function (s) { return s.id !== 'start' && s.id !== 'configure'; });
+  state.subtitle = need.length
+    ? 'JobSeeker needs ' + need.length + ' thing' + (need.length > 1 ? 's' : '')
+      + ' this Mac does not have yet. Nothing is installed until you press Begin, and nothing '
+      + 'is sent anywhere.'
+    : 'Almost there — just your settings and a first start.';
+  state.status = 'Ready|— it checks first and skips whatever is already installed.';
+  push();
+}
 
-  // Read the rendered page back. "ui loaded" only proves the HTML parsed; this proves state
-  // actually reached it and the buttons exist to be pressed. The difference matters: a window
-  // showing stale placeholder text and a window showing the real plan look identical in a bug
-  // report, and only one of them is working.
-  (function () {
-    var echo = null;
-    wv.evaluateJavaScriptCompletionHandler(
-      $('document.getElementById("title").textContent + " / " '
-        + '+ document.querySelectorAll("#acts button").length + " buttons"'),
-      function (res, err) {
-        try { echo = res.isNil() ? '(nil)' : res.js; } catch (e) { echo = String(res); }
-      });
-    for (var i = 0; i < 25 && echo === null; i++) pump(0.15);
-    appendFile(FULLLOG, stamp() + '  ui rendered: ' + (echo === null ? '(no answer)' : echo) + '\n');
-  })();
-
-  // ---- the loop ----
-  while (true) {
-    pump(0.12);
-
-    if (!win.isVisible) { stopServer(); app.terminate(null); return; }
-
-    if (task) {
-      drainStepLog();
-      if (!task.isRunning) {
-        var okRun = task.terminationStatus === 0;
-        drainStepLog();
-        afterStep(okRun);
-      }
-      push();
-      continue;
-    }
-
-    if (mode === 'app') continue;   // the dashboard owns the web view now
-
-    var cmd = readCommand();
-    if (!cmd) continue;
-
-    if (cmd.cmd === 'quit') { stopServer(); app.terminate(null); return; }
-    if (cmd.cmd === 'open') { openDashboard(); continue; }
-    if (cmd.cmd === 'stop') {
-      if (task) { try { task.terminate; } catch (e) {} }
-      continue;
-    }
-    if (cmd.cmd === 'begin') {
-      state.failed = false;
-      enqueueAll();
-      startNext();
-      continue;
-    }
-    if (cmd.cmd === 'skip') {
-      skipped[cmd.id] = true;
-      var sk = stepById(cmd.id);
-      if (sk) { sk.state = 'skip'; sk.detail = 'Skipped — you can add this later.'; }
-      state.failed = false;
-      startNext();
-      continue;
-    }
-    if (cmd.cmd === 'run') {
-      state.failed = false;
-      var one = stepById(cmd.id);
-      if (one) one.detail = '';
-      queue.unshift(cmd.id);
-      startNext();
-      continue;
-    }
-  }
+// The applet host calls this on Cmd-Q and on Quit from the menu.
+function quit() {
+  stopServer();
+  return true;
 }

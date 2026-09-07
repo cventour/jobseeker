@@ -170,8 +170,12 @@ function renderPlan(st) {
     if (s.note) t.appendChild(el("em", null, s.note));
     li.appendChild(t);
     var have = s.state === "ok";
+    // "already installed" is wrong for the steps that are not installations: one starts a server,
+    // the other writes a settings file. Saying it anyway makes the whole list read as boilerplate.
+    var DONE = { start: "already running", configure: "already set up" };
     li.appendChild(el("span", "cost " + (have ? "have" : s.password ? "pw" : ""),
-      have ? "already installed" : s.password ? "asks your password" : "no password"));
+      have ? (DONE[s.id] || "already installed")
+           : s.password ? "asks your password" : "no password"));
     ul.appendChild(li);
   });
   ul.hidden = false;
