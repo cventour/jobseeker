@@ -19,5 +19,8 @@ templates/answers.md
 templates/*.bak*
 
 
-# Design working files (the seeded canvas is a 2 MB generated payload).
+# Design working files (a seeded canvas is a multi-megabyte generated payload). Kept on disk
+# because they are the source for the published design artifacts, but they are documents
+# about the product rather than part of it.
 .design/
+design/
