@@ -49,9 +49,8 @@ body{margin:0;background:var(--bg);color:var(--fg);
   -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;overflow:hidden;
   -webkit-user-select:none;user-select:none;cursor:default}
 
-/* The title bar is transparent and the window has no visible chrome of its own, so the top
-   padding here is what stops content colliding with the traffic lights. */
-main{flex:1;overflow-y:auto;padding:38px 34px 22px;display:flex;flex-direction:column}
+/* The window has a real title bar, so this padding is breathing room rather than clearance. */
+main{flex:1;overflow-y:auto;padding:26px 34px 22px;display:flex;flex-direction:column}
 main>*{flex:none}
 main>#welcome{flex:1}
 .brand{display:flex;align-items:center;gap:10px;margin-bottom:20px}
@@ -75,9 +74,9 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
    and give you one thing to press. The detail belongs on the next screen, where it is actionable. */
 .wel{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
   text-align:center;gap:2px;padding-bottom:28px}
-.wel img{width:76px;height:76px;border-radius:18px;display:block;margin-bottom:22px}
-.wel h1{font-size:23px;line-height:1.25;letter-spacing:-.02em;margin:0 0 10px;font-weight:600}
-.wel p{margin:0;font-size:13.5px;line-height:1.65;color:var(--mut);max-width:44ch}
+.wel img{width:152px;height:152px;display:block;margin-bottom:26px}
+.wel h1{font-size:30px;line-height:1.2;letter-spacing:-.02em;margin:0 0 12px;font-weight:600}
+.wel p{margin:0;font-size:16px;line-height:1.65;color:var(--mut);max-width:46ch}
 
 /* ---- WhatsApp ---- */
 .wa h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
@@ -401,7 +400,7 @@ function renderActions(st) {
     }
     }
   } else if (st.view === "done") {
-    add("Open JobSeeker", "primary", "open");
+    add("Take me to the dashboard", "primary", "open");
   }
 }
 

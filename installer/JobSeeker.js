@@ -198,14 +198,24 @@ function placeOnActiveScreen(w) {
       }
     }
     var vf = target.visibleFrame, f = w.frame;
+    function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
     // setFrameOrigin: takes ONE argument. An earlier version passed a second (display) flag,
     // which does not match any selector -- it threw, the catch below swallowed it, and the window
     // silently fell back to -center on every launch. A caught exception that changes behaviour is
     // worse than a crash, so this stays a single, correct call.
-    w.setFrameOrigin($.NSMakePoint(
-      vf.origin.x + (vf.size.width - f.size.width) / 2,
-      // Slightly above true centre: a window pinned dead-centre reads as lower than it is.
-      vf.origin.y + (vf.size.height - f.size.height) * 0.58));
+    // Clamped to the screen it lands on. Without this a large display, a scaled resolution or a
+    // window taller than the space could put part of the window past an edge -- which is exactly
+    // when it is hardest to drag back.
+    var x = clamp(vf.origin.x + (vf.size.width - f.size.width) / 2,
+                  vf.origin.x, vf.origin.x + Math.max(0, vf.size.width - f.size.width));
+    // Slightly above true centre: a window pinned dead-centre reads as lower than it is.
+    var y = clamp(vf.origin.y + (vf.size.height - f.size.height) * 0.55,
+                  vf.origin.y, vf.origin.y + Math.max(0, vf.size.height - f.size.height));
+    w.setFrameOrigin($.NSMakePoint(x, y));
+    appendFile(FULLLOG, stamp() + '  placed at ' + Math.round(x) + ',' + Math.round(y)
+      + ' on screen ' + Math.round(vf.origin.x) + ',' + Math.round(vf.origin.y) + ' '
+      + Math.round(vf.size.width) + 'x' + Math.round(vf.size.height)
+      + ' (window ' + Math.round(f.size.width) + 'x' + Math.round(f.size.height) + ')\n');
   } catch (e) {
     w.center;
   }
@@ -381,12 +391,11 @@ function onQueueEmpty() {
     state.title = 'JobSeeker is ready';
     state.subtitle = anySkipped
       ? 'Set up, without ' + Object.keys(skipped).join(' and ') + '. You can add that later.'
-      : 'Opening it now.';
+      : 'Everything is installed and running on this Mac.';
     state.status = 'Done|— nothing has run yet, and nothing will without your say-so.';
+    // Wait for the user. Setup used to hand the window over on a timer, which meant the one screen
+    // saying what had just been done to their Mac was gone before it could be read.
     push();
-    // A beat so the finished checklist is readable, then hand the window over. Scheduled rather
-    // than slept: idle() must return promptly or the window stops being drawn.
-    openAt = Date.now() + (anySkipped ? 1400 : 900);
     return;
   }
   state.view = 'work';
@@ -418,10 +427,7 @@ function openDashboard() {
   // silently stop. A real title bar is the honest fix, and it gives the window somewhere to say
   // its own name.
   try {
-    win.styleMask = (win.styleMask & ~$.NSWindowStyleMaskFullSizeContentView)
-                  | $.NSWindowStyleMaskResizable;
-    win.titlebarAppearsTransparent = false;
-    win.titleVisibility = 0;          // NSWindowTitleVisible
+    win.styleMask = win.styleMask | $.NSWindowStyleMaskResizable;
   } catch (e) { /* keep whatever we had */ }
   win.title = 'JobSeeker';
   // Breadcrumb. When someone reports "it opened on a blank window", this line in
@@ -503,15 +509,16 @@ function run() {
   app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
   buildMenu();
 
-  var rect = $.NSMakeRect(0, 0, 780, 620);
+  var rect = $.NSMakeRect(0, 0, 800, 660);   // a title bar costs height; give it back
   win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
     rect,
-    $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable
-      | $.NSWindowStyleMaskFullSizeContentView,
+    $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable,
     2, false);
   win.title = 'JobSeeker Setup';
-  win.titlebarAppearsTransparent = true;
-  win.titleVisibility = 1;             // NSWindowTitleHidden — the page draws its own heading
+  // A normal title bar, not a transparent full-height one. The transparent version let the page
+  // draw right to the top, but it left almost nothing to drag the window by -- only a thin,
+  // invisible strip -- so the window was awkward to move. A real title bar is the obvious handle,
+  // and it matches what the dashboard gets after the handover.
   win.releasedWhenClosed = false;      // so polling isVisible after a close is safe
   try {
     win.collectionBehavior = $.NSWindowCollectionBehaviorMoveToActiveSpace
