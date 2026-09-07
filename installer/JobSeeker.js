@@ -330,11 +330,25 @@ function dashboardPort() {
 function openDashboard() {
   mode = 'app';
   var url = 'http://localhost:' + dashboardPort();
+
+  // Give the window an ordinary title bar for the dashboard.
+  //
+  // The setup page is ours and pads its top for the traffic lights, so it can afford a transparent
+  // full-height title bar. The dashboard cannot: it is a normal multi-page web app served by
+  // dashboard.mjs, its header starts at y=0, and it collides with the close/minimise buttons.
+  // Injecting padding would work until the first navigation to /settings or /welcome and then
+  // silently stop. A real title bar is the honest fix, and it gives the window somewhere to say
+  // its own name.
+  try {
+    win.styleMask = (win.styleMask & ~$.NSWindowStyleMaskFullSizeContentView)
+                  | $.NSWindowStyleMaskResizable;
+    win.titlebarAppearsTransparent = false;
+    win.titleVisibility = 0;          // NSWindowTitleVisible
+  } catch (e) { /* keep whatever we had */ }
+  win.title = 'JobSeeker';
   // Breadcrumb. When someone reports "it opened on a blank window", this line in
   // data/.setup/setup.log is the difference between knowing the handoff happened and guessing.
   appendFile(FULLLOG, stamp() + '  window handed over to ' + url + '\n');
-  win.title = 'JobSeeker';
-  win.styleMask = win.styleMask | $.NSWindowStyleMaskResizable;
   win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 1180, 900), true, false);
   placeOnActiveScreen(win);
   win.minSize = $.NSMakeSize(880, 620);
