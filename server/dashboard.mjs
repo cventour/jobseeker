@@ -74,6 +74,7 @@ const ASSETS = new Map([
   // Shown inside the Chrome-extension instructions on Windows, so the reader can match the page in
   // front of them to the one being described.
   ["/help-chrome-extensions.png", ["help-chrome-extensions.png", "image/png"]],
+  ["/help-chrome-details.png", ["help-chrome-details.png", "image/png"]],
   ["/favicon-16.png", ["favicon-16.png", "image/png"]],
   ["/favicon-32.png", ["favicon-32.png", "image/png"]],
   ["/favicon-48.png", ["favicon-48.png", "image/png"]],
@@ -2047,6 +2048,12 @@ function bridgeHowToHTML() {
           loading="lazy" width="1050" height="560">
         <figcaption>Chrome's Extensions page. Developer mode is the switch top right; Load unpacked appears
           under it once that is on. After loading, JobSeeker Bridge shows up as a card here.</figcaption>
+      </figure>
+      <figure class="bridge-shot">
+        <img src="/help-chrome-details.png" alt="The extension's Details page, with the Extension options row
+          circled near the bottom, below Collect errors and above Source." loading="lazy" width="695" height="570">
+        <figcaption>Press <b>Details</b> on that card, then scroll to <b>Extension options</b> near the
+          bottom. That is where the code goes.</figcaption>
       </figure>
     </div>`;
 }

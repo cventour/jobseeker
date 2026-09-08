@@ -85,7 +85,9 @@ miss:
 1. Open `chrome://extensions` and turn on **Developer mode** (top right).
 2. Click **Load unpacked** and choose the folder the dashboard named.
 3. Press **Connect** in JobSeeker for a six-digit code.
-4. On the extension's card click **Details**, then **Extension options**, and type the code.
+4. On the extension's card click **Details**, then scroll to **Extension options**, and type the code.
+
+![The extension's Details page with the Extension options row circled](images/windows-chrome-details.png)
 
 The code lasts five minutes and is used once. The pairing it creates does not expire: it survives
 restarting Chrome, restarting the dashboard, and rebooting. You only do this again if you press
