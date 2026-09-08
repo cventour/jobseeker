@@ -13,7 +13,7 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 
 const run = promisify(execFile);
@@ -127,7 +127,74 @@ async function testRunDispatcher() {
   check("no args → usage, exit 64", r.code === 64 && /usage/.test(String(r.stderr)));
 }
 
+// The dashboard shows a different setup story per platform, and the failure mode is silent: a Mac
+// user told to load a Chrome extension, or a Windows user told to grant an Automation permission
+// that does not exist there. Both pages are checked in both modes.
+async function testPlatformUI() {
+  console.log("platform-specific UI");
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "jobseeker-ui-"));
+  await fs.mkdir(path.join(tmp, "markets"), { recursive: true });
+  // Filled in, so /settings renders instead of bouncing to the welcome wizard.
+  await fs.writeFile(
+    path.join(tmp, "criteria.md"),
+    "---\nmarkets: Cybersecurity\nroles: Solutions Architect\nlocations: Dubai\nseniority: Senior\n---\n"
+  );
+  await fs.writeFile(path.join(tmp, "profile.md"), "---\ntitles:\n---\n");
+
+  const boot = async (forced, port) => {
+    const child = spawn(process.execPath, [path.join(REPO, "server", "dashboard.mjs")], {
+      cwd: REPO,
+      env: { ...process.env, PORT: String(port), JOBSEEKER_DATA_DIR: tmp, JOBSEEKER_FORCE_PLATFORM: forced },
+      stdio: "ignore",
+    });
+    for (let i = 0; i < 60; i++) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/_whoami`);
+        return child;
+      } catch {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    child.kill();
+    throw new Error(`dashboard (${forced}) did not start`);
+  };
+  const get = async (port, p) => {
+    const r = await fetch(`http://127.0.0.1:${port}/${p}`, { redirect: "manual" });
+    return r.status === 200 ? await r.text() : "";
+  };
+
+  const WIN_ONLY = ["Chrome extension", "Load unpacked", "Developer mode"];
+  const MAC_ONLY = ["Allow JavaScript from Apple Events", "Browser agent"];
+  let mac, win;
+  try {
+    mac = await boot("darwin", 4381);
+    win = await boot("win32", 4382);
+    for (const [label, page] of [["wizard", "welcome?step=chrome"], ["settings", "settings?tab=setup&sub=system"], ["standalone", "setup-step?step=chrome&back=settings"]]) {
+      const m = await get(4381, page);
+      const w = await get(4382, page);
+      const leaked = WIN_ONLY.filter((k) => m.includes(k));
+      check(`${label}: no Windows-only text on macOS`, leaked.length === 0, leaked.join(", "));
+      const leakedMac = MAC_ONLY.filter((k) => w.includes(k));
+      check(`${label}: no macOS-only text on Windows`, leakedMac.length === 0, leakedMac.join(", "));
+      if (page.startsWith("welcome") || page.startsWith("settings")) {
+        const explains = w.includes("Chrome extension");
+        check(`${label}: Windows explains the extension`, explains, explains ? "" : "no mention on win32");
+      }
+    }
+  } finally {
+    for (const c of [mac, win]) {
+      try {
+        c && c.kill();
+      } catch {
+        /* already gone */
+      }
+    }
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
 await testMappings();
+await testPlatformUI();
 await testCrlf();
 await testAtomicWrite();
 await testRunDispatcher();
