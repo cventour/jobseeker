@@ -112,6 +112,9 @@ function stepById(id) {
 }
 
 function syncSteps() {
+  // A quiet start has nothing to show: the rows are a list of things being installed, and on this
+  // path nothing is. An empty list renders as no list.
+  if (quietStart) { state.steps = []; return; }
   state.steps = STEPS.map(function (s) {
     return { id: s.id, label: s.label, note: s.note, password: !!s.password,
              optional: !!s.optional, state: s.state || 'todo', detail: s.detail || '' };
@@ -146,6 +149,15 @@ var mode = 'setup';
 // matches the window to it. The dashboard's own switch therefore drives the native chrome too,
 // without dashboard.mjs needing to know this app exists.
 var themeSeen = null, themeApplied = null, themeTick = 0;
+
+// An ordinary launch is not an installation, and must not be dressed as one.
+//
+// Reopening the app on a set-up Mac has exactly one thing to do: start the server. That went through
+// the same startNext() as a real install, so for the second or so it takes, the window showed
+// "Getting this Mac ready · Step 1 of 1 · start jobseeker" over a filling progress bar -- which
+// reads as setup running again, on an app you have used for weeks. Quiet mode keeps the same work
+// and drops the costume.
+var quietStart = false;
 
 function themeAnswer(result, error) {
   // A real function, never $() -- see THE RULE at the top of this file.
@@ -347,9 +359,15 @@ function startNext() {
   if (s && s.state === 'ok') { startNext(); return; }
   queuedDone++;
   state.view = 'work';
-  state.title = 'Getting this Mac ready';
-  state.subtitle = 'Step ' + queuedDone + ' of ' + queuedTotal + ' \u00b7 '
-    + (s ? s.label.toLowerCase() : id);
+  if (quietStart) {
+    // Said once by decideWhatToDo and left alone: no step count, no row list, nothing to read.
+    state.title = 'Starting JobSeeker';
+    state.subtitle = 'One moment.';
+  } else {
+    state.title = 'Getting this Mac ready';
+    state.subtitle = 'Step ' + queuedDone + ' of ' + queuedTotal + ' \u00b7 '
+      + (s ? s.label.toLowerCase() : id);
+  }
   // The server must not outlive the app, so `start` gets our pid and watches it.
   if (!launchStep(id, id === 'start' ? String($.NSProcessInfo.processInfo.processIdentifier) : null)) {
     afterStep(false);
@@ -392,6 +410,24 @@ function onQueueEmpty() {
   var startStep = stepById('start');
   var anySkipped = Object.keys(skipped).length > 0;
   var waStep = stepById('whatsapp');
+
+  // An ordinary launch is not a setup run.
+  //
+  // This screen used to appear EVERY time the app was opened on a Mac whose server simply was not
+  // running yet -- a reboot, a quit, anything. decideWhatToDo() correctly sent a fully-running
+  // install straight to the dashboard, but the far more common "installed, just not started yet"
+  // path queued `start` and then fell into the WhatsApp offer, so a finished install was asked to
+  // connect WhatsApp on every single launch. Offering an optional extra once is help; offering it
+  // forever is a nag with a Continue button.
+  //
+  // So the offer belongs to a run that actually SET SOMETHING UP. If the wizard has been finished
+  // (or deliberately left), this launch is just opening the app: go to the dashboard.
+  if (setupFinished() && startStep && startStep.state === 'ok') {
+    state.brandnote = '';
+    openDashboard();
+    return;
+  }
+
   if (startStep && startStep.state === 'ok' && waStep && !skipped.whatsapp && !waOffered) {
     waOffered = true;                       // shown once per run, never nagged
     state.view = 'whatsapp';
@@ -427,6 +463,22 @@ function onQueueEmpty() {
   state.subtitle = 'JobSeeker could not start. The rows below say why.';
   state.status = 'Stopped|';
   push();
+}
+
+// Has this Mac finished setting up?
+//
+// The same three tests the dashboard's own needsWelcome() uses, so the app and the dashboard can
+// never disagree about whether this is a first run:
+//   * `welcome_done:`  the wizard was finished,
+//   * `welcome_left:`  the user walked out of it deliberately,
+//   * markets or roles in data/criteria.md — an install from BEFORE the wizard existed, or one set
+//     up with /onboard in the terminal. This is the case that matters most here: an established
+//     install has none of the wizard's bookkeeping and must not be treated as brand new.
+function setupFinished() {
+  var cfg = readFile(REPO + '/config/job-seeker.config.md');
+  if (/^welcome_(done|left):[ \t]*\S/m.test(cfg)) return true;
+  var crit = readFile(REPO + '/data/criteria.md');
+  return /^markets:[ \t]*\S/m.test(crit) || /^roles:[ \t]*\S/m.test(crit);
 }
 
 // ------------------------------------------------------------------ the handoff
@@ -694,6 +746,7 @@ function decideWhatToDo() {
   }
   if (onlyStartMissing) {
     state.brandnote = '';
+    quietStart = true;
     queue = ['start'];
     queuedTotal = 1; queuedDone = 0;
     state.title = 'Starting JobSeeker';

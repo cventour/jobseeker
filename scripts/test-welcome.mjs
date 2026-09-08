@@ -102,7 +102,18 @@ async function main() {
 
   // --- a machine with nothing set up is taken to the wizard ---
   check((await get("/")).location.endsWith("/welcome"), "a fresh install is taken to the wizard");
-  for (const step of ["start", "cv", "targets", "markets", "answers", "channels", "schedule"]) {
+
+  // A machine with no config FILE at all is the case the wizard was written for, and it was the one
+  // case that never reached it: an older redirect sent a config-less install to Settings before the
+  // wizard's own gate ran. The sandbox writes a config file, so nothing here ever exercised it.
+  {
+    const cfgPath = path.join(sandbox, "config", "job-seeker.config.md");
+    const saved = await read("config/job-seeker.config.md");
+    await fs.rm(cfgPath);
+    check((await get("/")).location.endsWith("/welcome"), "a machine with no config file still reaches the wizard");
+    await fs.writeFile(cfgPath, saved);
+  }
+  for (const step of ["start", "cv", "chrome", "markets", "roles", "seniority", "locations", "finish"]) {
     const r = await get(`/welcome?step=${step}`);
     check(r.status === 200 && r.body.includes("</html>"), `step renders: ${step}`);
   }
@@ -116,19 +127,44 @@ async function main() {
   await post("/welcome-step", { step: "cv", action: "skip" });
   check((await read("config/job-seeker.config.md")).includes("welcome_skipped: cv"), "a skip is recorded");
 
-  // --- the two criteria steps must not blank each other ---
-  await post("/welcome-step", { step: "targets", action: "next", roles: "Solution Architect", locations: "Dubai, UAE; Remote", seniority: "Senior" });
+  // --- the progress bar ---
+  const prog = await get("/welcome?step=locations");
+  check(/class="wprogress"/.test(prog.body), "the wizard shows a progress bar");
+  check(/aria-valuenow="86"/.test(prog.body), "the bar reflects how far in you are", (prog.body.match(/aria-valuenow="\d+"/) || [])[0]);
+  check(/Step 6 of 7/.test(prog.body), "and says so in words");
+
+  // --- the Chrome step records the decision for both browser-only channels ---
+  await post("/welcome-step", { step: "chrome", action: "next", chrome: "no" });
+  let cfgNow = await read("config/job-seeker.config.md");
+  check(/whatsapp_web_enabled: false/.test(cfgNow) && /linkedin_enabled: false/.test(cfgNow), "declining Chrome turns both browser channels off");
+  await post("/welcome-step", { step: "chrome", action: "next", chrome: "yes" });
+  cfgNow = await read("config/job-seeker.config.md");
+  check(/whatsapp_web_enabled: true/.test(cfgNow) && /linkedin_enabled: true/.test(cfgNow), "accepting turns both on");
+
+  // --- the four criteria steps must not blank each other ---
   await post("/welcome-step", { step: "markets", action: "next", markets: "Cybersecurity, Fintech" });
+  await post("/welcome-step", { step: "roles", action: "next", roles: "Solution Architect" });
+  await post("/welcome-step", { step: "seniority", action: "next", seniority: "Senior" });
+  await post("/welcome-step", { step: "locations", action: "next", locations: "Dubai, UAE; Remote" });
   const crit = await read("data/criteria.md");
-  check(/roles: Solution Architect/.test(crit) && /markets: Cybersecurity, Fintech/.test(crit), "both criteria steps survive each other");
+  check(
+    /markets: Cybersecurity, Fintech/.test(crit) && /roles: Solution Architect/.test(crit) &&
+      /seniority: Senior/.test(crit) && /locations: Dubai, UAE; Remote/.test(crit),
+    "all four criteria steps survive each other"
+  );
   check(/locations: Dubai, UAE; Remote/.test(crit), "a semicolon-separated location is not split on its comma");
+  // The separator used to be inferred from the STORED value, so on an empty field a single
+  // "Dubai, UAE" was stored comma-first and read back as two places.
+  await post("/welcome-step", { step: "locations", action: "next", locations: "Dubai, UAE" });
+  check(/locations: Dubai, UAE$/m.test(await read("data/criteria.md")), "one location typed into an empty field stays one location");
+  await post("/welcome-step", { step: "locations", action: "next", locations: "Dubai, UAE; Remote" });
   check(/weight_market: 0.4/.test(crit), "scoring weights are seeded, not asked for");
   const marketFiles = await fs.readdir(path.join(sandbox, "data", "markets"));
   check(marketFiles.length === 2, "a market file is created per market", marketFiles.join(", "));
 
-  // --- the answer library, including the escape hatch ---
+  // --- the answer library, now reached on its own from Settings rather than in the flow ---
   await post("/welcome-step", {
-    step: "answers", action: "next",
+    step: "answers", action: "next", _standalone: "1",
     visa: "__other", visa_other: "Golden visa, self-sponsored",
     notice: "1 month", relocate: "", heard: "LinkedIn", salary: "open", pitch: "Two lines.",
   });
@@ -137,31 +173,68 @@ async function main() {
   check(!/\| willing to relocate \|/.test(ans), "an unanswered question is left out rather than written blank");
   check(ans.trim().endsWith("Two lines."), "the summary is kept");
 
-  // --- channels ---
+  // --- channels, also reached on its own now ---
   await post("/welcome-step", { step: "channels", action: "next", whatsapp_web_enabled: "on", ignored_chats: "Family, Football", approval_channels: "chat" });
   const cfg = await read("config/job-seeker.config.md");
   check(/whatsapp_web_enabled: true/.test(cfg) && /linkedin_enabled: false/.test(cfg), "an unticked channel is written off, not left alone");
   check(/ignored_chats: Family, Football/.test(cfg), "the never-log list is saved");
 
   // --- a schedule that could never fire is refused ---
-  let r = await post("/welcome-step", { step: "schedule", action: "next", mode: "daily", time: "07:30" });
-  check(decodeURIComponent(r.location).includes("Pick at least one day"), "a schedule with no days is refused");
-  r = await post("/welcome-step", { step: "schedule", action: "next", mode: "daily", time: "99:99", day: "1" });
-  check(decodeURIComponent(r.location).includes("is not a time"), "a nonsense time is refused");
+  const showSched = () =>
+    run("bash", [path.join(sandbox, "scripts", "set-schedule.sh"), "--show"], {
+      cwd: sandbox,
+      env: { ...process.env, HOME: path.join(sandbox, "home"), PATH: `${path.join(sandbox, "bin")}:${process.env.PATH}` },
+    }).then((x) => x.trim());
 
-  // --- finishing ---
-  const body = new URLSearchParams([["step", "schedule"], ["action", "next"], ["mode", "daily"], ["time", "07:30"], ...[1, 2, 3, 4, 5].map((d) => ["day", String(d)])]);
-  r = await fetch(url("/welcome-step"), {
-    method: "POST", redirect: "manual",
-    headers: { "content-type": "application/x-www-form-urlencoded", origin: `http://127.0.0.1:${PORT}` },
-    body: body.toString(),
-  });
-  check((r.headers.get("location") || "").includes("welcome=done"), "finishing lands on Today");
-  const sched = await run("bash", [path.join(sandbox, "scripts", "set-schedule.sh"), "--show"], {
-    cwd: sandbox, env: { ...process.env, HOME: path.join(sandbox, "home"), PATH: `${path.join(sandbox, "bin")}:${process.env.PATH}` },
-  });
-  check(sched.trim() === "07:30 1,2,3,4,5", "the chosen days reach launchd", sched.trim());
+  let r = await post("/welcome-step", { step: "finish", action: "next", cadence: "custom", time: "07:30" });
+  check(decodeURIComponent(r.location).includes("Pick at least one day"), "a schedule with no days is refused");
+  r = await post("/welcome-step", { step: "finish", action: "next", cadence: "daily", time: "99:99" });
+  check(decodeURIComponent(r.location).includes("is not a time"), "a nonsense time is refused");
+  r = await post("/welcome-step", { step: "finish", action: "next", cadence: "nonsense", time: "07:30" });
+  check(decodeURIComponent(r.location).includes("Unknown schedule"), "an unknown cadence is refused");
+
+  // --- every cadence reaches launchd as the right day list ---
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "weekdays", time: "07:30", start_now: "no" });
+  check((await showSched()) === "07:30 1,2,3,4,5", "weekdays reaches launchd as Monday to Friday", await showSched());
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "twice", time: "07:30", start_now: "no" });
+  check((await showSched()) === "07:30 1,4", "twice a week reaches launchd as Mon and Thu", await showSched());
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "weekly", weekday: "3", time: "07:30", start_now: "no" });
+  check((await showSched()) === "07:30 3", "once a week uses the day you picked", await showSched());
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "daily", time: "07:30", start_now: "no" });
+  check((await showSched()) === "07:30", "every day is the plain schedule, with no day list", await showSched());
+
+  // --- every other day is the daily plist plus a gate, because launchd cannot express 48 hours ---
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "alt", time: "07:30", start_now: "no" });
+  check((await showSched()) === "07:30", "every other day installs the daily schedule");
+  check(/min_hours_between_runs: 40/.test(await read("config/job-seeker.config.md")), "…and records the gap the run itself enforces");
+
+  // --- the chosen cadence is recorded as the ladder's baseline ---
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "twice", time: "07:30", start_now: "no" });
+  check(/schedule_days: 1,4/.test(await read("config/job-seeker.config.md")), "the cadence is stored so the ladder never speeds it back up");
+  check(!/min_hours_between_runs: 40/.test(await read("config/job-seeker.config.md")), "…and the every-other-day gate is cleared when it no longer applies");
+
+  // --- "only when I ask" removes it ---
+  await post("/welcome-step", { step: "finish", action: "next", cadence: "off", start_now: "no" });
+  check((await showSched()) === "not scheduled", "only-when-I-ask unschedules it", await showSched());
+
+  // --- finishing, and the handoff ---
+  r = await post("/welcome-step", { step: "finish", action: "next", cadence: "weekdays", time: "07:30", start_now: "no" });
+  check((r.location || "").includes("welcome=done"), "finishing lands on Today");
+  check((r.location || "").includes("hint=runnow"), "declining the first run arms the pointer at Run now");
+  check((await showSched()) === "07:30 1,2,3,4,5", "the chosen days reach launchd", await showSched());
   check((await read("config/job-seeker.config.md")).includes("welcome_done:"), "setup is recorded as finished");
+
+  // --- saying yes starts the run through the same path the dashboard uses ---
+  r = await post("/welcome-step", { step: "finish", action: "next", cadence: "weekdays", time: "07:30", start_now: "yes" });
+  check((r.location || "").includes("welcome=done") && !(r.location || "").includes("hint=runnow"), "saying yes goes to Today with no pointer");
+  const pending = await read("data/.run-now.pending.json");
+  check(/"slug":"job-run"/.test(pending), "…and a run is actually claimed", pending.slice(0, 80));
+  try {
+    const pid = JSON.parse(pending).pid;
+    if (pid) process.kill(pid, "SIGTERM");
+  } catch {
+    /* already gone */
+  }
   check(!(await get("/")).location.includes("welcome"), "a finished install is never bounced back into the wizard");
 
   // --- Today asks about the markets nobody has researched ---
@@ -176,21 +249,21 @@ async function main() {
   check(decodeURIComponent(evil.location).includes("Unknown market"), "an unknown market name is refused");
 
   // --- one step, on its own: the way you change something months later --------------------------
-  for (const step of ["cv", "targets", "markets", "answers", "channels", "schedule"]) {
+  for (const step of ["cv", "chrome", "markets", "roles", "seniority", "locations", "answers", "channels", "finish"]) {
     const r = await get(`/setup-step?step=${step}&back=settings`);
-    check(r.status === 200 && !r.body.includes('<div class="wsteps">'), `standalone step has no stepper: ${step}`);
+    check(r.status === 200 && !r.body.includes('class="wprogress"'), `standalone step has no progress bar: ${step}`);
   }
   const solo = await get("/setup-step?step=cv&back=settings");
   check(!/value="skip"/.test(solo.body) && !/value="leave"/.test(solo.body), "standalone has no Skip or Leave — there is no flow to leave");
 
   // saving from standalone returns you where you came from, and never claims setup finished
-  let solor = await post("/welcome-step", { step: "targets", action: "next", return: "standalone", back: "settings", roles: "Architect", locations: "Dubai", seniority: "Senior" });
+  let solor = await post("/welcome-step", { step: "roles", action: "next", return: "standalone", back: "settings", roles: "Architect" });
   check(solor.location.includes("/settings"), "saving a standalone step returns you where you came from");
-  solor = await post("/welcome-step", { step: "schedule", action: "next", return: "standalone", back: "settings", mode: "manual" });
+  solor = await post("/welcome-step", { step: "finish", action: "next", return: "standalone", back: "settings", cadence: "off" });
   check(solor.location.includes("/settings") && !solor.location.includes("welcome=done"), "a standalone schedule save does not claim setup is finished");
 
   // `back` is an allow-list, not a URL anyone can aim
-  solor = await post("/welcome-step", { step: "targets", action: "next", return: "standalone", back: "https://evil.example", roles: "Architect" });
+  solor = await post("/welcome-step", { step: "roles", action: "next", return: "standalone", back: "https://evil.example", roles: "Architect" });
   check(!/evil\.example/.test(solor.location) && solor.location.includes("/settings"), "an off-site `back` is ignored", solor.location);
   check((await get("/setup-step?step=nonsense")).location.includes("/settings"), "an unknown standalone step goes back to Settings");
 

@@ -17,17 +17,34 @@ cd "$REPO" || exit 1
 . "$REPO/scripts/lib/claude-run.sh"
 
 SLUG="${1:-}"
+TARGET="${2:-}"
 LOG="$REPO/data/.run-now.log"
 STATUS="$REPO/data/.run-now.status.json"
 
 # The whole menu, in one place: slug -> slash command, label, per-run budget default, minutes.
+#
+# `apply` is the only one that takes an argument. It shares this script — and therefore the run lock
+# and the spend caps — because it drives Chrome like the others, and two agents in the same browser
+# read each other's tabs (AGENT-RULES §13).
 case "$SLUG" in
   job-run)  PROMPT="/job-run"; LABEL="Full daily run";        DEFAULT_BUDGET=5 ;;
   track)    PROMPT="/track";   LABEL="Read my channels";      DEFAULT_BUDGET=3 ;;
   curate)   PROMPT="/curate";  LABEL="Find new roles";        DEFAULT_BUDGET=3 ;;
   followup) PROMPT="/followup";LABEL="Draft due follow-ups";  DEFAULT_BUDGET=2 ;;
+  apply)
+    # The id reaches this from a web form, and it is about to be interpolated into a prompt. An
+    # allow-list on the SHAPE, checked again here rather than trusted from the caller.
+    if ! printf '%s' "$TARGET" | grep -qE '^prop_[a-z0-9]+$'; then
+      echo "invalid proposal id '$TARGET' — expected prop_xxxxxx" >&2
+      exit 64
+    fi
+    if [ ! -f "$REPO/data/proposals/$TARGET.md" ]; then
+      echo "no such proposal: $TARGET" >&2
+      exit 66
+    fi
+    PROMPT="/apply-fill $TARGET"; LABEL="Fill an application"; DEFAULT_BUDGET=3 ;;
   *)
-    echo "usage: run-now.sh <job-run|track|curate|followup>" >&2
+    echo "usage: run-now.sh <job-run|track|curate|followup|apply <proposal-id>>" >&2
     exit 64 ;;
 esac
 

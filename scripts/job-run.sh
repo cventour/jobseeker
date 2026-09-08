@@ -41,7 +41,43 @@ BOARD_SWEEP_TIMEOUT="${JOBRUN_BOARD_SWEEP_TIMEOUT:-900}"   # 15 min ceiling on t
 GUARD_ENABLED="${JOBRUN_GUARD:-1}"
 export GUARD_MAX_RSS_MB="${JOBRUN_GUARD_MAX_RSS_MB:-4096}"
 export GUARD_TOTAL_RSS_MB="${JOBRUN_GUARD_TOTAL_RSS_MB:-12288}"
-export JOBRUN_SOURCE=scheduled
+# Honour a source the caller already set. scripts/run-now.sh invokes this with
+# JOBRUN_SOURCE=manual for the dashboard's "Everything" button, and an unconditional assignment
+# here overwrote it — so a hand-started run was recorded, and gated, as a scheduled one.
+export JOBRUN_SOURCE="${JOBRUN_SOURCE:-scheduled}"
+
+# ---- cadence gate -----------------------------------------------------------------------------
+# "Every other day" cannot be a launchd schedule: StartCalendarInterval fires on WEEKDAYS, and a
+# 48-hour cycle drifts across the week. So that cadence installs the daily plist and is enforced
+# here instead — `min_hours_between_runs` in the config, compared against the last run's finish.
+#
+# This sits ABOVE the caffeinate call on purpose. Everything below wakes the display and starts
+# spending; a skipped day has to cost nothing and be invisible, or the user watches their Mac wake
+# each morning for a run that was never going to happen.
+#
+# Manual runs are never gated. Pressing Run now means run now.
+if [ "${JOBRUN_SOURCE:-scheduled}" = "scheduled" ]; then
+  MIN_HOURS="$("${NODE_BIN:-$(command -v node || echo /opt/homebrew/bin/node)}" -e '
+    const fs=require("fs");
+    try{
+      const t=fs.readFileSync("config/job-seeker.config.md","utf8");
+      const m=/^min_hours_between_runs:[^\S\n]*(.*)$/m.exec(t);
+      process.stdout.write(m && m[1] ? m[1].trim() : "");
+    }catch{ process.stdout.write(""); }' 2>/dev/null)"
+  if printf '%s' "$MIN_HOURS" | grep -qE '^[0-9]+$' && [ "$MIN_HOURS" -gt 0 ]; then
+    SINCE="$("${NODE_BIN:-$(command -v node || echo /opt/homebrew/bin/node)}" -e '
+      const fs=require("fs");
+      try{
+        const j=JSON.parse(fs.readFileSync("data/.job-run.status.json","utf8"));
+        const t=Date.parse(j.finished || j.started || "");
+        process.stdout.write(Number.isFinite(t) ? String(Math.floor((Date.now()-t)/3600000)) : "");
+      }catch{ process.stdout.write(""); }' 2>/dev/null)"
+    if printf '%s' "$SINCE" | grep -qE '^[0-9]+$' && [ "$SINCE" -lt "$MIN_HOURS" ]; then
+      echo "skipped: last run was ${SINCE}h ago and this schedule asks for ${MIN_HOURS}h between runs"
+      exit 0
+    fi
+  fi
+fi
 
 # Force a FULL wake before touching Chrome. Measured on this machine across four consecutive
 # mornings: at every 08:00 firing, `pmset -g log` showed the Mac in DarkWake — a background

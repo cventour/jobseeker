@@ -72,6 +72,11 @@ scheduling; application confirmations; rejections; offers; and LinkedIn job/recr
      `node server/record.mjs add-task '{"type":"prep","who":"<company>","related_id":"<app id>","due_date":"<day before>","detail":"Prep for <Company> interview"}'`
 6. **Follow-ups.** For threads awaiting a reply from the user, add a task:
    `node server/record.mjs add-task '{"type":"followup","who":"<from>","related_id":"<app id>","due_date":"<+3 days>","detail":"Reply to <who> about <subject>"}'`
+   **Only for asks about getting the job (AGENT-RULES §8b).** Visa and immigration paperwork, traffic
+   fines, relocation, banking, licences and end-of-service settlements with a previous employer are
+   personal admin — **log the message, create no task**, even when they arrive inside an offer
+   thread. The test: does doing it make an offer more likely, or move an application forward? Also
+   honour `ignored_topics` in `config/job-seeker.config.md`.
 7. **Reconcile open tasks (email evidence).** Read `data/tasks.md` open items. If a sent email
    proves a task is done — e.g. a task "send CV to Bill" and you find a sent CV to that person, or
    "confirm X emailed" and the email exists — close it:

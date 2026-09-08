@@ -37,6 +37,15 @@ ignored_chats:
 # case- and punctuation-insensitively. Example: acquiredco=Parent Company
 company_aliases:
 
+# Subjects that must never become a TASK, even when they turn up inside a job thread (comma list,
+# matched case-insensitively against the subject and the task you were about to write). The built-in
+# list already covers visas and immigration, traffic fines, relocation, banking and payroll,
+# licences, and end-of-service settlements with a previous employer — see AGENT-RULES §8b. This is
+# for anything else your own life throws into the same inbox. The message is still logged; only the
+# to-do list is filtered.
+ignored_topics:
+
+
 # Spend controls. Costs come from the run itself (claude --output-format json) and are logged to
 # data/spend.md, which the dashboard reads.
 # Per-run cap, passed to claude as --max-budget-usd. A run that hits it stops and says so.

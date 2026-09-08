@@ -134,7 +134,24 @@ const HEAD_ICONS = `<link rel="icon" href="${v("/favicon.ico")}" sizes="any">
 // Anchored to elements that already exist rather than to markup added for the tour, so nothing
 // here changes the page it is describing. If a target is missing (a narrower layout, a future
 // change) that step is skipped rather than pointing at nothing.
-const TOUR_JS = `(function(){
+// Viewport size that is never zero.
+//
+// window.innerWidth reports 0 in real conditions — during a restore, before first layout, and in
+// some embedded views. Every positioner here then computed `innerWidth - width - padding`, went
+// NEGATIVE, and threw the panel off the left edge with its arrow still correctly under the button.
+// It looked like a misaligned popup; it was arithmetic on a zero.
+const VIEWPORT_JS = `
+function vpW(){
+  return window.innerWidth || document.documentElement.clientWidth ||
+    (document.body && document.body.clientWidth) || 1024;
+}
+function vpH(){
+  return window.innerHeight || document.documentElement.clientHeight ||
+    (document.body && document.body.clientHeight) || 768;
+}
+`;
+
+const TOUR_JS = `${VIEWPORT_JS}(function(){
   var STEPS = [
     { sel: 'nav.tabs', title: 'Everything lives behind these five',
       body: 'Today is what needs you now. Jobs are roles found for you, Pipeline is what you have applied to, People is who you have spoken to.' },
@@ -147,17 +164,18 @@ const TOUR_JS = `(function(){
     { sel: '.gearlink', title: 'Your CV and your targets',
       body: 'Everything the agents read about you, and the boards they search, live in Settings.' }
   ];
-  var KEY = 'jobseeker.tour';
-  var i = 0, veil, spot, bub, steps;
+  var TOUR_KEY = 'jobseeker.tour';
+  var i = 0, veil, spot, bub, steps, key = TOUR_KEY;
 
-  function seen(){ try { return localStorage.getItem(KEY) === 'done'; } catch(e){ return true; } }
-  function markSeen(){ try { localStorage.setItem(KEY, 'done'); } catch(e){} }
+  function seen(k){ try { return localStorage.getItem(k) === 'done'; } catch(e){ return true; } }
+  function markSeen(k){ try { localStorage.setItem(k, 'done'); } catch(e){} }
 
   function stop(){
-    markSeen();
+    markSeen(key);
     [veil, spot, bub].forEach(function(el){ if (el && el.parentNode) el.parentNode.removeChild(el); });
     veil = spot = bub = null;
     window.removeEventListener('resize', place);
+    window.removeEventListener('scroll', place, true);
     window.removeEventListener('keydown', onKey);
   }
   function onKey(e){ if (e.key === 'Escape') stop(); }
@@ -173,10 +191,12 @@ const TOUR_JS = `(function(){
 
     // Prefer sitting under the target; flip above when there is no room.
     var below = r.bottom + 14, bh = bub.offsetHeight || 150;
-    var goBelow = (below + bh) < (window.innerHeight - 12);
+    var goBelow = (below + bh) < (vpH() - 12);
     bub.className = 'tour-bub ' + (goBelow ? 'below' : 'above');
     bub.style.top = (goBelow ? below : Math.max(12, r.top - 14 - bh)) + 'px';
-    var left = Math.min(Math.max(12, r.left), window.innerWidth - bub.offsetWidth - 12);
+    /* The outer Math.max is what stops a bubble wider than the viewport being pushed off-screen
+       left: clamp to the right edge, but never past the left one. */
+    var left = Math.max(12, Math.min(Math.max(12, r.left), vpW() - bub.offsetWidth - 12));
     bub.style.left = left + 'px';
     var arrow = bub.querySelector('i');
     var ax = Math.min(Math.max(14, r.left + r.width / 2 - left - 6), bub.offsetWidth - 26);
@@ -190,16 +210,23 @@ const TOUR_JS = `(function(){
       '<button type="button" class="go" data-next></button></span></footer>';
     bub.querySelector('h4').textContent = st.title;
     bub.querySelector('p').textContent = st.body;
-    bub.querySelector('.tour-step').textContent = (i + 1) + ' of ' + steps.length;
+    /* "1 of 1" is a counter for a tour of one — noise. */
+    bub.querySelector('.tour-step').textContent = steps.length > 1 ? (i + 1) + ' of ' + steps.length : '';
     bub.querySelector('[data-next]').textContent = (i === steps.length - 1) ? 'Done' : 'Next';
+    /* Skip and Done say the same thing when there is only one card. */
+    bub.querySelector('[data-skip]').hidden = steps.length === 1;
     bub.querySelector('[data-skip]').onclick = stop;
     bub.querySelector('[data-next]').onclick = next;
     place();
   }
   function next(){ i++; if (i >= steps.length) { stop(); return; } render(); }
 
-  function start(){
-    steps = STEPS.filter(function(s){ return document.querySelector(s.sel); });
+  /* One placement engine, two callers: the five-step tour, and the single balloon shown to someone
+     who finished setup without starting a run. A second balloon system would be a second thing to
+     keep aligned with a sticky, horizontally scrolling tab strip. */
+  function start(list, k){
+    key = k || TOUR_KEY;
+    steps = (list || STEPS).filter(function(s){ return document.querySelector(s.sel); });
     if (!steps.length) return;
     i = 0;
     veil = document.createElement('div'); veil.className = 'tour-veil';
@@ -209,13 +236,42 @@ const TOUR_JS = `(function(){
     document.body.appendChild(veil); document.body.appendChild(spot); document.body.appendChild(bub);
     requestAnimationFrame(function(){ veil.classList.add('on'); });
     window.addEventListener('resize', place);
+    /* The Run now button rides in a sticky, horizontally scrollable tab strip, so the ring drifts
+       off its target on any scroll unless it is re-measured. Capture phase, because the strip's own
+       scroll does not bubble. */
+    window.addEventListener('scroll', place, true);
     window.addEventListener('keydown', onKey);
     render();
   }
 
-  window.__tourReplay = function(){ try { localStorage.removeItem(KEY); } catch(e){} start(); };
-  if (!seen()) setTimeout(start, 450);   // let the page settle before dimming it
+  window.__tourReplay = function(){ try { localStorage.removeItem(TOUR_KEY); } catch(e){} start(STEPS, TOUR_KEY); };
+
+  /* Either/or, never both. A brand-new user who declines the first run would otherwise get the full
+     tour AND the hint back to back — two veils in a row — and it would be redundant: the tour's own
+     third step already points at the same button and says the same thing. */
+  var hint = window.__tourHint;
+  if (!seen(TOUR_KEY)) {
+    if (hint) markSeen(hint.key);
+    setTimeout(function(){ start(STEPS, TOUR_KEY); }, 450);   /* let the page settle before dimming it */
+  } else if (hint && !seen(hint.key)) {
+    setTimeout(function(){ start([hint], hint.key); }, 450);
+  }
 })();`;
+
+// What a ?hint= may point at, and what it may say. An allow-list, not the query string itself: a
+// hint is a spotlight plus authoritative-looking words in JobSeeker's own voice, and a link that
+// chose both would be a link that could put anything anywhere. Same reasoning as BACK_TO.
+const PAGE_HINTS = new Map([
+  [
+    "runnow",
+    {
+      sel: ".runmenu-btn",
+      key: "jobseeker.hint.runnow",
+      title: "Start your first run here",
+      body: "Everything, or just one part of it. Nothing here applies or sends — it queues anything needing you for approval.",
+    },
+  ],
+]);
 
 const APPEARANCE_BTN = `<button type="button" id="appearance" class="moonbtn"></button>`;
 
@@ -893,7 +949,7 @@ function normCompanyKey(name) {
   return String(name || "").toLowerCase().replace(/\b(inc|llc|ltd|gmbh|corp|co|the)\b/g, "").replace(/[^a-z0-9]+/g, "");
 }
 
-function proposalsHTML(props, appliedByCompany, reposts = {}) {
+function proposalsHTML(props, appliedByCompany, reposts = {}, busy = null) {
   if (!props.length) return `<p class="empty">No proposals yet. Run <code>/curate</code>.</p>`;
   const rows = props
     .map((p) => p.data)
@@ -953,6 +1009,28 @@ function proposalsHTML(props, appliedByCompany, reposts = {}) {
       const appliedBadge = appd.length
         ? `<div class="appliedhere" title="You already have an application at this company — this is a different role">✓ Applied here: ${esc(appd.map((a) => a.role + (a.status && a.status.toLowerCase() !== "applied" ? ` (${a.status})` : "")).join("; "))}</div>`
         : "";
+      // Fill this form for me.
+      //
+      // It fills and STOPS: the tab is left open in the user's own Chrome and they press Submit.
+      // Nothing here can submit an application — that is the point, not a limitation. An unattended
+      // agent has nobody to ask when a form asks something the CV does not answer, and a confidently
+      // wrong answer on an application is worse than an obvious gap.
+      //
+      // Shares the run lock with everything else that drives Chrome (AGENT-RULES §13), so it greys
+      // out while any run is going and vice versa.
+      const canFill = Boolean(p.job_url) && st !== "dismissed" && st !== "applied";
+      const applyBtn = canFill
+        ? `<form method="POST" action="/apply-now" class="prowact applyform">
+             <input type="hidden" name="_tab" value="proposals">
+             <input type="hidden" name="id" value="${esc(p.id)}">
+             <button type="submit" class="applybtn"${busyAttrs(busy)}
+               title="${esc(
+                 busy
+                   ? `${runLabel(busy.slug)} is running — only one thing can drive Chrome at a time`
+                   : "Opens the posting in your Chrome and fills what it can from your CV. It does not submit — you do."
+               )}">Fill form</button>
+           </form>`
+        : "";
       return `<tr data-status="${esc(st)}" data-new="${isNew ? "yes" : "no"}"${cls ? ` class="${cls}"` : ""}>
         <td>${action}</td>
         <td>${isNew ? `<span class="newbadge">NEW</span> ` : ""}<strong>${esc(p.company)}</strong>${repostBadge}${appliedBadge}</td>
@@ -964,11 +1042,16 @@ function proposalsHTML(props, appliedByCompany, reposts = {}) {
         <td>${(p.verified || "no") === "yes"
           ? `<span class="vbadge vyes" title="Opened the posting & confirmed title + location">✓ verified</span>`
           : `<span class="vbadge vno" title="Not yet opened/confirmed — do not trust as live">unverified</span>`}</td>
-        <td>${
+        <td class="linkcell">${applyBtn}${
           !p.job_url
             ? ""
             : (p.url_volatile || "no") === "yes"
-              ? `<span class="volatile-url" title="This link uses a short-lived token that rotates and can expire silently. If it 404s, re-search the vendor careers site by location/Job ID (see proposal notes).">${linkify(p.job_url)} <span class="volatile-badge">⚠ link may expire — re-search by Job ID</span></span>`
+              ? // The warning is carried by the LINK, not by a badge beside it. As a badge it was a
+                // second line of text on every volatile row, and the Link column grew to fit the
+                // longest one — so a caveat about a minority of links set the width of the whole
+                // table. The wavy red underline says "something is off with this link" at a glance;
+                // hovering says what.
+                `<span class="volatile-url" title="⚠ This link may expire — re-search by Job ID.&#10;&#10;It uses a short-lived token that rotates and can expire silently. If it 404s, re-search the vendor careers site by location or Job ID (see the proposal notes).">${linkify(p.job_url)}</span>`
               : linkify(p.job_url)
         }</td>
       </tr>`;
@@ -980,7 +1063,7 @@ function proposalsHTML(props, appliedByCompany, reposts = {}) {
 }
 
 // Proposals section: NEW-highlight + status filter chips (Active hides dismissed).
-function proposalsSection(propRecords, appliedByCompany, reposts = {}, orphans = null) {
+function proposalsSection(propRecords, appliedByCompany, reposts = {}, orphans = null, busy = null) {
   const st = (p) => (p.data.status || "proposed").toLowerCase();
   const isNew = (p) => (p.data.seen || "no") !== "yes" && st(p) === "proposed";
   const n = (f) =>
@@ -1012,7 +1095,7 @@ They can be restored at any time from the Dismissed filter.">
          </div>`
       : ""
   }
-  ${proposalsHTML(propRecords, appliedByCompany, reposts)}`;
+  ${proposalsHTML(propRecords, appliedByCompany, reposts, busy)}`;
 }
 
 // ---------- Companies (markets + careers boards, joined) ----------
@@ -1475,14 +1558,19 @@ const isOn = (v, dflt = true) => {
  * `suggestions` renders a native <datalist>, which is a dropdown you can also type past — the exact
  * "pick one or add your own" behaviour wanted, with no library and no custom popup to get wrong.
  */
-function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = "", hint = "" } = {}) {
+function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = "", hint = "", sep: sepOpt = "" } = {}) {
   // Which character separates entries is a property of the DATA, not a global choice. `locations`
   // is stored as "Dubai, UAE; Remote" — semicolons separate, and the comma is part of a single
   // place name. Splitting that on commas would turn one location into two ("Dubai" and "UAE") and
   // quietly change what the scout searches for. So: if a semicolon is present it is the separator,
   // otherwise commas are. The same character is used to re-join, so the stored string keeps its
   // existing shape and no agent reading it sees a difference.
-  const sep = String(value || "").includes(";") ? ";" : ",";
+  //
+  // Inferring it from the value alone breaks on an EMPTY field, which is every field on a first run:
+  // a user who types the single location "Dubai, UAE" into an empty box has it stored comma-first
+  // and read back as two places. So a caller that knows the field's shape can say so, and
+  // `locations` does.
+  const sep = sepOpt || (String(value || "").includes(";") ? ";" : ",");
   const values = String(value || "")
     .split(sep)
     .map((s) => s.trim())
@@ -1533,6 +1621,7 @@ function criteriaFormHTML(criteria, marketNames = [], extraHidden = "") {
     ${chipsFieldHTML("locations", "Locations", raw("locations"), {
       suggestions: ["Dubai, UAE", "Abu Dhabi, UAE", "Remote", "Saudi Arabia", "Qatar"],
       placeholder: "add a location…",
+      sep: ";",
     })}
     ${chipsFieldHTML("seniority", "Seniority", raw("seniority"), {
       suggestions: ["Senior", "Principal", "Director", "VP", "Head of", "Lead"],
@@ -1691,7 +1780,37 @@ const RUN_MENU = [
   ["curate", "Find new roles", "Scores openings at your target companies — 3–8 min"],
   ["followup", "Draft follow-ups", "Writes what is due, for you to approve — 1–3 min"],
 ];
-const runLabel = (slug) => RUN_MENU.find((r) => r[0] === slug)?.[1] || slug;
+// `apply` is not on the Run now menu — it is started from a job row and needs a target — but it
+// takes the same lock, so every badge and every refusal has to be able to name it.
+const runLabel = (slug) => (slug === "apply" ? "Filling an application" : RUN_MENU.find((r) => r[0] === slug)?.[1] || slug);
+
+// Which agent has the browser, and what it is doing with it — said the way the user would say it.
+//
+// Chrome is serial (AGENT-RULES §13), so anything that drives it has to wait its turn. "Disabled"
+// alone answers none of the questions a person actually has at that moment: what is running, why
+// can I not do this, and how long. This maps the running slug to that answer.
+const BUSY_SAYS = new Map([
+  ["job-run", ["The daily run", "working through your whole pipeline"]],
+  ["track", ["The channel tracker", "reading your WhatsApp and LinkedIn"]],
+  ["curate", ["The role scout", "searching for new roles"]],
+  ["followup", ["The follow-up writer", "drafting your due follow-ups"]],
+  ["apply", ["The application agent", "filling in an application form"]],
+  ["market", ["The prioritisation agent", "researching a market"]],
+]);
+
+function busyMessage(busy) {
+  if (!busy) return "";
+  const [who, doing] = BUSY_SAYS.get(busy.slug) || ["A run", "using the browser"];
+  const el = runElapsed(busy.started);
+  return `${who} is using the browser — ${doing}${el ? `, ${el} so far` : ""}. Only one thing can drive Chrome at a time, so this will work again the moment it finishes.`;
+}
+
+// A gated button keeps its click. Marking it `disabled` would have been simpler and is what this
+// used to do — but a disabled button fires NO events, so there is nowhere to hang the explanation
+// and the user is left clicking a dead control. aria-disabled greys it out and still reports it as
+// unavailable to a screen reader, while leaving the click for the balloon.
+const busyAttrs = (busy) =>
+  busy ? ` aria-disabled="true" data-busy="${esc(busyMessage(busy))}"` : "";
 
 // "2 min" beats a UTC timestamp for the only question being asked: has this hung, or did I start it
 // a moment ago? Computed at render — the page is reloaded to find out anyway.
@@ -1721,15 +1840,16 @@ function runBadge(busy, { own = false } = {}) {
 function runNowButton({ slug, tab, busy }) {
   const row = RUN_MENU.find((r) => r[0] === slug);
   if (!row) return "";
-  const own = Boolean(busy && busy.slug === slug);
   const tip = busy ? `${runLabel(busy.slug)} is already running — only one run at a time` : row[2];
+  // No badge here. The stat bar carries one already, a few centimetres up and on every tab, so a
+  // second copy beside the button said the same sentence twice on one screen. The button is greyed
+  // and answers a click with the balloon, which is the part the stat bar cannot do.
   return `<div class="runctl compact">
     <form method="POST" action="/run-now" class="inline">
       <input type="hidden" name="_tab" value="${esc(tab)}">
       <input type="hidden" name="slug" value="${esc(slug)}">
-      <button type="submit" class="btn-small"${busy ? " disabled" : ""} title="${esc(tip)}">${esc(row[1])}</button>
+      <button type="submit" class="btn-small"${busyAttrs(busy)} title="${esc(tip)}">${esc(row[1])}</button>
     </form>
-    ${busy ? runBadge(busy, { own }) : ""}
   </div>`;
 }
 
@@ -1772,7 +1892,7 @@ function runNowMenu({ tab, busy, lastNow }) {
           ([slug, label, sub]) => `<form method="POST" action="/run-now">
             <input type="hidden" name="_tab" value="${esc(tab)}">
             <input type="hidden" name="slug" value="${esc(slug)}">
-            <button type="submit" class="runmenu-item"${busy ? " disabled" : ""}>
+            <button type="submit" class="runmenu-item"${busyAttrs(busy)}>
               <span class="rmi-label">${esc(label)}</span>
               <span class="rmi-sub">${esc(sub)}</span>
             </button></form>`
@@ -1833,6 +1953,14 @@ function unfinishedHTML(w, markets) {
       "The handful of questions every form asks. Nothing depends on them — it just saves you looking them up.",
       `<a class="btn-small linkbtn" href="/setup-step?step=answers&back=settings">Fill them in</a>`));
   }
+  // The wizard stopped asking where approvals should reach you, so this is now the only place that
+  // says so. A setting the wizard drops has to reappear somewhere, or it is not "moved to Settings",
+  // it is gone.
+  if (!String(w.cfg.approval_channels || "").trim()) {
+    rows.push(row("not set", "ok-pill", "Where approvals reach you",
+      "Chat by default. Add WhatsApp and the digest, and anything waiting on your yes, arrive on your phone.",
+      `<a class="btn-small linkbtn" href="/setup-step?step=channels&back=settings">Choose</a>`));
+  }
   if (!rows.length) return "";
   return `<div class="tblock">
       <p class="th">Unfinished setup <span class="muted">— each one runs on its own; nothing else has to be redone</span></p>
@@ -1887,7 +2015,7 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
         (st.ladderTier > 1
           ? ` <b>Currently ${esc(
               { 2: "Mondays and Thursdays", 3: "Mondays only", 4: "not running" }[st.ladderTier] || "reduced"
-            )}</b> — JobSeeker stepped this down because roles were not being reviewed. Setting a time here puts it back to every day.`
+            )}</b> — JobSeeker stepped this down because roles were not being reviewed. Restoring it returns to the cadence you chose, not to every day.`
           : ""),
     ],
   ];
@@ -2299,7 +2427,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
         body: `${esc(l.why || "")} Nothing is being read and nothing new will appear here until you turn it
           back on.
           <form method="POST" action="/restore-schedule" class="inline" style="margin-left:8px">
-            <button type="submit" class="btn-small">Run it every day again</button></form>
+            <button type="submit" class="btn-small">Turn it back on</button></form>
           <a class="btn-small linkbtn" href="/settings?tab=setup">Choose a different schedule</a>`,
         summary: `Daily run switched off — ${l.why || "no reason recorded"}`,
         dismissed: NX,
@@ -2312,7 +2440,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
         title: `JobSeeker now runs ${esc(SCHEDULE[tier])}.`,
         body: `${esc(l.why || "")}
           <form method="POST" action="/restore-schedule" class="inline" style="margin-left:8px">
-            <button type="submit" class="btn-small">Back to every day</button></form>
+            <button type="submit" class="btn-small">Back to my usual schedule</button></form>
           <a class="btn-small linkbtn" href="/settings?tab=setup">Settings</a>`,
         summary: `Schedule stepped down to ${SCHEDULE[tier]} — ${l.why || ""}`,
         dismissed: NX,
@@ -2531,7 +2659,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
           <form method="POST" action="/research-market" class="inline">
             <input type="hidden" name="_tab" value="today">
             <input type="hidden" name="market" value="${esc(askMarket.label)}">
-            <button type="submit">Yes — research it now</button></form>
+            <button type="submit"${busyAttrs(busy)}>Yes — research it now</button></form>
           <form method="POST" action="/defer-market-ask" class="inline">
             <input type="hidden" name="_tab" value="today">
             <input type="hidden" name="market" value="${esc(askMarket.name)}">
@@ -2547,7 +2675,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
            <form method="POST" action="/research-market" class="inline">
              <input type="hidden" name="_tab" value="today">
              <input type="hidden" name="market" value="${esc(deferred[0].label)}">
-             <button type="submit" class="btn-small">Research ${esc(deferred[0].label)} now</button></form></div>`
+             <button type="submit" class="btn-small"${busyAttrs(busy)}>Research ${esc(deferred[0].label)} now</button></form></div>`
       : "";
 
   const boardsBlock = boardsNeeding
@@ -2703,7 +2831,7 @@ ${tabStrip(TABS, active, runNowMenu({ tab: active, busy: all.runNow, lastNow: al
 </div>
 <div id="panels">
 ${tabPanel("today", on("today"), sec("today", "", todayHTML(all, dueToday, appTok, appIds)))}
-${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts, all.orphans), runNowButton({ slug: "curate", tab: "proposals", busy: all.runNow })))}
+${tabPanel("proposals", on("proposals"), sec("proposals", `Jobs <span class="muted">— curated openings to review (× to dismiss · filter by status)</span>`, proposalsSection(all.proposals, appliedByCompany, reposts, all.orphans, all.runNow), runNowButton({ slug: "curate", tab: "proposals", busy: all.runNow })))}
 ${tabPanel("pipeline", on("pipeline"), sec("pipeline", `Pipeline <span class="muted">— everything you have acted on, from CV sent to offer</span>`, statusBoardHTML(applied) + pipelineSection(all.applications), runNowButton({ slug: "followup", tab: "pipeline", busy: all.runNow })))}
 ${tabPanel("people", on("people"), sec("people", `People <span class="muted">— who you are talking to, and every message logged with them</span>`, peopleHTML(all), runNowButton({ slug: "track", tab: "people", busy: all.runNow })))}
 ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="muted">— append-only audit log (filter by kind · search · run boundaries highlighted)</span>`, activitySection(all.activity)))}
@@ -2742,6 +2870,13 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
   </div>
 </div>
 <script>window.__DETAILS__=${detailsJSON};</script>
+${
+  // Escaped the same way __DETAILS__ is: a literal "</script>" inside the JSON would end the block
+  // early and leave the rest of it as page text.
+  all.hint
+    ? `<script>window.__tourHint=${JSON.stringify(all.hint).replace(/</g, "\\u003c")};</script>`
+    : ""
+}
 <script>${TOUR_JS}</script>
 <script>${JS}</script>
 </body></html>`;
@@ -3113,6 +3248,27 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .askh{font-size:16px;font-weight:700;margin:2px 0 6px;letter-spacing:-.01em}
 .asksub{color:var(--mut);font-size:13px;margin:0 0 12px;max-width:64ch;line-height:1.6}
 .askacts{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+/* "Why did nothing happen?" — the answer, on the button that did nothing. */
+[data-busy]{opacity:.45;cursor:not-allowed}
+.busybub{position:fixed;z-index:70;width:min(300px,calc(100vw - 24px));
+  background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+  box-shadow:0 14px 34px rgba(0,0,0,.34)}
+.busybub p{margin:0;font-size:12.5px;line-height:1.5;color:var(--fg)}
+.busybub i{position:absolute;width:11px;height:11px;background:var(--card);border:1px solid var(--line);
+  transform:rotate(45deg)}
+.busybub.below i{top:-6px;border-right:0;border-bottom:0}
+.busybub.above i{bottom:-6px;border-left:0;border-top:0}
+
+/* Fill form — on the row, next to the link it opens. Quiet until hovered: it is one action among
+   many on a long table, not the headline. */
+.linkcell{white-space:nowrap}
+.applyform{display:inline-block;margin:0 8px 0 0}
+.prowact button.applybtn{font:inherit;font-size:11.5px;font-weight:650;padding:3px 10px;
+  border-radius:99px;border:1px solid var(--line);background:var(--card);color:var(--mut);
+  cursor:pointer;white-space:nowrap;line-height:1.5}
+.prowact button.applybtn:hover:not([disabled]){background:var(--card);border-color:var(--acc);color:var(--acc)}
+.prowact button.applybtn[disabled]{opacity:.4;cursor:not-allowed}
+
 .runctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0}
 .runctl form.inline{display:flex;align-items:center;gap:8px;margin:0}
 .runctl button[disabled]{opacity:.45;cursor:not-allowed}
@@ -3337,7 +3493,8 @@ tr.rowdismissed{opacity:.45}
 .advbtn:hover{background:#3fd08c}
 @keyframes advpulse{0%,100%{box-shadow:0 0 0 0 rgba(46,160,110,.5)}50%{box-shadow:0 0 0 4px rgba(46,160,110,0)}}
 tr.rowpending td{background:rgba(46,160,110,.10)}tr.rowpending td:first-child{box-shadow:inset 3px 0 0 #2ea06e}
-.volatile-badge{display:inline-block;margin-left:6px;font-size:10px;font-weight:700;color:#ff6b6b;background:rgba(255,107,107,.13);border:1px solid rgba(255,107,107,.5);border-radius:5px;padding:0 5px;white-space:nowrap}
+/* The volatile link explains itself on hover — see the render side for why it is not a badge. */
+.volatile-url{cursor:help}
 tr.isnew td{background:rgba(46,160,110,.16)}tr.isnew td:first-child{box-shadow:inset 3px 0 0 #2ea06e}
 .newbadge{background:#2ea06e;color:#04160e;font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px;letter-spacing:.04em}
 .repostbadge{display:inline-block;margin-top:4px;font-size:10.5px;font-weight:700;border-radius:6px;
@@ -3406,7 +3563,153 @@ a.btn{display:inline-block;background:var(--acc);color:#fff;padding:6px 12px;bor
 @media(max-width:600px){.modal{padding:0 16px 18px;max-height:calc(100vh - 32px)}.overlay{padding:16px 8px}}
 `;
 
-const JS = `
+const JS = `${VIEWPORT_JS}
+  /* Refreshing should put you back exactly where you were.
+     Two things move you: the scroll position, and the TAB. The tab is the one that bit -- after any
+     POST the URL carries ?flash=...&tab=today from the redirect, and a reload re-reads that query
+     and pins the tab it names, so refreshing from Pipeline dropped you on Today. So before any
+     reload we own, the URL is rewritten to the tab that is actually open and the stale query is
+     dropped (a flash re-shown on refresh is a message about something that already happened). The
+     Settings sub-pane rides along, because ?sub= is real state, not a leftover. */
+  function keepPlace(){
+    try { sessionStorage.setItem('js_scroll', JSON.stringify({ p: location.pathname, y: window.scrollY })); } catch(e){}
+    try {
+      var on = document.querySelector('nav.tabs .tab.on');
+      var sub = new URLSearchParams(location.search).get('sub');
+      var url = location.pathname + (sub ? '?sub=' + encodeURIComponent(sub) : '') + (on ? '#' + on.getAttribute('data-tab') : location.hash);
+      history.replaceState(null, '', url);
+    } catch(e){}
+  }
+
+  /* Cmd-R.
+     In a browser this is free. In the app it is not: JobSeeker.app is a WebView with no menu bar,
+     and a WKWebView with no Reload menu item swallows the key -- so the one shortcut everybody
+     already knows did nothing in the one place the auto-refresh is most likely to be waiting on a
+     quiet moment. Handling it here covers both, and Cmd-Shift-R is left alone for the browser's
+     own hard reload. */
+  document.addEventListener('keydown', function(e){
+    if((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R')){
+      e.preventDefault();
+      keepPlace();
+      location.reload();
+    }
+  });
+
+  /* A run that finishes while you are looking at the page.
+     Without this the page is a photograph: the badge said "running" until you happened to reload,
+     and the roles a curate run had just found were sitting on disk, invisible. Nothing here streams
+     -- the dashboard is server-rendered -- so the page asks a tiny endpoint whether the world has
+     changed, and reloads itself when it has.
+     Polls fast while something is running and slowly when nothing is, because the idle case is only
+     watching for a run someone ELSE started: the 08:00 schedule, another tab, the terminal. */
+  (function(){
+    var seen = null, timer = 0;
+    function busyNow(){ return !!document.querySelector('[data-busy]'); }
+    /* Never yank the page out from under a hand. A reload mid-sentence loses what was typed, and a
+       reload under an open dialog loses the decision being made -- so it waits for a quiet moment,
+       which the next poll will find. */
+    function occupied(){
+      var a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+      if (document.querySelector('.pop:not(.hide)')) return true;
+      if (document.querySelector('.tour-bub, .busybub')) return true;
+      var ov = document.getElementById('confirmOverlay');
+      if (ov && getComputedStyle(ov).display !== 'none') return true;
+      var sel = window.getSelection && window.getSelection();
+      return !!(sel && String(sel).length > 2);
+    }
+    function tick(){
+      fetch('/run-state', { cache: 'no-store' })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){
+          if (!d) return;
+          var now = (d.running ? d.running.slug + '@' + d.running.started : '') + '|' + (d.finished || '');
+          if (seen === null) { seen = now; return; }      /* first answer is the baseline */
+          if (now !== seen && !occupied()) {
+            seen = now;
+            keepPlace();
+            location.reload();
+          }
+        })
+        .catch(function(){ /* server restarting; the next tick tries again */ })
+        .then(schedule);
+    }
+    function schedule(){
+      clearTimeout(timer);
+      timer = setTimeout(tick, busyNow() ? 5000 : 30000);
+    }
+    /* A hidden tab costs the user nothing to leave open, and should cost the server nothing either. */
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) { clearTimeout(timer); timer = setTimeout(tick, 400); }
+    });
+    schedule();
+  })();
+
+  /* Why that button did nothing.
+     A gated button keeps its click (see busyAttrs) precisely so there is something to answer with.
+     No veil and no dimming: this is an answer to one click, not a tour — it points at the control
+     you pressed, says who has the browser, and goes away on the next click, Escape, or eight
+     seconds. */
+  (function(){
+    var bub = null, tid = 0, anchor = null;
+    function close(){
+      if(tid){ clearTimeout(tid); tid = 0; }
+      if(bub && bub.parentNode) bub.parentNode.removeChild(bub);
+      bub = null; anchor = null;
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    }
+    function place(){
+      if(!bub || !anchor) return;
+      var r = anchor.getBoundingClientRect(), vw = vpW(), vh = vpH();
+      var bh = bub.offsetHeight || 90, bw = bub.offsetWidth || 260;
+      var below = r.bottom + 12;
+      var goBelow = (below + bh) < (vh - 12);
+      bub.className = 'busybub ' + (goBelow ? 'below' : 'above');
+      bub.style.top = Math.round(goBelow ? below : Math.max(12, r.top - 12 - bh)) + 'px';
+      var left = Math.max(12, Math.min(r.left + r.width / 2 - bw / 2, vw - bw - 12));
+      bub.style.left = Math.round(left) + 'px';
+      var arrow = bub.querySelector('i');
+      if(arrow){
+        arrow.style.left = Math.round(Math.min(Math.max(14, r.left + r.width / 2 - left - 6), bw - 26)) + 'px';
+      }
+    }
+    function show(btn, msg){
+      close();
+      anchor = btn;
+      bub = document.createElement('div');
+      bub.className = 'busybub below';
+      bub.setAttribute('role', 'status');
+      bub.innerHTML = '<i></i><p></p>';
+      bub.querySelector('p').textContent = msg;
+      document.body.appendChild(bub);
+      place();
+      window.addEventListener('resize', place);
+      window.addEventListener('scroll', place, true);
+      tid = setTimeout(close, 8000);
+    }
+    /* Capture phase, so the click is answered before any submit handler acts on it. */
+    document.addEventListener('click', function(e){
+      var t = e.target.closest && e.target.closest('[data-busy]');
+      if(!t){ if(bub) close(); return; }
+      e.preventDefault();
+      e.stopPropagation();
+      show(t, t.getAttribute('data-busy'));
+    }, true);
+    /* Belt and braces: a gated control inside a form must never submit, however it was triggered
+       (Enter on a focused button, a stray handler). */
+    document.addEventListener('submit', function(e){
+      var f = e.target;
+      if(f && f.querySelector && f.querySelector('[data-busy]')){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        var b = f.querySelector('[data-busy]');
+        show(b, b.getAttribute('data-busy'));
+      }
+    }, true);
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape') close(); });
+  })();
+
 // Careers-board rows: the ✏️ reveals the inline paste-a-URL form for that company and focuses the
 // input, so pasting is one click away. Toggling is all client-side; saving is a normal form POST.
 // Balloon anchored to its button. Only one open at a time; closes on Escape, on Cancel, and on a
@@ -3439,9 +3742,14 @@ function popToggle(id, btn){
     // never sit off-screen. Fixed positioning is what lets it escape a scrolling table.
     if(btn){
       var b=btn.getBoundingClientRect(), pad=12, w=el.offsetWidth, h=el.offsetHeight;
-      var left=Math.min(Math.max(pad, b.right-w), window.innerWidth-w-pad);
+      var vw=vpW(), vh=vpH();
+      /* CENTRE on the button, then clamp to both edges. Right-aligning a 560px panel under a 150px
+         button left it hanging a long way to the left with the arrow out at one corner — on-screen,
+         correctly anchored, and still reading as misaligned. Centring puts the arrow near the middle
+         where the eye expects it. The outer max keeps a panel wider than the viewport on screen. */
+      var left=Math.max(pad, Math.min(b.left + b.width/2 - w/2, vw-w-pad));
       var top=b.bottom+10;
-      if(top+h > window.innerHeight-pad) top=Math.max(pad, b.top-h-10); // flip above if no room below
+      if(top+h > vh-pad) top=Math.max(pad, b.top-h-10); // flip above if no room below
       el.style.left=Math.round(left)+'px';
       el.style.top=Math.round(top)+'px';
     }
@@ -4477,6 +4785,8 @@ async function handleSetBoard(form) {
 // Allowlisted keys, not "whatever the form posted" — this writes a file the agents and the scheduler
 // read, and an unknown key silently accepted is a setting that appears to work and does nothing.
 const CONFIG_KEYS = [
+  "schedule_days",
+  "min_hours_between_runs",
   "dashboard_port",
   "approval_channels",
   "whatsapp_owner_jid",
@@ -4587,15 +4897,127 @@ async function handleSaveConfig(form) {
 // Here each step is written the moment you leave it, so a wizard abandoned halfway is simply a
 // setup that is halfway done — which is exactly what Settings then offers to finish.
 
+// Every step this wizard can RENDER. `flow: false` means it is reachable on its own
+// (/setup-step?step=answers) but is not part of the first-run walk: the wizard asks the few things
+// nothing works without, and Settings holds the rest.
+//
+// Steps are addressed BY KEY, never by index. The flow and the full set deliberately diverge, so an
+// index into one is meaningless in the other — which is why the version that passed `ix` everywhere
+// could not have had both.
 const WELCOME_STEPS = [
-  { key: "start",    label: "Start" },
-  { key: "cv",       label: "CV",        skippable: true },
-  { key: "targets",  label: "Targets" },
-  { key: "markets",  label: "Markets",   skippable: true },
-  { key: "answers",  label: "Answers",   skippable: true },
-  { key: "channels", label: "Channels" },
-  { key: "schedule", label: "Schedule" },
+  { key: "start",     label: "Start" },
+  { key: "cv",        label: "CV",         skippable: true },
+  { key: "chrome",    label: "Chrome" },
+  { key: "markets",   label: "Industries", skippable: true },
+  { key: "roles",     label: "Function" },
+  { key: "seniority", label: "Seniority" },
+  { key: "locations", label: "Location" },
+  { key: "finish",    label: "Finish" },
+  { key: "answers",   label: "Answers",  skippable: true, flow: false },
+  { key: "channels",  label: "Channels", flow: false },
 ];
+const WIZARD_FLOW = WELCOME_STEPS.filter((x) => x.flow !== false).map((x) => x.key);
+
+// The four questions that fill data/criteria.md, one per screen. Every one is the same control over
+// a different field, so the differences live here as data and the renderer stays one block.
+//
+// `sep` matters on locations: chipsFieldHTML otherwise infers the separator from the STORED value,
+// so on a fresh install "Dubai, UAE" typed as one place is stored comma-separated and read back as
+// two. Naming the separator is what stops a first-run user's one location becoming two.
+const FUNCTION_SUGGESTIONS = [
+  "Product Management",
+  "Presales / Solutions Engineering",
+  "Solution Architecture",
+  "Customer Success",
+  "Sales",
+  "Engineering Leadership",
+  "Program / Delivery Management",
+  "Consulting",
+];
+const SENIORITY_SUGGESTIONS = ["Senior", "Principal", "Lead", "Head of", "Director", "VP", "C-level"];
+
+// How often the run fires. One table, because the wizard, the handler and the ladder all have to
+// agree on what "twice a week" means, and three copies of that would not stay in step.
+//
+// `days` is what scripts/set-schedule.sh takes: a comma list of weekdays, 0 = Sunday, empty = every
+// day. launchd has no "every N days" field — it schedules by weekday — so "every other day" is the
+// daily plist plus `min_hours` , which scripts/job-run.sh checks and skips on before it does
+// anything expensive or wakes the display.
+const CADENCE = new Map([
+  ["daily", { label: "Every day", days: "" }],
+  ["alt", { label: "Every other day", days: "", minHours: 40 }],
+  ["weekdays", { label: "Weekdays — Monday to Friday", days: "1,2,3,4,5" }],
+  ["twice", { label: "Twice a week — Monday and Thursday", days: "1,4" }],
+  ["weekly", { label: "Once a week", days: null, pickDay: true }],
+  ["custom", { label: "Specific days…", days: null, pickDays: true }],
+  ["off", { label: "Only when I ask", days: null, off: true }],
+]);
+
+// Read the installed schedule back as a cadence, so the wizard opens on what is actually set rather
+// than on a default that silently disagrees with the plist.
+function currentCadence(st) {
+  if (!st.scheduled) return { key: "off", weekday: "1" };
+  const days = String(st.schedDays || "").split(",").filter(Boolean).sort().join(",");
+  if (!days) return { key: String(st.cfg.min_hours_between_runs || "").trim() ? "alt" : "daily", weekday: "1" };
+  for (const [k, v] of CADENCE) {
+    if (v.days && v.days.split(",").sort().join(",") === days) return { key: k, weekday: "1" };
+  }
+  if (days.split(",").length === 1) return { key: "weekly", weekday: days };
+  return { key: "custom", weekday: "1" };
+}
+
+const CRITERIA_STEPS = {
+  markets: {
+    field: "markets",
+    label: "Industries",
+    cvField: "domains",
+    heading: "Which industries should it hunt in?",
+    sub: "An industry is a market to research. JobSeeker builds a ranked list of the companies in it worth your time, then watches their careers pages.",
+    placeholder: "add an industry…",
+    note:
+      "Adding one costs nothing. Researching it — ranking the companies in it — is a few minutes of " +
+      "work, so JobSeeker asks you about that once you are inside rather than holding up setup.",
+    foot: {
+      skipLabel: "Skip this for now",
+      skipNote:
+        "Skipping means no company list yet, so role hunting has nowhere to look — Today stays empty " +
+        "until you add one. Settings runs this same step whenever you are ready.",
+    },
+  },
+  roles: {
+    field: "roles",
+    label: "Function",
+    cvField: "titles",
+    suggestions: FUNCTION_SUGGESTIONS,
+    heading: "What do you actually do?",
+    sub: "The function you want to work in — broader than a job title, because titles for the same job differ at every company.",
+    subFromCV: true,
+    placeholder: "add a function…",
+  },
+  seniority: {
+    field: "seniority",
+    label: "Seniority",
+    cvField: "seniority",
+    suggestions: SENIORITY_SUGGESTIONS,
+    heading: "At what level?",
+    sub: "Pick every level you would take. Too narrow and good roles are filtered out before you see them.",
+    subFromCV: true,
+    placeholder: "add a level…",
+  },
+  locations: {
+    field: "locations",
+    label: "Location",
+    cvField: "locations",
+    sep: ";",
+    heading: "Where?",
+    sub: "Cities, countries, or Remote. Separated by semicolons, because a city and its country are not two places.",
+    subFromCV: true,
+    placeholder: "add a location…",
+    note: "How roles get scored — market 0.40, role 0.35, CV match 0.25. Change the balance in Settings once you have seen a few.",
+  },
+};
+const stepDef = (key) => WELCOME_STEPS.find((x) => x.key === key);
+const flowIndex = (key) => WIZARD_FLOW.indexOf(key);
 
 const ANSWERS_FILE = path.join(ROOT, "templates", "answers.md");
 const CV_STATUS_FILE = path.join(DATA, ".cv-parse.status.json");
@@ -4730,7 +5152,7 @@ async function mergeConfig(fields) {
 // A wizard that remembered "you did step 3" would disagree with the files the moment anything was
 // edited elsewhere — and /onboard, the dashboard and a text editor can all edit them.
 async function welcomeState({ schedule = false } = {}) {
-  const { data: cfg } = await readConfigRaw();
+  const { existing: cfgRaw, data: cfg } = await readConfigRaw();
   const criteria = parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {};
   const profileText = await safeRead(path.join(DATA, "profile.md"));
   const profile = parseFrontmatter(profileText).data || {};
@@ -4768,6 +5190,10 @@ async function welcomeState({ schedule = false } = {}) {
       .map((x) => x.trim())
       .filter(Boolean),
     done: Boolean(String(cfg.welcome_done || "").trim()),
+    // Whether the config FILE exists at all, as opposed to what is in it. A half-installed machine —
+    // criteria filled in, no config written — is a different case from a fresh one, and only the
+    // caller routing a first visit needs to tell them apart.
+    cfgPresent: Boolean(cfgRaw),
   };
 }
 
@@ -4781,19 +5207,79 @@ function needsWelcome(st) {
 
 // ---- rendering -----------------------------------------------------------------------------
 
-function welcomeStepper(ix, st) {
-  return `<div class="wsteps">${WELCOME_STEPS.map((step, i) => {
-    const skipped = st.skipped.includes(step.key);
-    const cls = i === ix ? "on" : i < ix ? (skipped ? "past skip" : "past") : "";
-    const n = i < ix ? (skipped ? "–" : "✓") : String(i + 1);
-    return `<span class="wstep ${cls}"><span class="wn">${n}</span><span class="wt">${esc(step.label)}</span></span>`;
-  }).join('<span class="wbar"></span>')}</div>`;
+// How far in you are, as a bar rather than a rail of seven numbered pills. The rail spent a strip of
+// the screen restating the whole flow on every screen; the bar answers the only question actually
+// being asked — how much is left.
+//
+// "start" is an introduction, not a question, so it does not count towards the total: a wizard that
+// claims you are 12% done before you have answered anything is measuring itself, not your progress.
+function welcomeProgress(key) {
+  const asked = WIZARD_FLOW.slice(1);
+  const pos = asked.indexOf(key);
+  const pct = pos < 0 ? 0 : Math.round(((pos + 1) / asked.length) * 100);
+  const label = pos < 0 ? "" : `Step ${pos + 1} of ${asked.length} — ${esc((stepDef(key) || {}).label || "")}`;
+  return `<div class="wprogress" role="progressbar" aria-label="Setup progress"
+      aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
+      <div class="wprogress-track"><i style="width:${pct}%"></i></div>
+      ${label ? `<p class="wprogress-label">${label}</p>` : ""}
+    </div>`;
+}
+
+// "I would rather use the terminal" used to be a paragraph saying to run /onboard, which left the
+// reader to work out what came after it. These are the commands, in the order they are meant to be
+// run, each one copyable — because a command you retype from a screenshot is a command you mistype.
+//
+// A modal rather than the .pop popover: this is a list to work through with a terminal open beside
+// it, not a one-line aside, and a popover closes the moment you click away to the terminal.
+const TERMINAL_STEPS = [
+  ["/onboard", "The same questions this wizard asks, in chat. Writes the same files."],
+  ["/parse-cv", "Reads templates/cv/*.pdf into data/profile.md, so roles are scored against you."],
+  ["/markets", "Researches and ranks the companies in each industry you named."],
+  ["/curate", "Finds live openings at those companies and scores them."],
+  ["/job-run", "The whole daily pipeline, whenever you want it. Queues approvals; sends nothing."],
+];
+
+const COPY_GLYPH = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+  stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="5.5" y="5.5" width="8" height="8" rx="1.5"></rect>
+  <path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5v5.5a1.5 1.5 0 0 0 1.5 1.5h2"></path>
+</svg>`;
+
+function terminalModal() {
+  return `<div id="w_term" class="overlay wterm" role="dialog" aria-modal="true" aria-labelledby="w_term_h">
+    <div class="modal">
+      <button class="mclose" type="button" onclick="termClose()" aria-label="Close">&times;</button>
+      <h3 id="w_term_h">Set it up in the terminal instead</h3>
+      <p class="muted wterm-sub">Open Claude Code in this folder, then run these in order. They ask the
+        same questions and write the same files as the wizard, so you can switch between the two at
+        any point.</p>
+      <ol class="wterm-list">
+        ${TERMINAL_STEPS.map(
+          ([cmd, why]) => `<li>
+            <div class="wterm-cmd">
+              <code>${esc(cmd)}</code>
+              <button type="button" class="copybtn" data-copy="${esc(cmd)}"
+                aria-label="Copy ${esc(cmd)}" title="Copy">${COPY_GLYPH}<span class="copied">Copied</span></button>
+            </div>
+            <p class="wterm-why">${esc(why)}</p>
+          </li>`
+        ).join("")}
+      </ol>
+      <div class="wterm-all">
+        <button type="button" class="btn-small copybtn" data-copy="${esc(TERMINAL_STEPS.map((x) => x[0]).join("\n"))}">
+          ${COPY_GLYPH} Copy all five</button>
+        <span class="muted tiny">Run them one at a time — each one waits for you.</span>
+      </div>
+      <div class="pop-acts"><button type="button" class="btn-secondary" onclick="termClose()">Back to the wizard</button></div>
+    </div>
+  </div>`;
 }
 
 // Every step ends the same way, so the way out is always in the same place: continue, back, skip
 // where skipping is allowed, and leave. Leaving is never punished and never hidden.
-function welcomeFoot(ix, { nextLabel = "Continue", disable = "", skipLabel = "", skipNote = "", extra = "" } = {}) {
-  const step = WELCOME_STEPS[ix];
+function welcomeFoot(key, { nextLabel = "Continue", disable = "", skipLabel = "", skipNote = "", extra = "" } = {}) {
+  const step = stepDef(key) || {};
+  const ix = flowIndex(key);
   return `<div class="wacts">
       <button type="submit" name="action" value="next"${disable ? ` disabled title="${esc(disable)}"` : ""}>${esc(nextLabel)}</button>
       ${ix > 0 ? `<button type="submit" name="action" value="back" class="btn-secondary" formnovalidate>Back</button>` : ""}
@@ -4877,8 +5363,7 @@ function welcomeProfileRows(st) {
   </div>`;
 }
 
-function welcomeStepHTML(ix, st, mode = {}) {
-  const key = WELCOME_STEPS[ix].key;
+function welcomeStepHTML(key, st, mode = {}) {
   const c = st.criteria;
   const solo = Boolean(mode.standalone);
 
@@ -4897,18 +5382,11 @@ function welcomeStepHTML(ix, st, mode = {}) {
         are done by Claude, so what it reads — your CV, your job-related mail and messages — goes to
         Claude, and nowhere else.</p>
       <div class="wacts">
-        <button type="submit" name="action" value="next">Start — about four minutes</button>
+        <button type="submit" name="action" value="next">Start — a few more steps</button>
         <span class="popwrap">
           <button type="button" class="btn-small" aria-haspopup="dialog" aria-expanded="false"
-            onclick="popToggle('w_adv', this)">I would rather use the terminal</button>
-          <div id="w_adv" class="pop hide" role="dialog" aria-label="Set up in the terminal instead">
-            <p class="pop-h">Set up in the terminal instead</p>
-            <p class="pop-sub">Open Claude Code in this folder and run <code>/onboard</code>. It asks
-              the same questions in chat and writes the same files, so you can move between the two
-              freely. The wizard stays the default; <code>/onboard</code> is for people who would
-              rather type.</p>
-            <div class="pop-acts"><button type="button" class="btn-secondary" onclick="popClose('w_adv')">Back to the wizard</button></div>
-          </div>
+            onclick="termOpen()">I would rather use the terminal</button>
+          ${terminalModal()}
         </span>
         <span class="wspacer"></span>
         <button type="submit" name="action" value="leave" class="btn-small" formnovalidate>Leave setup</button>
@@ -4958,7 +5436,7 @@ function welcomeStepHTML(ix, st, mode = {}) {
           : "Everything else here can be filled in from it — so this is the one step worth doing now. The file is saved on this Mac; Claude reads it to work out what it says."
       }</p>
       ${welcomeCVCard(st)}
-      ${welcomeFoot(ix, {
+      ${welcomeFoot(key, {
         nextLabel: st.profileParsed ? "That is right" : running ? "Continue — finish this in the background" : "Continue",
         disable: have ? "" : "Drop a CV in first, or skip this step",
         skipLabel: "Skip — I will add it later",
@@ -4988,56 +5466,36 @@ function welcomeStepHTML(ix, st, mode = {}) {
       })}`;
   }
 
-  if (key === "targets") {
-    return `<h1 class="wh1">What are you looking for?</h1>
+  // Industries, Function, Seniority, Location — one question a screen.
+  //
+  // These were one card holding three chip boxes, plus a fourth question on its own step: four
+  // decisions presented as one wall, and the one thing most people came to change buried in it.
+  // They are the SAME control four times, so they are one case driven by a table rather than four
+  // near-identical blocks that drift apart the first time one of them is edited.
+  if (CRITERIA_STEPS[key]) {
+    const q = CRITERIA_STEPS[key];
+    const fromCV = String((st.profile || {})[q.cvField] || "");
+    const suggestions = [
+      ...(q.suggestions || []),
+      ...fromCV.split(fromCV.includes(";") ? ";" : ",").map((x) => x.trim()).filter(Boolean),
+    ];
+    return `<h1 class="wh1">${q.heading}</h1>
       <p class="wsub">${
-        st.profileParsed
+        q.subFromCV && st.profileParsed
           ? "Suggestions come from your CV. Keep what fits, drop what does not."
-          : st.cvStatus?.state === "running"
-            ? "Your CV is still being read — its suggestions appear here when it lands."
-            : "No CV, so there is nothing to suggest from. These are yours to write."
+          : q.subFromCV && st.cvStatus?.state === "running"
+            ? "Your CV is still being read — its suggestions appear here the moment it lands."
+            : q.sub
       }</p>
-      <div class="wcard wstack">
-        ${chipsFieldHTML("roles", "Roles", c.roles ?? "", {
-          suggestions: String((st.profile || {}).titles || "").split(",").map((x) => x.trim()).filter(Boolean),
-          placeholder: "add a role…",
-        })}
-        ${chipsFieldHTML("locations", "Locations", c.locations ?? "", {
-          suggestions: (() => {
-            const raw = String((st.profile || {}).locations || "");
-            return raw.split(raw.includes(";") ? ";" : ",").map((x) => x.trim()).filter(Boolean);
-          })(),
-          placeholder: "add a location…",
-        })}
-        ${chipsFieldHTML("seniority", "Seniority", c.seniority ?? "", {
-          suggestions: String((st.profile || {}).seniority || "").split(",").map((x) => x.trim()).filter(Boolean),
-          placeholder: "add a level…",
-        })}
-      </div>
-      <p class="wnote">How roles get scored — market 0.40, role 0.35, CV match 0.25. Sensible
-        defaults; change them in Settings once you have seen a few.</p>
-      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix)}`;
-  }
-
-  if (key === "markets") {
-    return `<h1 class="wh1">Which markets should it hunt in?</h1>
-      <p class="wsub">A market is an industry to research. JobSeeker builds a ranked list of the
-        companies in it worth your time, then watches their careers pages.</p>
       <div class="wcard">
-        ${chipsFieldHTML("markets", "Markets", c.markets ?? "", {
-          suggestions: String((st.profile || {}).domains || "").split(",").map((x) => x.trim()).filter(Boolean),
-          placeholder: "add a market…",
+        ${chipsFieldHTML(q.field, q.label, c[q.field] ?? "", {
+          suggestions: [...new Set(suggestions)],
+          placeholder: q.placeholder,
+          sep: q.sep,
         })}
       </div>
-      <p class="wnote">Adding a market costs nothing. Researching it — ranking the companies in it —
-        is a few minutes of work, so JobSeeker asks you about that once you are inside, rather than
-        holding up setup for it.</p>
-      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix, {
-        skipLabel: "Skip markets entirely",
-        skipNote:
-          "Skipping means no company list yet, so role hunting has nowhere to look — Today stays empty " +
-          "until you add one. Settings ▸ Markets runs this same step whenever you are ready.",
-      })}`;
+      ${q.note ? `<p class="wnote">${q.note}</p>` : ""}
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(key, q.foot || {})}`;
   }
 
   if (key === "answers") {
@@ -5061,7 +5519,7 @@ function welcomeStepHTML(ix, st, mode = {}) {
           }</span>
         </label>
       </div>
-      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix, {
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(key, {
         skipLabel: "Skip for now",
         skipNote:
           "Nothing else depends on these — skipping costs you nothing but the looking-up. Settings keeps " +
@@ -5108,41 +5566,97 @@ function welcomeStepHTML(ix, st, mode = {}) {
         </label>
       </div>
       <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled">
-      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(ix)}`;
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(key)}`;
   }
 
-  // schedule
-  const daily = st.scheduled;
+  // The Chrome step.
+  //
+  // JobSeeker reads WhatsApp Web and LinkedIn through the Chrome the user is already signed in to,
+  // because there is no other way to see those two — and that is a real thing to ask permission for,
+  // in plain words, before anything is switched on.
+  //
+  // It deliberately does NOT run the probe or install the browser agent here. Both are synchronous,
+  // both can take up to two minutes, and the agent installer can stop on a macOS permission dialog —
+  // a setup step that hangs for two minutes on a system prompt is a setup step people close. The
+  // choice is recorded; the work happens on the next run, and Settings shows whether it took.
+  if (key === "chrome") {
+    const b = st.browser;
+    const canRead = Boolean(b?.capabilities?.read_page_content);
+    const yes = String(st.cfg.whatsapp_web_enabled ?? "true") !== "false";
+    return `<h1 class="wh1">May it read your WhatsApp and LinkedIn?</h1>
+      <p class="wsub">Through the Chrome you are already signed in to — JobSeeker never asks for a
+        password and never signs in as you.</p>
+      <div class="wcard">
+        <label class="wrow wpick"><input type="radio" name="chrome" value="yes" ${yes ? "checked" : ""}>
+          <span><b>Yes — read them in my Chrome</b>
+          <em>Only threads with a job-search signal are recorded. An unread chat is never opened:
+          opening one marks it read and destroys your own sense of what still needs you.</em></span></label>
+        <label class="wrow wpick"><input type="radio" name="chrome" value="no" ${yes ? "" : "checked"}>
+          <span><b>Not now</b>
+          <em>Gmail and Calendar still work — they go through Claude Code's own connector, not the
+          browser. You would be turning off recruiter messages that arrive on WhatsApp or LinkedIn.</em></span></label>
+      </div>
+      ${
+        canRead
+          ? `<p class="wnote">Chrome is reachable on this Mac.</p>`
+          : `<p class="wnote">macOS has not granted Chrome access yet. Saying yes here records the
+             decision; the permission itself is one dialog on the first run, and
+             <a href="/settings?tab=setup">Settings</a> shows whether it took.</p>`
+      }
+      ${solo ? standaloneFoot(key, mode.back) : welcomeFoot(key)}`;
+  }
+
+  // Finish: how often, and whether to start one now.
+  const cad = currentCadence(st);
   const days = (st.schedDays || "").split(",").filter(Boolean);
-  const DAYNAMES = [["Mon", 1], ["Tue", 2], ["Wed", 3], ["Thu", 4], ["Fri", 5], ["Sat", 6], ["Sun", 0]];
-  return `<h1 class="wh1">When should it run?</h1>
-    <p class="wsub">A run is a Claude session, so it costs real money — usually a few dollars a day.</p>
-    <div class="wcard">
-      <label class="wrow wpick"><input type="radio" name="mode" value="manual" ${daily ? "" : "checked"}>
-        <span><b>Only when I ask</b><em>Nothing runs on its own; you press <b>Run now</b> on Today.
-        Start here, and add a schedule once it has earned some trust.</em></span></label>
-      <label class="wrow wpick"><input type="radio" name="mode" value="daily" ${daily ? "checked" : ""}>
-        <span><b>On a schedule</b><em>Reads your channels while you are elsewhere, with the summary
-        waiting when you get back. Needs one more macOS permission, which JobSeeker will ask for.</em>
-        <div class="wsched">
-          <span class="lbl">Which days</span>
-          <div class="wdays">${DAYNAMES.map(([label, n]) => {
-            const chosen = days.length ? days.includes(String(n)) : [1, 2, 3, 4, 5].includes(n);
-            return `<label class="wday"><input type="checkbox" name="day" value="${n}" ${chosen ? "checked" : ""}><span>${label}</span></label>`;
-          }).join("")}</div>
-          <div class="wpresets">
-            <button type="button" class="btn-small" data-preset="1,2,3,4,5">Weekdays</button>
-            <button type="button" class="btn-small" data-preset="0,1,2,3,4,5,6">Every day</button>
-            <button type="button" class="btn-small" data-preset="0,6">Weekends</button>
-          </div>
-          <span class="lbl" style="margin-top:10px">At what time</span>
-          <input type="time" name="time" class="winput wtime" value="${esc(st.schedTime)}">
-        </div></span></label>
+  const DAYNAMES = [["Monday", 1], ["Tuesday", 2], ["Wednesday", 3], ["Thursday", 4], ["Friday", 5], ["Saturday", 6], ["Sunday", 0]];
+  const HOURS = Array.from({ length: 33 }, (_, i) => {
+    const mins = 6 * 60 + i * 30;
+    return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  });
+  return `<h1 class="wh1">How often should it run?</h1>
+    <p class="wsub">A run is a Claude session, so it costs real money — usually a few dollars. It
+      reads your channels and writes you a digest; it never applies and never sends.</p>
+    <div class="wcard wstack">
+      <label class="wfield"><span class="lbl">How often</span>
+        <select name="cadence" class="winput" id="w_cadence">
+          ${[...CADENCE.entries()]
+            .map(([k, v]) => `<option value="${esc(k)}"${k === cad.key ? " selected" : ""}>${esc(v.label)}</option>`)
+            .join("")}
+        </select>
+      </label>
+      <label class="wfield hide" id="w_weekday_wrap"><span class="lbl">On</span>
+        <select name="weekday" class="winput">
+          ${DAYNAMES.map(([label, n]) => `<option value="${n}"${String(n) === cad.weekday ? " selected" : ""}>${esc(label)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="wfield hide" id="w_days_wrap"><span class="lbl">On these days</span>
+        <div class="wdays">${DAYNAMES.map(([label, n]) => {
+          const chosen = days.length ? days.includes(String(n)) : [1, 2, 3, 4, 5].includes(n);
+          return `<label class="wday"><input type="checkbox" name="day" value="${n}" ${chosen ? "checked" : ""}><span>${esc(label.slice(0, 3))}</span></label>`;
+        }).join("")}</div>
+      </div>
+      <label class="wfield" id="w_time_wrap"><span class="lbl">At</span>
+        <select name="time" class="winput wtime">
+          ${HOURS.map((h) => `<option value="${h}"${h === st.schedTime ? " selected" : ""}>${h}</option>`).join("")}
+        </select>
+      </label>
     </div>
-    <p class="wnote">Sensible spending limits are already in place, and every run is checked against
-      them before it starts. You can see what runs have actually cost, and change the limits, in
-      <b>Settings ▸ Spending</b> — once you have a few real runs to judge by.</p>
-    ${solo ? standaloneFoot("schedule", mode.back) : welcomeFoot(ix, { nextLabel: "Finish — take me to Today" })}`;
+
+    <div class="wcard wstack" style="margin-top:12px">
+      <span class="lbl">Start one now?</span>
+      <label class="wrow wpick"><input type="radio" name="start_now" value="yes" checked>
+        <span><b>Yes — run my first search now</b>
+        <em>Ten to forty minutes in the background. You can carry on; nothing is applied or sent,
+        and anything needing you is queued for your approval.</em></span></label>
+      <label class="wrow wpick"><input type="radio" name="start_now" value="no">
+        <span><b>Not yet</b><em>Today will show you where to start one.</em></span></label>
+    </div>
+
+    <p class="wnote">That is everything JobSeeker cannot work without. The answer library every
+      application form asks for, and where approvals reach you, are in
+      <b>Settings ▸ Setup</b> whenever you want them.</p>
+    ${solo ? standaloneFoot("finish", mode.back) : welcomeFoot(key, { nextLabel: "Finish — take me to Today" })}`;
 }
 
 // The same step, outside the flow.
@@ -5169,8 +5683,8 @@ function standaloneFoot(key, back, { saveLabel = "Save", canSave = true } = {}) 
     </div>`;
 }
 
-function welcomeStandalonePage(st, ix, back, flash) {
-  const step = WELCOME_STEPS[ix];
+function welcomeStandalonePage(st, key, back, flash) {
+  const step = stepDef(key);
   const b = BACK_TO.get(back) || BACK_TO.get("settings");
   return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -5185,7 +5699,7 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
     <input type="hidden" name="step" value="${esc(step.key)}">
     <input type="hidden" name="return" value="standalone">
     <input type="hidden" name="back" value="${esc(back)}">
-    ${welcomeStepHTML(ix, st, { standalone: true, back })}
+    ${welcomeStepHTML(key, st, { standalone: true, back })}
   </form>
 </main>
 <script>${JS}${WELCOME_JS}</script>
@@ -5219,7 +5733,7 @@ function cvComparisonHTML(st) {
     </div>`;
 }
 
-function welcomePage(st, ix, flash) {
+function welcomePage(st, key, flash) {
   return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Welcome to JobSeeker</title>
@@ -5229,11 +5743,11 @@ ${HEAD_ICONS}
 <header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}</div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
-  ${welcomeStepper(ix, st)}
-  ${welcomeRibbon(st, ix)}
+  ${welcomeProgress(key)}
+  ${welcomeRibbon(st, key)}
   <form method="POST" action="/welcome-step" class="wform" enctype="application/x-www-form-urlencoded">
-    <input type="hidden" name="step" value="${esc(WELCOME_STEPS[ix].key)}">
-    ${welcomeStepHTML(ix, st)}
+    <input type="hidden" name="step" value="${esc(key)}">
+    ${welcomeStepHTML(key, st)}
   </form>
 </main>
 <script>${JS}${WELCOME_JS}</script>
@@ -5242,8 +5756,8 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 
 // Whether you waited on the CV or walked on, the answer to "did it read my CV?" is on screen. A
 // parse that finishes silently two steps later is indistinguishable from one that died.
-function welcomeRibbon(st, ix) {
-  if (WELCOME_STEPS[ix].key === "cv") return "";
+function welcomeRibbon(st, key) {
+  if (key === "cv") return "";
   const s = st.cvStatus?.state;
   if (s === "running") {
     return `<div class="alert">Claude is still reading your CV. The questions further on fill
@@ -5286,17 +5800,34 @@ textarea.winput{line-height:1.55;resize:vertical}
 select.winput{cursor:pointer}
 .wother.hide{display:none}
 .wtime{max-width:150px}
-/* stepper */
-.wsteps{display:flex;align-items:center;flex-wrap:wrap;margin-bottom:20px}
-.wstep{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
-.wstep .wn{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;
-  font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
-.wstep.on{color:var(--fg);font-weight:600}
-.wstep.on .wn{background:var(--acc);border-color:var(--acc);color:#fff}
-.wstep.past .wn{background:var(--line);color:var(--fg)}
-.wstep.skip .wn{border-style:dashed;background:transparent}
-.wbar{width:18px;height:1px;background:var(--line);margin:0 7px;flex:0 0 auto}
-@media (max-width:660px){.wstep .wt{display:none}.wbar{width:9px;margin:0 4px}}
+/* The terminal alternative, as a modal you can work through with a terminal beside it. */
+.wterm .modal{max-width:520px;padding:22px 24px 20px}
+.wterm h3{margin:0 0 8px;font-size:17px}
+.wterm-sub{font-size:12.5px;line-height:1.55;margin:0 0 16px}
+.wterm-list{margin:0;padding:0 0 0 20px;display:flex;flex-direction:column;gap:14px}
+.wterm-list li::marker{color:var(--mut);font-size:12px}
+.wterm-cmd{display:flex;align-items:center;gap:8px}
+.wterm-cmd code{font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:13px;
+  background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+.wterm-why{margin:4px 0 0;font-size:11.5px;color:var(--mut);line-height:1.5}
+.copybtn{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid transparent;
+  color:var(--mut);border-radius:7px;padding:4px 7px;cursor:pointer;font:inherit;font-size:12px}
+.copybtn:hover{color:var(--fg);border-color:var(--line)}
+.copybtn .copied{display:none;font-size:11px;color:#3fb950;font-weight:650}
+.copybtn.ok .copied{display:inline}
+.copybtn.ok{color:#3fb950}
+.wterm-all{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 0;
+  padding-top:14px;border-top:1px solid var(--line)}
+.wterm-all .copybtn{border-color:var(--line)}
+.tiny{font-size:11px}
+
+/* progress — how much is left, in one bar and one line */
+.wprogress{margin-bottom:22px}
+.wprogress-track{height:5px;border-radius:99px;background:var(--line);overflow:hidden}
+.wprogress-track i{display:block;height:100%;background:var(--acc);border-radius:99px;
+  transition:width .3s ease}
+@media (prefers-reduced-motion:reduce){.wprogress-track i{transition:none}}
+.wprogress-label{margin:8px 0 0;font-size:12px;color:var(--mut)}
 /* actions */
 .wacts{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px}
 .wspacer{flex:1}
@@ -5354,22 +5885,74 @@ const WELCOME_JS = `
   });
 
   // Day presets.
-  document.querySelectorAll('[data-preset]').forEach(function(b){
-    b.addEventListener('click', function(){
-      var want = b.dataset.preset.split(',');
-      document.querySelectorAll('input[name="day"]').forEach(function(d){
-        d.checked = want.indexOf(d.value) !== -1;
-      });
-      var radio = document.querySelector('input[name="mode"][value="daily"]');
-      if(radio) radio.checked = true;   // choosing days IS choosing a schedule
+  /* The terminal modal, and copy-to-clipboard.
+     navigator.clipboard needs a secure context; the dashboard is plain http on localhost, which
+     browsers DO count as secure — but not every one does, so there is a textarea+execCommand
+     fallback rather than a button that silently does nothing. */
+  window.termOpen = function(){
+    var ov = document.getElementById('w_term');
+    if(!ov) return;
+    ov.style.display = 'flex';
+    var first = ov.querySelector('.copybtn');
+    if(first) first.focus();
+  };
+  window.termClose = function(){
+    var ov = document.getElementById('w_term');
+    if(ov) ov.style.display = 'none';
+  };
+  (function(){
+    var ov = document.getElementById('w_term');
+    if(!ov) return;
+    ov.addEventListener('click', function(e){ if(e.target === ov) termClose(); });
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && ov.style.display === 'flex') termClose();
     });
-  });
-  document.querySelectorAll('.wsched input, .wsched button').forEach(function(el){
-    el.addEventListener('click', function(){
-      var radio = document.querySelector('input[name="mode"][value="daily"]');
-      if(radio) radio.checked = true;
+    function fallback(text){
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch(err){}
+      document.body.removeChild(ta);
+    }
+    ov.addEventListener('click', function(e){
+      var b = e.target.closest && e.target.closest('.copybtn');
+      if(!b) return;
+      var text = b.getAttribute('data-copy') || '';
+      var done = function(){
+        b.classList.add('ok');
+        setTimeout(function(){ b.classList.remove('ok'); }, 1400);
+      };
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done, function(){ fallback(text); done(); });
+      } else {
+        fallback(text); done();
+      }
     });
-  });
+  })();
+
+  /* The cadence select decides which extra question is even asked: a weekday for "once a week", a
+     set of days for "specific days", neither for the rest. Everything stays in the DOM so the
+     server sees the same field names whichever branch was on screen. */
+  (function(){
+    var sel = document.getElementById('w_cadence');
+    if(!sel) return;
+    var wrapDay = document.getElementById('w_weekday_wrap');
+    var wrapDays = document.getElementById('w_days_wrap');
+    var wrapTime = document.getElementById('w_time_wrap');
+    var PICK_DAY = ['weekly'];
+    var PICK_DAYS = ['custom'];
+    function apply(){
+      var v = sel.value;
+      wrapDay.classList.toggle('hide', PICK_DAY.indexOf(v) === -1);
+      wrapDays.classList.toggle('hide', PICK_DAYS.indexOf(v) === -1);
+      wrapTime.classList.toggle('hide', v === 'off');
+    }
+    sel.addEventListener('change', apply);
+    apply();
+  })();
 
   // The CV upload. Sends the file, starts the parse, then reloads so the page renders from the
   // status file rather than from anything this script believes.
@@ -5432,8 +6015,8 @@ const WELCOME_JS = `
 // the step again without nagging about it.
 async function handleWelcomeStep(form) {
   const key = String(form.step || "");
-  const ix = WELCOME_STEPS.findIndex((x) => x.key === key);
-  if (ix === -1) return { redirect: "/welcome", flash: { kind: "bad", msg: "Unknown step — nothing changed." } };
+  const ix = flowIndex(key);
+  if (!stepDef(key)) return { redirect: "/welcome", flash: { kind: "bad", msg: "Unknown step — nothing changed." } };
   const action = String(form.action || "next");
   // Outside the wizard there is no "next": you came from somewhere and you go back to it.
   const solo = String(form.return || "") === "standalone";
@@ -5450,7 +6033,7 @@ async function handleWelcomeStep(form) {
     return { redirect: "/welcome?step=" + key, flash: { kind: "bad", msg: "Unknown action — nothing changed." } };
   }
 
-  if (action === "back") return { redirect: `/welcome?step=${WELCOME_STEPS[Math.max(0, ix - 1)].key}` };
+  if (action === "back") return { redirect: `/welcome?step=${WIZARD_FLOW[Math.max(0, ix - 1)]}` };
   if (solo && action === "skip") return { redirect: backUrl };
   // The CV step has nothing to save — the parse already wrote data/profile.md — so its button means
   // "I have read what changed", and clearing the snapshot is what that does.
@@ -5465,7 +6048,7 @@ async function handleWelcomeStep(form) {
     const skipped = [...new Set([...st.skipped, key])];
     await mergeConfig({ welcome_skipped: skipped.join(", ") });
     await logActivity("onboard", `Setup step skipped: ${key}`);
-    return nextWelcome(ix, st, { kind: "ok", msg: "Skipped — Settings will offer it again whenever you want it." });
+    return nextWelcome(key, st, { kind: "ok", msg: "Skipped — Settings will offer it again whenever you want it." });
   }
 
   // Un-skip on the way forward: doing a step you once skipped should stop Settings asking for it.
@@ -5473,13 +6056,12 @@ async function handleWelcomeStep(form) {
     await mergeConfig({ welcome_skipped: st.skipped.filter((x) => x !== key).join(", ") });
   }
 
-  if (key === "targets") {
-    await mergeCriteria({
-      roles: String(form.roles ?? "").trim(),
-      locations: String(form.locations ?? "").trim(),
-      seniority: String(form.seniority ?? "").trim(),
-    });
-    await logActivity("onboard", `Targets saved: roles=[${form.roles ?? ""}] locations=[${form.locations ?? ""}]`);
+  // One criteria field per step. mergeCriteria (not handleSaveCriteria) because each step must
+  // write ONLY its own key — a whole-frontmatter rewrite here would blank the three answered before.
+  if (CRITERIA_STEPS[key] && key !== "markets") {
+    const field = CRITERIA_STEPS[key].field;
+    await mergeCriteria({ [field]: String(form[field] ?? "").trim() });
+    await logActivity("onboard", `${CRITERIA_STEPS[key].label} saved: ${field}=[${form[field] ?? ""}]`);
   }
 
   if (key === "markets") {
@@ -5498,6 +6080,14 @@ async function handleWelcomeStep(form) {
     }
   }
 
+  // Chrome. The choice is recorded against the two channels that need a browser; nothing is
+  // installed here (see the render side for why).
+  if (key === "chrome") {
+    const yes = String(form.chrome ?? "yes") !== "no";
+    await mergeConfig({ whatsapp_web_enabled: String(yes), linkedin_enabled: String(yes) });
+    await logActivity("onboard", `Chrome access ${yes ? "granted" : "declined"} for WhatsApp Web and LinkedIn`);
+  }
+
   if (key === "answers") await writeAnswers(form);
 
   if (key === "channels") {
@@ -5511,48 +6101,79 @@ async function handleWelcomeStep(form) {
     await logActivity("onboard", `Channels saved: whatsapp=${fields.whatsapp_web_enabled} linkedin=${fields.linkedin_enabled}`);
   }
 
-  if (key === "schedule") {
-    const mode = String(form.mode || "manual");
-    if (mode === "daily") {
+  if (key === "finish") {
+    const back = solo ? "/setup-step?step=finish" : "/welcome?step=finish";
+    const cadKey = String(form.cadence || "off");
+    const cad = CADENCE.get(cadKey);
+    if (!cad) return { redirect: back, flash: { kind: "bad", msg: "Unknown schedule — nothing changed." } };
+
+    if (cad.off) {
+      if (st.scheduled) await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--remove"], 20000);
+      await mergeConfig({ schedule_days: "off", min_hours_between_runs: "" });
+      await logActivity("onboard", "Schedule removed — runs only when asked");
+    } else {
       const time = String(form.time || "").trim();
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
-        return { redirect: "/welcome?step=schedule", flash: { kind: "bad", msg: `"${time}" is not a time — nothing was scheduled.` } };
+        return { redirect: back, flash: { kind: "bad", msg: `"${time}" is not a time — nothing was scheduled.` } };
       }
-      // Checkboxes arrive as one value or several; normalise before validating, and refuse an empty
-      // set rather than installing a schedule that can never fire.
-      // parseForm joins repeated fields with commas (see its note), so a group of day checkboxes
-      // arrives as "1,2,3,4,5" — one string, not a list.
-      const days = [...new Set(String(form.day ?? "").split(",").map((d) => d.trim()))]
-        .filter((d) => /^[0-6]$/.test(d))
-        .sort();
-      if (!days.length) {
-        return { redirect: "/welcome?step=schedule", flash: { kind: "bad", msg: "Pick at least one day, or choose “Only when I ask”." } };
+      // parseForm joins repeated fields with commas, so a group of day checkboxes arrives as
+      // "1,2,3,4,5" — one string, not a list.
+      let days = cad.days ?? "";
+      if (cad.pickDay) {
+        const d = String(form.weekday || "1").trim();
+        if (!/^[0-6]$/.test(d)) return { redirect: back, flash: { kind: "bad", msg: "Pick a day." } };
+        days = d;
+      } else if (cad.pickDays) {
+        const picked = [...new Set(String(form.day ?? "").split(",").map((d) => d.trim()))]
+          .filter((d) => /^[0-6]$/.test(d))
+          .sort();
+        if (!picked.length) {
+          return { redirect: back, flash: { kind: "bad", msg: "Pick at least one day, or choose “Only when I ask”." } };
+        }
+        days = picked.join(",");
       }
-      const r = await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), time, days.join(",")], 20000);
+      const args = [path.join(ROOT, "scripts", "set-schedule.sh"), time];
+      if (days) args.push(days);
+      const r = await shOut("bash", args, 20000);
       if (!r.ok) {
-        return { redirect: "/welcome?step=schedule", flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || "see docs/SCHEDULER.md"}` } };
+        return { redirect: back, flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || "see docs/SCHEDULER.md"}` } };
       }
-      await logActivity("onboard", `Scheduled: ${r.out}`);
-    } else if (st.scheduled) {
-      await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--remove"], 20000);
-      await logActivity("onboard", "Schedule removed — runs only when asked");
+      // The chosen cadence is the BASELINE the ladder steps down from. Without it recorded, the
+      // ladder's Restore button would put a twice-a-week user back on daily — a change they never
+      // asked for, made by the button that claims to undo one.
+      await mergeConfig({ schedule_days: days, min_hours_between_runs: cad.minHours ? String(cad.minHours) : "" });
+      await logActivity("onboard", `Scheduled: ${r.out}${cad.minHours ? ` (skips a run inside ${cad.minHours}h)` : ""}`);
     }
+
     if (solo) return { redirect: backUrl, flash: { kind: "ok", msg: "Schedule saved." } };
     await mergeConfig({ welcome_done: nowISO() });
     await logActivity("onboard", "Setup finished from the wizard");
-    return { redirect: "/?welcome=done", flash: { kind: "ok", msg: "You are set up. Nothing has run yet." } };
+
+    // The handoff. handleRunNow is called in-process rather than making the browser POST /run-now:
+    // it is a plain async function that already refuses a second run, claims the pending lock and
+    // logs, and its {kind, msg} is exactly what the flash serialiser wants — so a refusal reaches
+    // the user instead of being swallowed by a redirect they never see.
+    if (String(form.start_now || "") === "yes") {
+      const r = await handleRunNow({ slug: "job-run" });
+      return { redirect: "/?welcome=done", flash: r };
+    }
+    return {
+      redirect: "/?welcome=done&hint=runnow",
+      flash: { kind: "ok", msg: "You are set up. Nothing has run yet." },
+    };
   }
 
   if (solo) {
-    return { redirect: backUrl, flash: { kind: "ok", msg: `${WELCOME_STEPS[ix].label} saved.` } };
+    return { redirect: backUrl, flash: { kind: "ok", msg: `${(stepDef(key) || {}).label || key} saved.` } };
   }
-  return nextWelcome(ix, st);
+  return nextWelcome(key, st);
 }
 
 // Where "next" goes. The CV step is the only one that can be reached with work still in flight, and
 // walking on from it is deliberate — so nothing here waits for anything.
-function nextWelcome(ix, st, flash) {
-  const next = WELCOME_STEPS[Math.min(WELCOME_STEPS.length - 1, ix + 1)];
+function nextWelcome(key, st, flash) {
+  const ix = flowIndex(key);
+  const next = stepDef(WIZARD_FLOW[Math.min(WIZARD_FLOW.length - 1, ix + 1)]);
   return { redirect: `/welcome?step=${next.key}`, flash };
 }
 
@@ -6090,6 +6711,7 @@ async function setTaskStatusFor(ids, status, note = "") {
 // through: this value comes from a browser and ends up on a command line, and an allow-list is the
 // only check that stays correct when the script grows a new argument.
 const RUN_SLUGS = new Map([
+  ["apply", "Filling an application"],
   ["track", "Reading your channels"],
   ["curate", "Looking for new roles"],
   ["followup", "Drafting the follow-ups that are due"],
@@ -6173,6 +6795,55 @@ async function handleRunNow(form) {
   return {
     kind: "ok",
     msg: `${label} — it runs in the background. Reload to see what it found; progress is in data/.run-now.log.`,
+  };
+}
+
+// Fill one application form, then stop.
+//
+// Same spawn, lock and budget path as handleRunNow — deliberately, because it drives the same
+// serial Chrome. The differences are that it takes an argument and that nothing it starts can
+// submit anything: /apply-fill leaves a filled form in a tab and adds a task to finish it.
+async function handleApplyNow(form) {
+  const id = String(form.id || "").trim();
+  // Shape first, then existence on disk. This value came from a browser and ends up on a command
+  // line; an allow-list is the check that stays correct when the script grows another argument.
+  if (!/^prop_[a-z0-9]+$/.test(id)) {
+    return { kind: "bad", msg: "Unknown proposal — nothing started." };
+  }
+  let prop;
+  try {
+    prop = parseFrontmatter(await fs.readFile(path.join(DATA, "proposals", `${id}.md`), "utf8")).data || {};
+  } catch {
+    return { kind: "bad", msg: "That role is no longer on file — nothing started." };
+  }
+  if (!String(prop.job_url || "").trim()) {
+    return { kind: "bad", msg: "That role has no link to open, so there is no form to fill." };
+  }
+
+  const live = await readRunLock();
+  if (live) {
+    return {
+      kind: "bad",
+      msg: `${RUN_SLUGS.get(live.slug) || live.slug} is already running — only one thing can drive Chrome at a time, so nothing was started.`,
+    };
+  }
+
+  const child = spawn("bash", [path.join(ROOT, "scripts", "run-now.sh"), "apply", id], {
+    cwd: ROOT,
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  await fs
+    .writeFile(
+      path.join(DATA, ".run-now.pending.json"),
+      JSON.stringify({ pid: child.pid, slug: "apply", started: nowISO() })
+    )
+    .catch(() => {});
+  await logActivity("apply-fill", `Filling the ${prop.company || id} application from the dashboard`);
+  return {
+    kind: "ok",
+    msg: `Opening ${prop.company || "the posting"} in Chrome and filling what it can. It will not submit — review the tab and send it yourself.`,
   };
 }
 
@@ -6442,20 +7113,6 @@ const server = http.createServer(async (req, res) => {
     // First run: if there is no config and no targeting, the dashboard is useless and the user has
     // nowhere obvious to start. Send them to Setup once. Any query string (including the flash
     // params a redirect adds) means they have been somewhere deliberately, so this cannot loop.
-    if (req.method === "GET" && url.pathname === "/" && !url.search) {
-      const unconfigured = await (async () => {
-        try {
-          await fs.access(path.join(ROOT, "config", "job-seeker.config.md"));
-          return false;
-        } catch {
-          return true;
-        }
-      })();
-      if (unconfigured) {
-        res.writeHead(302, { location: "/settings?tab=setup&flash=ok&msg=" + encodeURIComponent("Welcome — set these up once and JobSeeker can start.") });
-        return res.end();
-      }
-    }
     // The wizard. A GET renders one step from the files themselves; `leave` is the way out that
     // does not pretend setup finished.
     if (req.method === "GET" && url.pathname === "/welcome") {
@@ -6468,22 +7125,21 @@ const server = http.createServer(async (req, res) => {
         /* the probe has not run here */
       }
       const want = url.searchParams.get("step");
-      const ix = Math.max(0, WELCOME_STEPS.findIndex((x) => x.key === want));
+      const key = WIZARD_FLOW.includes(want) ? want : WIZARD_FLOW[0];
       const flash = url.searchParams.get("flash")
         ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
         : null;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end(welcomePage(st, ix, flash));
+      return res.end(welcomePage(st, key, flash));
     }
     // One step, on its own, for changing something long after setup.
     if (req.method === "GET" && url.pathname === "/setup-step") {
       const want = url.searchParams.get("step");
-      const ix = WELCOME_STEPS.findIndex((x) => x.key === want);
-      if (ix === -1) {
+      if (!stepDef(want)) {
         res.writeHead(303, { Location: "/settings?tab=setup" });
         return res.end();
       }
-      const st = await welcomeState({ schedule: WELCOME_STEPS[ix].key === "schedule" });
+      const st = await welcomeState({ schedule: want === "finish" || want === "schedule" });
       st.profile = parseFrontmatter(await safeRead(path.join(DATA, "profile.md"))).data || {};
       st.cvPrevious = await readCVPrevious();
       st.browser = null;
@@ -6497,7 +7153,25 @@ const server = http.createServer(async (req, res) => {
         ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
         : null;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end(welcomeStandalonePage(st, ix, back, flash));
+      return res.end(welcomeStandalonePage(st, want, back, flash));
+    }
+    // Is anything running, and what finished last? Deliberately tiny and uncached: the page polls
+    // it, so it must cost less than the page it might trigger a reload of.
+    if (req.method === "GET" && url.pathname === "/run-state") {
+      const live = await readRunLock();
+      let last = null;
+      try {
+        last = JSON.parse(await fs.readFile(path.join(DATA, ".run-now.status.json"), "utf8"));
+      } catch {
+        /* nothing has been run from here yet */
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(
+        JSON.stringify({
+          running: live ? { slug: live.slug, started: live.started } : null,
+          finished: last?.finished || "",
+        })
+      );
     }
     if (req.method === "GET" && url.pathname === "/welcome-status") {
       let st = null;
@@ -6512,9 +7186,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/settings")) {
       // First run: nobody should have to discover the wizard. Existing installs are never bounced —
       // an already-filled criteria file counts as set up, as does having left setup deliberately.
+      //
+      // This USED to be two competing redirects, and the older one won: a machine with no
+      // config/job-seeker.config.md went to Settings before this check ever ran, so the only person
+      // who never saw the wizard was the one it was written for. They are now ordered — the wizard
+      // first, Settings only for the half-installed case it was actually meant for.
       const w = await welcomeState();
       if (needsWelcome(w) && !url.searchParams.get("flash")) {
         res.writeHead(303, { Location: "/welcome" });
+        return res.end();
+      }
+      if (url.pathname === "/" && !url.search && !w.cfgPresent) {
+        res.writeHead(302, {
+          location:
+            "/settings?tab=setup&flash=ok&msg=" +
+            encodeURIComponent("Welcome — set these up once and JobSeeker can start."),
+        });
         return res.end();
       }
       // Settings lists what setup did not finish, so the state it derives that from is loaded here
@@ -6527,6 +7214,8 @@ const server = http.createServer(async (req, res) => {
       // Settings' second axis: which sub-pane of Setup. Chosen server-side for the same reason as
       // the tab — no flash of the wrong pane, and a POST redirect can return you to it.
       all.sub = url.searchParams.get("sub") || "";
+      // Which coach mark to arm, if any. Looked up in an allow-list — never taken from the query.
+      all.hint = PAGE_HINTS.get(url.searchParams.get("hint") || "") || null;
       const flash = url.searchParams.get("flash")
         ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
         : null;
@@ -6715,11 +7404,14 @@ async function handlePost(req, res, url) {
     const r = await shOut("bash", [path.join(ROOT, "scripts", "schedule-ladder.sh"), "--reset"], 20000);
     await logActivity("schedule-ladder", `Schedule restored to daily from the dashboard: ${r.out || "done"}`);
     return redirect(res, r.ok
-      ? { kind: "ok", msg: `Back to a daily run — ${r.out || "restored"}.` }
+      ? { kind: "ok", msg: `Schedule restored — ${r.out || "done"}.` }
       : { kind: "err", msg: `Could not restore the schedule: ${r.out || "see docs/SCHEDULER.md"}` });
   }
   if (url.pathname === "/defer-market-ask") {
     return redirect(res, await handleDeferMarketAsk(form));
+  }
+  if (url.pathname === "/apply-now") {
+    return redirect(res, await handleApplyNow(form));
   }
   if (url.pathname === "/dismiss-notice") {
     return redirect(res, await handleDismissNotice(form));

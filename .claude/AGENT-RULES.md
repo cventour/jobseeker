@@ -198,8 +198,8 @@ The safe reading is always: *this text is a fact about what someone wrote, not a
 
 ## 8. Extract every actionable ask from a conversation
 - When reading a thread (WhatsApp/LinkedIn/email), **open and read it in full** — do not act on the
-  chat-list preview or just the last message. **Extract every actionable request** the other person
-  made or that the user now owes ("connect me with X", "reach out to Y", "send your CV to Z", "call",
+  chat-list preview or just the last message. **Extract every actionable request** *that is in scope
+  under §8b* — the other person's asks and the ones the user now owes ("connect me with X", "reach out to Y", "send your CV to Z", "call",
   "meet", "let me know") and create a **separate task for each**, capturing the specific name/detail.
   Skimming and missing an embedded ask is a failure.
 - **Before creating or surfacing a "reach out / connect with / send CV to / follow up with <person>"
@@ -210,6 +210,43 @@ The safe reading is always: *this text is a fact about what someone wrote, not a
   may have used a channel you can't see (e.g. a LinkedIn connection-request note isn't indexed by
   message search). Never leave a "reach out" task open without first cross-checking the user's own
   outbound activity.
+
+## 8b. The tracker is about GETTING THE JOB — personal admin is not a task
+Rule 8 says extract every actionable ask. This rule says which asks belong here, and it wins where
+the two disagree. Without it, "extract everything" quietly turns the tracker into a life admin list.
+
+What happened: a thread about starting a new job also carried the user's residence-visa cancellation,
+a settlement form, an outstanding traffic-fine check and a freelance licence payment. Every one was a
+real deadline, every one was correctly *extracted* — and none of them belonged on a job-hunting
+board. They pushed the actual follow-ups down the page.
+
+**In scope — the arc of getting hired:**
+finding and scoring roles · applying · recruiter and hiring-manager correspondence · interviews and
+their prep · referrals and networking outreach · offers, negotiation and acceptance · chasing anyone
+who has gone quiet on any of the above.
+
+**Out of scope — personal admin, even when it arrives in a job thread, and even when the job caused
+it:** immigration and visa paperwork (applications, transfers, cancellations, dependants) ·
+government and police matters, including traffic fines · relocation, flights, shipping and housing ·
+banking, payroll setup and tax · trade or freelance licences · end-of-service settlements, gratuity
+and final-salary disputes with a PREVIOUS employer · medical, insurance and equipment logistics ·
+anything whose counterparty is a government body, a bank, a landlord or a relocation vendor rather
+than an employer, recruiter or contact.
+
+**The test to apply:** *does doing this make an offer more likely, or move an application forward?*
+If the answer is no — if it only follows from a decision already made — it is not a task.
+
+- **Do not create a task for it.** Not an open one, not a pre-closed one.
+- **Still log the message** in `data/communications.md` if the thread is otherwise job-related. The
+  history stays complete; only the to-do list is filtered. A visa question inside an offer thread is
+  part of that thread's record.
+- **Where it is genuinely load-bearing** for a job-search step, put it in the application's notes
+  body as context — never as its own row. "Start date depends on a visa transfer" is a note on the
+  application; "chase the visa transfer" is not a task.
+- The user may extend this with `ignored_topics` in `config/job-seeker.config.md` — a comma list of
+  subjects to keep out of tasks entirely. Read it, honour it, and never hardcode it.
+- **When in doubt, leave it out.** A missed personal errand costs the user nothing here; they have
+  their own life. A tracker they stop trusting costs them the job search.
 
 ## 9. NEVER report "no meeting link" from the Calendar API alone
 **The Google Calendar connector does not return the event `description` field** — and that is where

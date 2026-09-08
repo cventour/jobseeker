@@ -34,20 +34,75 @@ NODE_BIN="${NODE_BIN:-$(command -v node || echo /opt/homebrew/bin/node)}"
 # FAKE_TODAY pins the clock so the test suite can drive the ladder across dated scenarios.
 TODAY="${FAKE_TODAY:-$(date '+%F')}"
 
+# The cadence the USER chose, written by the wizard as `schedule_days` in the config file. Tier 1 is
+# whatever that says — not "every day".
+#
+# Hardcoding daily here meant the ladder's own Restore button PROMOTED anyone who had asked for less:
+# a twice-a-week user pressed "back to normal" and got seven runs a week they never asked for. A
+# ladder is allowed to run things less often than you chose. It is not allowed to run them more.
+baseline_days() {
+  local v
+  v="$("$NODE_BIN" -e '
+    const fs=require("fs");
+    try{
+      const t=fs.readFileSync(process.argv[1],"utf8");
+      /* [^\S\n] not \s: \s matches the newline, so an EMPTY value swallows the line break and
+         captures whatever follows — which made a blank setting read as "---". */
+      const m=/^schedule_days:[^\S\n]*(.*)$/m.exec(t);
+      process.stdout.write(m ? m[1].trim() : "");
+    }catch{ process.stdout.write(""); }' "$REPO/config/job-seeker.config.md" 2>/dev/null)"
+  # "off" is printed through, not turned into an empty string: empty already means "every day" to
+  # set-schedule.sh, and the two must not collide — an off baseline that read as every-day let the
+  # ladder step an unscheduled install onto Mondays and Thursdays.
+  case "$v" in
+    off) printf 'off' ;;
+    "")  printf '0,1,2,3,4,5,6' ;;
+    *)   printf '%s' "$v" ;;
+  esac
+}
+
 # Tier -> the day list scripts/set-schedule.sh understands. Tier 4 has none: it is removal.
+#
+# Tiers 2 and 3 are INTERSECTED with the baseline, so a step is always a reduction. Without that,
+# stepping a Mondays-only user "down" to tier 2 would move them to Mondays AND Thursdays.
 tier_days() {
+  local base; base="$(baseline_days)"
+  # Nothing to step down from. Every tier is "not scheduled".
+  [ "$base" = "off" ] && { printf ''; return; }
   case "$1" in
-    1) echo "0,1,2,3,4,5,6" ;;
-    2) echo "1,4" ;;
-    3) echo "1" ;;
-    *) echo "" ;;
+    1) printf '%s' "$base" ;;
+    2) intersect_days "$base" "1,4" ;;
+    3) intersect_days "$base" "1" ;;
+    *) printf '' ;;
+  esac
+}
+
+# Days present in BOTH lists, in order. An empty baseline means every day, so everything survives.
+intersect_days() { # base, tier
+  local base="$1" want="$2" out="" d
+  [ -n "$base" ] || { printf '%s' "$want"; return; }
+  for d in $(printf '%s' "$want" | tr ',' ' '); do
+    case ",$base," in *",$d,"*) out="${out:+$out,}$d" ;; esac
+  done
+  # An empty intersection means the tier has nothing left to cut — treat it as the last day of the
+  # baseline rather than as "no schedule", which is tier 4's job and needs its own warning.
+  [ -n "$out" ] || out="${base%%,*}"
+  printf '%s' "$out"
+}
+
+days_label() { # day list -> words
+  case "$1" in
+    "")            echo "every day" ;;
+    "0,1,2,3,4,5,6") echo "every day" ;;
+    "1,2,3,4,5")   echo "weekdays" ;;
+    "1,4")         echo "Mondays and Thursdays" ;;
+    "1")           echo "Mondays only" ;;
+    *)             echo "on days $1" ;;
   esac
 }
 tier_label() {
   case "$1" in
-    1) echo "every day" ;;
-    2) echo "Mondays and Thursdays" ;;
-    3) echo "Mondays only" ;;
+    1|2|3) [ "$(baseline_days)" = "off" ] && echo "not scheduled" || days_label "$(tier_days "$1")" ;;
     *) echo "not scheduled" ;;
   esac
 }
@@ -102,10 +157,15 @@ field() { # json, key
 case "${1:-}" in
   --reset)
     TIME="$(current_time)"
-    bash "$REPO/scripts/set-schedule.sh" "$TIME" "$(tier_days 1)" >/dev/null 2>&1
-    write_state 1 "" "$TODAY" "Restored to daily by the user"
-    "$NODE_BIN" "$REPO/server/record.mjs" log schedule-ladder "Schedule restored to every day (user)" >/dev/null 2>&1
-    echo "restored: every day at $TIME"
+    BASE="$(tier_days 1)"
+    if [ -n "$BASE" ]; then
+      bash "$REPO/scripts/set-schedule.sh" "$TIME" "$BASE" >/dev/null 2>&1
+    else
+      bash "$REPO/scripts/set-schedule.sh" "$TIME" >/dev/null 2>&1
+    fi
+    write_state 1 "" "$TODAY" "Restored to $(days_label "$BASE") by the user"
+    "$NODE_BIN" "$REPO/server/record.mjs" log schedule-ladder "Schedule restored to $(days_label "$BASE") (user)" >/dev/null 2>&1
+    echo "restored: $(days_label "$BASE") at $TIME"
     exit 0 ;;
   --show)
     L="$(ladder_json)"
@@ -144,7 +204,7 @@ case "$ACTION" in
   step)
     TIME="$(current_time)"
     DAYS="$(tier_days "$NEXT")"
-    if [ -z "$DAYS" ]; then
+    if [ -z "$DAYS" ] || [ "$NEXT" -ge 4 ] 2>/dev/null; then
       bash "$REPO/scripts/set-schedule.sh" --remove >/dev/null 2>&1
     else
       bash "$REPO/scripts/set-schedule.sh" "$TIME" "$DAYS" >/dev/null 2>&1

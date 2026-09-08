@@ -91,6 +91,12 @@ to do, or that you now owe them) and create a **separate task for each** via `ad
 Capture the **specific name** the person mentioned. **Missing an embedded ask (e.g. Edi asking you to
 connect with someone) is a failure** — this is exactly the kind of thing that gets missed by skimming.
 
+**But only asks that are about getting the job (AGENT-RULES §8b).** Visa and immigration paperwork,
+traffic fines, relocation, banking, licences, end-of-service settlements with a previous employer —
+these are personal admin even when they arrive in a job thread. **Log the message, create no task.**
+The test: does doing it make an offer more likely, or move an application forward? Also honour
+`ignored_topics` in `config/job-seeker.config.md`.
+
 ## Stage progression → "Advance" button (AGENT-RULES §12)
 If a WhatsApp/LinkedIn thread shows the user **moving to a later pipeline stage** than what's tracked
 (e.g. "we'd like to invite you to the final/panel round" after a first interview → Interview 2; "we're

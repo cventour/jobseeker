@@ -23,7 +23,7 @@ list carefully in a second place, and the second place is where the drift begins
 
 ```bash
 npm run notes                 # the GitHub release body, from the newest CHANGELOG entry
-npm run notes:site            # regenerates whats-new.html in ../myjobseeker-site
+npm run notes:site            # regenerates whats-new.html in ../jobseeker-site
 gh release create vX.Y.Z dist/*.zip --title "vX.Y.Z — <short name>" --notes-file <(npm run --silent notes)
 ```
 

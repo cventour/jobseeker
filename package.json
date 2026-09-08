@@ -47,7 +47,7 @@
     "app": "bash scripts/build-app.sh",
     "schedule": "bash scripts/set-schedule.sh",
     "notes": "node scripts/release-notes.mjs",
-    "notes:site": "node scripts/release-notes.mjs --html ../myjobseeker-site",
+    "notes:site": "node scripts/release-notes.mjs --html ../jobseeker-site",
     "mock:wizard": "node scripts/mock-wizard.mjs"
   }
 }
