@@ -207,13 +207,26 @@ function Get-CoverageJson {
 # question is how a run came to report `ok` while its own coverage said it read nothing.
 function Get-GapsJson {
   $a = Invoke-Node @((Join-Path $REPO "server\audit.mjs"), "--gaps")
-  if ($a.ExitCode -ne 0) { return "[]" }
+  # An empty gaps list is indistinguishable from "we never managed to ask", and the difference is
+  # the whole verdict: no gaps means the run is reported ok. So when the audit does not answer
+  # cleanly, say so in the log rather than quietly returning nothing.
+  if ($a.ExitCode -ne 0) {
+    Write-RunLog ("gaps: audit.mjs exited " + $a.ExitCode + " -- " + ($a.StdErr -replace "\s+", " ").Trim())
+    return "[]"
+  }
+  if (-not $a.StdOut.Trim()) {
+    Write-RunLog "gaps: audit.mjs exited 0 but printed nothing"
+    return "[]"
+  }
   $r = Invoke-Node -Arguments @("-e", @'
 let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
         try{ process.stdout.write(JSON.stringify(JSON.parse(s).gaps||[])); }
         catch{ process.stdout.write("[]"); }})
 '@) -Stdin $a.StdOut
   if ($r.ExitCode -eq 0 -and $r.StdOut.Trim().StartsWith("[")) { return $r.StdOut.Trim() }
+  Write-RunLog ("gaps: could not read the audit's answer (exit " + $r.ExitCode + ", got '" +
+    ($r.StdOut.Trim() -replace "\s+", " ") + "', stderr '" + ($r.StdErr -replace "\s+", " ").Trim() +
+    "'); the audit itself said: " + ($a.StdOut.Trim().Substring(0, [Math]::Min(200, $a.StdOut.Trim().Length)) -replace "\s+", " "))
   return "[]"
 }
 
