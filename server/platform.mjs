@@ -16,7 +16,7 @@
 // which asserts both mappings from whichever OS CI happens to be running on. Never set it in real use.
 
 import { execFile, spawn } from "child_process";
-import { promises as fs, statSync } from "fs";
+import { promises as fs, statSync, openSync, closeSync, mkdirSync } from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -141,14 +141,45 @@ export function node(args = [], opts = {}) {
   return run(process.execPath, args.map(String), opts);
 }
 
-function spawnDetached(cmd, args, { env, cwd = ROOT } = {}) {
+function spawnDetached(cmd, args, { env, cwd = ROOT, logFile } = {}) {
+  // `detached` means opposite things on the two platforms, and on Windows it is fatal here. There
+  // it starts the child with NO console at all, and Windows PowerShell cannot host itself without
+  // one: it exits immediately, writes nothing, and reports success. The caller gets a pid, no
+  // error and no work done, which is exactly how a CV re-read looked when it had in fact never
+  // run. Measured on Windows 11: detached true never runs whatever the window flag says, detached
+  // false with windowsHide always does.
+  //
+  // A Windows child outlives its parent anyway -- nothing puts these in a job object -- so dropping
+  // `detached` costs nothing and unref() still keeps the parent free to exit. The child also gets a
+  // real file for stdout and stderr, so a background job that dies says so somewhere instead of
+  // vanishing. POSIX keeps exactly what it had: detached, stdio ignore, its own process group.
+  let stdio = "ignore";
+  let fd = null;
+  if (IS_WIN) {
+    try {
+      const file = logFile || path.join(cwd, "data", ".spawn.log");
+      mkdirSync(path.dirname(file), { recursive: true });
+      fd = openSync(file, "a");
+      stdio = ["ignore", fd, fd];
+    } catch {
+      stdio = "ignore"; // never let logging be the reason the job does not start
+    }
+  }
   const child = spawn(cmd, args, {
     cwd,
-    detached: true,
-    stdio: "ignore",
+    detached: !IS_WIN,
+    stdio,
     windowsHide: true,
     env: env ? { ...process.env, ...env } : process.env,
   });
+  // The child holds its own duplicate of the handle, so the parent's copy is done with.
+  if (fd !== null) {
+    try {
+      closeSync(fd);
+    } catch {
+      /* already gone */
+    }
+  }
   child.unref();
   return child;
 }

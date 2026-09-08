@@ -185,7 +185,19 @@ try {
     }
     $settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -MultipleInstances IgnoreNew `
       -ExecutionTimeLimit (New-TimeSpan -Hours 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+    # Ask Windows who we are rather than assembling a name from the environment. USERDOMAIN is
+    # "WORKGROUP" on a machine that is not domain-joined, and "WORKGROUP\name" maps to no account
+    # at all -- Task Scheduler rejects it with "No mapping between account names and security IDs
+    # was done", which is how the daily run failed to install on a plain Windows 11 Home PC. The
+    # identity's own name is already the right "COMPUTER\User"; its SID is the last resort, and
+    # Task Scheduler accepts one in place of a name.
+    $me = $null
+    try { $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { $me = $null }
+    if (-not $me) {
+      try { $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $me = $null }
+    }
+    if (-not $me) { $me = "$env:USERDOMAIN\$env:USERNAME" }
+    $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Action $action -Trigger $trigger `
       -Settings $settings -Principal $principal -Force | Out-Null
   } else {
