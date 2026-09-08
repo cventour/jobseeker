@@ -331,8 +331,20 @@ async function main() {
     await new Promise((r) => setTimeout(r, 500));
     changed = await get("/setup-step?step=cv&back=settings");
   }
+  // When this fails there is nothing on screen to explain why, and the work happened in a detached
+  // process on another machine. Say what the parse itself reported.
+  let why = "";
+  if (!changed.body.includes("What changed")) {
+    for (const f of [".cv-parse.status.json", ".cv-parse.log"]) {
+      try {
+        why += ` | ${f}: ${(await fs.readFile(path.join(sandbox, "data", f), "utf8")).trim().replace(/\s+/g, " ").slice(0, 400)}`;
+      } catch {
+        why += ` | ${f}: absent`;
+      }
+    }
+  }
   check(changed.body.includes("What changed") && changed.body.includes("Pre-sales Engineer"),
-    "a re-read shows the old values beside the new ones");
+    "a re-read shows the old values beside the new ones", why);
   check(changed.body.includes("keep the score they were given") || changed.body.includes("only future hunts"),
     "…and says what a re-read does not change");
   await post("/welcome-step", { step: "cv", action: "next", return: "standalone", back: "settings" });
