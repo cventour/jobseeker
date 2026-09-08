@@ -171,47 +171,61 @@ async function main() {
   }
   check("inline dashboard JS parses", scriptOk, scriptErr);
 
-  // The browser layer flattens each injected page script to a single line before handing it to
-  // the driver (AppleScript on macOS, the bridge extension on Windows), so a `//` comment inside one
-  // comments out everything that follows it. That failed silently — openConversation returned "no
-  // error" and simply never clicked — which is the worst possible shape for a bug in a script that
-  // touches someone's real messages. The snippets live in browser/snippets.mjs; the AppleScript
-  // driver is scanned too so a snippet added there later is not exempt.
-  const INJECTED = /`\n\(function\(\)\{[\s\S]*?`\.replace\(\/\\n\/g, " "\)/g;
-  const lineCommentsIn = (src) => {
-    const flattened = src.match(INJECTED) || [];
-    return {
-      flattened: flattened.length,
-      bad: flattened.filter((b) => b.split("\n").some((l) => /^\s*\/\//.test(l))).length,
-    };
-  };
-  const browserFiles = ["./browser/snippets.mjs", "./browser/applescript.mjs"];
-  const sources = await Promise.all(browserFiles.map((f) => fs.readFile(new URL(f, import.meta.url), "utf8")));
-  const totals = sources.map(lineCommentsIn).reduce(
-    (a, b) => ({ flattened: a.flattened + b.flattened, bad: a.bad + b.bad }),
-    { flattened: 0, bad: 0 }
-  );
-  check(
-    "injected browser scripts use block comments only",
-    totals.flattened > 0 && totals.bad === 0,
-    totals.flattened === 0 ? "found no injected scripts to check — the matcher has drifted" : `${totals.bad} script(s) contain a line comment`
-  );
-  // The check must be able to FAIL, or it proves nothing: plant a line comment inside the first
-  // injected script of a copy and assert the same matcher catches it.
+  // Every page snippet is flattened to ONE LINE before it is sent (AppleScript string literals
+  // cannot carry a raw newline), so a `//` comment inside one comments out everything after it.
+  // That failed SILENTLY once already — openConversation returned "no error" and simply never
+  // clicked, on a script that touches someone's real messages — which is why it is a test.
+  //
+  // What changed: the snippets are no longer JS text built in Node. They are real named functions in
+  // extension/snippets.js (Manifest V3 refuses string evaluation outright, so the extension is handed
+  // the function itself). The constraint survives the move, because the macOS driver still stringifies
+  // and flattens those same functions. So this now asserts BOTH halves against the real objects:
+  // block comments only, AND that the production flattener really does produce one parseable line.
   {
-    const src = sources[0];
-    const at = src.search(INJECTED);
-    const planted =
-      at >= 0
-        ? src.slice(0, at) + "`\n(function(){\n  // planted line comment\n  try{\n" + src.slice(at + "`\n(function(){\n  try{\n".length)
-        : src;
-    const plantedFile = path.join(tmp, "snippets-planted.mjs");
-    await fs.writeFile(plantedFile, planted);
-    const r = lineCommentsIn(await fs.readFile(plantedFile, "utf8"));
+    const { SNIPPETS } = (await import("../extension/snippets.js")).default;
+    const { flattenSnippet } = await import("../scripts/browser/applescript.mjs");
+
+    // A line whose first non-space characters are `//` — the shape that eats the rest of the line.
+    const lineComments = (fn) => String(fn).split("\n").filter((l) => /^\s*\/\//.test(l)).length;
+
+    const names = Object.keys(SNIPPETS);
+    check("snippets file exports snippets to check", names.length > 0, names.join(", "));
+
+    const commented = names.filter((n) => lineComments(SNIPPETS[n]) > 0);
+    check("page snippets use block comments only", commented.length === 0, commented.join(", "));
+
+    const notFlat = names.filter((n) => /[\r\n]/.test(flattenSnippet(SNIPPETS[n])));
+    check("the driver flattens every snippet to a single line", notFlat.length === 0, notFlat.join(", "));
+
+    // The flattened source is what Chrome actually parses, so parse it — a swallowed body usually
+    // shows up here as a SyntaxError even when the line-comment scan is what names the cause.
+    let parsed = "";
+    for (const n of names) {
+      try {
+        new Function("return (" + flattenSnippet(SNIPPETS[n]) + ")");
+      } catch (e) {
+        parsed = `${n}: ${String(e?.message || e).slice(0, 80)}`;
+        break;
+      }
+    }
+    check("every flattened snippet still parses", parsed === "", parsed);
+
+    // The checks must be able to FAIL, or they prove nothing. Plant a snippet with a line comment
+    // whose body is swallowed by flattening, and assert both checks catch it.
+    function planted(args) {
+      // a planted line comment
+      return JSON.stringify({ ok: !!args });
+    }
+    let plantedParses = true;
+    try {
+      new Function("return (" + flattenSnippet(planted) + ")");
+    } catch {
+      plantedParses = false;
+    }
     check(
-      "block-comment check catches a planted line comment (self-check)",
-      at >= 0 && r.flattened === totals.flattened && r.bad === 1,
-      at < 0 ? "could not find an injected script to plant into" : `flattened=${r.flattened} bad=${r.bad}`
+      "the comment check catches a planted line comment (self-check)",
+      lineComments(planted) === 1 && !plantedParses,
+      `lineComments=${lineComments(planted)} parses=${plantedParses}`
     );
   }
 

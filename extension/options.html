@@ -99,8 +99,13 @@
       <p class="muted" id="statusDetail"></p>
     </section>
 
-    <section>
+    <section id="pairSection">
       <h2>Pair with the dashboard</h2>
+      <!-- When the pairing is already done there is nothing to do here, so the form is put away and
+           this line stands in its place. Left open, an empty six-digit box reads as an unfinished
+           step: a real user saw "Connected" right above it and still believed it was not paired. -->
+      <p class="muted" id="pairedNote" hidden>Paired with the dashboard. <a href="#" id="pairAgain">Pair again</a></p>
+      <div id="pairForm">
       <p class="muted">In the JobSeeker dashboard, open Settings, then Browser, then Connect. It shows a six-digit code. Type it here.</p>
       <div class="row">
         <div>
@@ -116,6 +121,7 @@
         </div>
       </div>
       <div class="note" id="pairNote"></div>
+      </div>
     </section>
 
     <section>

@@ -73,80 +73,13 @@ function record(args) {
   });
 }
 
-// Extraction snippets are defensive: WhatsApp/LinkedIn ship DOM changes constantly, so each one
-// tries a few selector generations and returns [] rather than throwing. An empty result is
-// reported as "extraction found nothing" — never silently as "no messages", which would advance
-// the watermark over an unread inbox.
-const WHATSAPP_JS = `
-(function () {
-  try {
-    if (document.querySelector('canvas[aria-label*="scan"], canvas[aria-label*="Scan"], [data-ref]')) {
-      return JSON.stringify({ logged_out: true });
-    }
-    var pane = document.querySelector('#pane-side') || document.querySelector('[aria-label="Chat list"]');
-    if (!pane) return JSON.stringify({ error: 'chat list not found' });
-    /* WhatsApp moved the chat list from role="listitem" to role="row"; accept either, since the */
-    /* next redesign will move it again and a hard-coded single selector is how this silently breaks. */
-    var items = pane.querySelectorAll('[role="row"], [role="listitem"]');
-    var out = [];
-    var seen = {};
-    for (var i = 0; i < items.length && out.length < 60; i++) {
-      var el = items[i];
-      var titled = el.querySelector('span[title]');
-      var name = titled ? (titled.getAttribute('title') || titled.textContent || '') : '';
-      if (!name) continue;
-    /* The list virtualises and re-renders, so the same chat can appear twice in one pass. */
-      if (seen[name]) continue;
-      seen[name] = 1;
-      var unread = 0;
-      var badge = el.querySelector('[aria-label*="unread"], [aria-label*="Unread"]');
-      if (badge) {
-        var m = /(\\d+)/.exec(badge.getAttribute('aria-label') || '');
-        unread = m ? parseInt(m[1], 10) : 1;
-      }
-    /* innerText is far more stable than WhatsApp's generated class names: line 1 is the name, */
-    /* line 2 the timestamp, and the last line the message preview. */
-      var lines = (el.innerText || '').split('\\n').map(function (x) { return x.trim(); }).filter(Boolean);
-      var body = lines.filter(function (x) {
-        /* Drop the name, the bare unread badge and its aria text — on an unread chat the badge is
-           the LAST line, so taking lines[last] naively yields "3" instead of the message. */
-        return x !== name && !/^\\d+$/.test(x) && !/^\\d+ unread/i.test(x);
-      });
-      out.push({
-        /* DOM index, so a later click targets the right row: this loop skips items without a name,
-           so an array position is not a list position. */
-        idx: i,
-        name: name,
-        preview: (body.length ? body[body.length - 1] : '').slice(0, 300),
-        unread: unread,
-        time: lines.length > 1 ? lines[1] : '',
-        muted: !!el.querySelector('[aria-label="Muted chat"]')
-      });
-    }
-    return JSON.stringify({ chats: out });
-  } catch (e) { return JSON.stringify({ error: String(e && e.message || e) }); }
-})()
-`.replace(/\n/g, " ");
-
-const LINKEDIN_JS = `
-(function () {
-  try {
-    var items = document.querySelectorAll('li.msg-conversation-listitem, li[class*="conversation-listitem"]');
-    var out = [];
-    for (var i = 0; i < items.length && out.length < 40; i++) {
-      var el = items[i];
-      var nameEl = el.querySelector('.msg-conversation-listitem__participant-names, [class*="participant-names"]');
-      var snipEl = el.querySelector('.msg-conversation-card__message-snippet, [class*="message-snippet"]');
-      var timeEl = el.querySelector('time, [class*="time-stamp"]');
-      var name = nameEl ? (nameEl.textContent || '').trim() : '';
-      if (!name) continue;
-      var unread = /unread/i.test(el.className) || !!el.querySelector('[class*="unread"]');
-      out.push({ idx: i, name: name, preview: snipEl ? (snipEl.textContent || '').trim().slice(0, 300) : '', unread: unread ? 1 : 0, time: timeEl ? (timeEl.textContent || '').trim() : '' });
-    }
-    return JSON.stringify({ chats: out });
-  } catch (e) { return JSON.stringify({ error: String(e && e.message || e) }); }
-})()
-`.replace(/\n/g, " ");
+// The chat-list extractions are `whatsappChatList` and `linkedinChatList` in extension/snippets.js
+// — real functions shipped by the bridge extension and stringified by the AppleScript driver, so
+// this sweep runs identical page code on macOS and Windows. (Under Manifest V3 a snippet sent as a
+// string is refused outright; the measurement is in that file.) They stay defensive: WhatsApp and
+// LinkedIn ship DOM changes constantly, so each tries a few selector generations and returns [] rather
+// than throwing. An empty result is reported below as "extraction found nothing" — never silently as
+// "no messages", which would advance the watermark over an unread inbox.
 
 // Turn a chat-list timestamp into an absolute time.
 //
@@ -305,9 +238,9 @@ const looksJobRelated = (c, known = []) => {
 const threadKey = (source, name, day) =>
   `${source}:${String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}:${day}`;
 
-export async function sweepChannel({ ctx, source, host, js, tab }) {
+export async function sweepChannel({ ctx, source, host, snippet, tab }) {
   if (!tab) return { source, swept: false, reason: `no ${host} tab open`, chats: [] };
-  const data = await ctx.evalJson(tab, js).catch((e) => ({ error: e.message }));
+  const data = await ctx.snippetJson(tab, snippet).catch((e) => ({ error: e.message }));
   if (data?.logged_out) {
     // The session is gone. Do NOT interact — never attempt to scan or re-link, and stop touching
     // this channel for the run, because repeatedly loading a logged-out WhatsApp is how you get
@@ -459,7 +392,7 @@ async function main() {
     } else if (waTab) {
       // Reuse the user's own tab and never close it: WhatsApp Web is single-session, so a second
       // tab shows "WhatsApp is open in another window" and steals the session from them.
-      out.push(await sweep({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab: waTab }));
+      out.push(await sweep({ ctx, source: "WhatsApp", host: "web.whatsapp.com", snippet: "whatsappChatList", tab: waTab }));
     } else {
       // No tab open — typical right after we launched Chrome ourselves, since it starts on the New
       // Tab Page. Safe to open one here precisely BECAUSE none exists, so there is no session to
@@ -467,7 +400,7 @@ async function main() {
       out.push(
         await ctx.withOwnedTab("https://web.whatsapp.com/", async (tab) => {
           await ctx.waitForSelector(tab, '#pane-side, canvas[aria-label*="scan"]', { timeoutMs: 90_000 });
-          return sweep({ ctx, source: "WhatsApp", host: "web.whatsapp.com", js: WHATSAPP_JS, tab });
+          return sweep({ ctx, source: "WhatsApp", host: "web.whatsapp.com", snippet: "whatsappChatList", tab });
         })
       );
     }
@@ -475,11 +408,11 @@ async function main() {
     if (!enabled.linkedin) {
       out.push({ source: "LinkedIn", swept: false, reason: "disabled in config (linkedin_enabled)", chats: [] });
     } else if (liTab) {
-      out.push(await sweep({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab: liTab }));
+      out.push(await sweep({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", snippet: "linkedinChatList", tab: liTab }));
     } else if (DO_LINKEDIN) {
       const res = await ctx.withOwnedTab("https://www.linkedin.com/messaging/", async (tab) => {
         await ctx.waitForSelector(tab, 'li[class*="conversation-listitem"]', { timeoutMs: 45_000 });
-        return sweep({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", js: LINKEDIN_JS, tab });
+        return sweep({ ctx, source: "LinkedIn", host: "linkedin.com/messaging", snippet: "linkedinChatList", tab });
       });
       out.push(res);
     } else {

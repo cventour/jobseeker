@@ -105,8 +105,10 @@ user's tabs, and posts the result back.
   or the setup wizard's Chrome step); the extension's options page takes it. The bridge mints a
   token into `data/.bridge.token` and pins the extension's `chrome-extension://` origin, so a web
   page that somehow learned the token still cannot poll for work.
-- **The method allowlist is the boundary**, enforced on both sides: `ping`, `listTabs`, `evalInTab`,
+- **The method allowlist is the boundary**, enforced on both sides: `ping`, `listTabs`, `runSnippet`,
   `openTab`, `closeTabsByUrlPrefix`, `tabLoading`. Anything else is refused before it is queued.
+  `runSnippet` names one of the functions the extension ships in `extension/snippets.js`; there is no
+  way to send it code. Manifest V3 would refuse to evaluate a string in a page in any case.
 - **Two host-permission tiers.** WhatsApp Web and LinkedIn by default; reading careers pages needs
   the optional `<all_urls>` grant the user makes from the extension's options page.
 - **Loopback only**, and the bridge rejects any connection whose remote address is not loopback.

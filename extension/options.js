@@ -4,6 +4,8 @@
 
 const $ = (id) => document.getElementById(id);
 
+let pairAgainRequested = false;
+
 const STATE_TEXT = {
   "no-bridge": "No JobSeeker dashboard found on this computer",
   "not-paired": "Dashboard found, not paired yet",
@@ -48,6 +50,17 @@ async function refreshStatus() {
   if (s.lastError) bits.push(s.lastError);
   if (state === "no-bridge") bits.push("Start the dashboard (npm run dashboard) and this page will notice on its own.");
   $("statusDetail").textContent = bits.join(" · ");
+
+  // Put the pairing form away once there is nothing to do with it. "Pair again" brings it back for
+  // the cases that genuinely need it: a second dashboard, or a pairing the dashboard has forgotten.
+  const settled = state === "connected" || state === "refused";
+  if (settled && !pairAgainRequested) {
+    $("pairForm").hidden = true;
+    $("pairedNote").hidden = false;
+  } else {
+    $("pairForm").hidden = false;
+    $("pairedNote").hidden = true;
+  }
   $("extId").textContent = s.extensionId || chrome.runtime.id;
 
   $("connect").textContent = s.paired ? "Re-pair" : "Connect";
@@ -75,6 +88,14 @@ function note(id, text, kind) {
   if (kind) el.dataset.kind = kind;
   else delete el.dataset.kind;
 }
+
+$("pairAgain").addEventListener("click", (e) => {
+  e.preventDefault();
+  pairAgainRequested = true;
+  $("pairForm").hidden = false;
+  $("pairedNote").hidden = true;
+  $("code").focus();
+});
 
 $("connect").addEventListener("click", async () => {
   const code = $("code").value.replace(/\D/g, "");

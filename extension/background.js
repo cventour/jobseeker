@@ -7,10 +7,19 @@
 // bearer token issued at pairing time, and the dashboard pins our Origin (chrome-extension://<id>).
 //
 // Read-only by construction, same rule as browser.mjs. The method allowlist below exposes tab
-// listing, page evaluation, opening/closing tabs we own, and a load probe — and deliberately does
-// NOT expose typing, form submission, or clicking. The one constrained click that exists in the
-// system (openConversation) is a Node-side snippet that runs THROUGH evalInTab and carries its own
-// guards; it is not an extension capability and nothing here can widen it.
+// listing, running a NAMED snippet, opening/closing tabs we own, and a load probe — and deliberately
+// does NOT expose typing, form submission, or clicking. The one constrained click that exists in the
+// system (openConversationClick) is one of the named snippets in snippets.js and carries its own
+// three guards; there is no generic click method here and nothing on this side can widen it.
+//
+// Node never sends JavaScript as a STRING. It cannot: measured on Windows 11, Chrome 152.0.7977.83,
+// with this extension loaded and paired, https://web.whatsapp.com/ — a host in our own
+// host_permissions — refused all three routes ("Content Security Policy refuses string evaluation
+// (ISOLATED/eval, ISOLATED/function, MAIN/eval)"). Indirect eval and new Function are governed by the
+// extension's own MV3 CSP in the isolated world, and the MAIN world is governed by the page's CSP.
+// What works — it is how that failing probe itself ran — is chrome.scripting.executeScript with a
+// real `func` reference, so runSnippet below does exactly that. snippets.js is the one source of
+// truth for that code and the macOS driver stringifies the SAME functions.
 //
 // Protocol (frozen; server/bridge.mjs implements the other side):
 //   GET  /bridge/status              -> {paired, connected, lastSeen, extensionId, pending, version:"1"}
@@ -19,6 +28,12 @@
 //   POST /bridge/result Bearer token   {id, ok, result?, error?}
 
 "use strict";
+
+// The page snippets, shared verbatim with the Node side (scripts/browser/applescript.mjs imports the
+// same file). A classic service worker can pull in a classic script, which keeps the manifest's
+// background entry unchanged — no "type": "module" needed, so service-worker registration is exactly
+// what it was. snippets.js publishes `self.SNIPPETS` when there is no CommonJS `module` around.
+importScripts("snippets.js");
 
 const DEFAULT_PORTS = [4319, 4320];
 const BACKOFF_MS = [1000, 2000, 5000, 15000];
@@ -157,90 +172,43 @@ async function indicesFor(tabId) {
   return hit ? { window: hit.window, tab: hit.tab } : { window: null, tab: null };
 }
 
-// Injected into the page. Must be self-contained: chrome.scripting serialises the function source,
-// so nothing from this file's scope is reachable inside it.
-//
-// The snippet is evaluated as a PROGRAM whose completion value is returned — exactly what
-// AppleScript's `execute javascript` did — so the existing Node snippets ("(function(){...})()",
-// "document.title", `document.querySelector(...) ? "1" : "0"`) run unchanged.
-//
-// Which evaluator Chrome allows is the open question this file cannot settle without a browser:
-//   1. Indirect eval in the ISOLATED world. MV3 applies the extension's own CSP (script-src 'self',
-//      no 'unsafe-eval', and Chrome refuses to relax it) to content-script isolated worlds since the
-//      "isolated world CSP" change, so this is EXPECTED to throw an EvalError.
-//   2. new Function(...) in the ISOLATED world. Same CSP directive governs it; expected to fail too.
-//   3. The MAIN world (page's own JS context). There the PAGE's CSP decides. WhatsApp Web and LinkedIn
-//      both ship a CSP, and whether it carries 'unsafe-eval' has to be observed on a real Chrome.
-// The dispatcher tries 1, then 2 in ISOLATED, then 1 again in MAIN, and reports which one was
-// refused. If all three are refused on the target sites the design falls back to shipping the
-// snippets inside the extension:
-//   TODO(runSnippet): add method runSnippet {name, args} that executes a named function from a
-//   snippets.js bundled here (no string evaluation at all), and have Node call it instead of
-//   evalInTab for WhatsApp/LinkedIn extraction. Not implemented until the eval path is measured.
-function pageEval(src, mode) {
-  // Errors are RETURNED, not thrown: on Chrome builds that predate InjectionResult.error a thrown
-  // exception would resolve as `result: undefined`, indistinguishable from a snippet that returned
-  // null, and the CSP fallback chain in evalInTab would never run.
+/**
+ * Run a named snippet from snippets.js in a tab.
+ *
+ * `func` is a REAL function reference from this extension's own code, which is the only thing MV3
+ * allows (see the measurement at the top of this file). chrome.scripting serialises that function
+ * and runs it in the ISOLATED world, so it must be self-contained — nothing from snippets.js's own
+ * scope is reachable inside it. `args` is passed through structured clone, so it must be JSON-shaped.
+ *
+ * The value comes back as a string, matching what AppleScript's `execute javascript` returns on
+ * macOS; anything structured is JSON-stringified by the snippet itself.
+ */
+async function runSnippet({ tabId, name, args }) {
+  if (typeof tabId !== "number") throw new Error("runSnippet: tabId must be a number");
+  const known = (typeof SNIPPETS !== "undefined" && SNIPPETS) || {};
+  const fn = Object.prototype.hasOwnProperty.call(known, name) ? known[name] : null;
+  if (!fn) {
+    throw new Error(`runSnippet: unknown snippet "${String(name)}" (known: ${Object.keys(known).join(", ") || "none"})`);
+  }
+
+  let results;
   try {
-    let v;
-    if (mode === "function") {
-      v = new Function("return (" + src + ")")();
-    } else {
-      v = (0, eval)(src);
-    }
-    return { ok: true, value: typeof v === "string" ? v : v === undefined || v === null ? null : JSON.stringify(v) };
+    results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "ISOLATED",
+      func: fn,
+      args: [args && typeof args === "object" ? args : {}],
+    });
   } catch (e) {
-    return { ok: false, error: String((e && (e.message || e.name)) || e), name: e && e.name };
+    throw new Error(mapScriptingError(String((e && e.message) || e)));
   }
-}
-
-const CSP_BLOCKED = /unsafe-eval|Content Security Policy|EvalError|Refused to evaluate/i;
-
-async function evalInTab({ tabId, js }) {
-  if (typeof tabId !== "number") throw new Error("evalInTab: tabId must be a number");
-  if (typeof js !== "string") throw new Error("evalInTab: js must be a string");
-  const attempts = [
-    { world: "ISOLATED", mode: "eval" },
-    { world: "ISOLATED", mode: "function" },
-    { world: "MAIN", mode: "eval" },
-  ];
-  const refused = [];
-  for (const a of attempts) {
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: a.world,
-        func: pageEval,
-        args: [js, a.mode],
-      });
-      const first = results && results[0];
-      if (first && first.error) throw new Error(first.error.message || String(first.error));
-      const r = first ? first.result : null;
-      if (!r || typeof r !== "object") {
-        // No frame answered (discarded tab, page mid-navigation). Not a CSP matter; do not retry.
-        throw new Error("the page did not answer (tab discarded or still loading)");
-      }
-      if (r.ok) return { value: r.value === undefined ? null : r.value, via: `${a.world}/${a.mode}` };
-      if (r.name === "EvalError" || CSP_BLOCKED.test(r.error)) {
-        refused.push(`${a.world}/${a.mode}`);
-        continue;
-      }
-      // The snippet itself threw — that is the caller's bug, surface it verbatim.
-      throw new Error(`snippet threw: ${r.error}`);
-    } catch (e) {
-      const msg = String((e && e.message) || e);
-      if (/^snippet threw|did not answer/.test(msg)) throw e;
-      if (CSP_BLOCKED.test(msg)) {
-        refused.push(`${a.world}/${a.mode}`);
-        continue;
-      }
-      throw new Error(mapScriptingError(msg));
-    }
-  }
-  throw new Error(
-    `this page's Content Security Policy refuses string evaluation (${refused.join(", ")}). ` +
-      "See TODO(runSnippet) in background.js."
-  );
+  const first = results && results[0];
+  // Chrome builds that predate InjectionResult.error report a thrown snippet as `result: undefined`,
+  // so check both shapes rather than trusting either one alone.
+  if (first && first.error) throw new Error(mapScriptingError(first.error.message || String(first.error)));
+  if (!first) throw new Error("the page did not answer (tab discarded or still loading)");
+  const v = first.result;
+  return { value: v === undefined || v === null ? null : typeof v === "string" ? v : JSON.stringify(v) };
 }
 
 function mapScriptingError(msg) {
@@ -284,7 +252,7 @@ async function tabLoading({ tabId }) {
 const METHODS = {
   ping: async () => ({ version: chrome.runtime.getManifest().version, chrome: navigator.userAgent }),
   listTabs: async () => listTabs(),
-  evalInTab: async (p) => evalInTab(p || {}),
+  runSnippet: async (p) => runSnippet(p || {}),
   openTab: async (p) => openTab(p || {}),
   closeTabsByUrlPrefix: async (p) => closeTabsByUrlPrefix(p || {}),
   tabLoading: async (p) => tabLoading(p || {}),

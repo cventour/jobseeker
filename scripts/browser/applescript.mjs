@@ -4,6 +4,12 @@
 // withBrowser…) live in ./snippets.mjs and work on any driver exposing this same surface.
 
 import { execFile } from "child_process";
+// The page snippets are shipped by the extension and shared with this driver, so both platforms run
+// IDENTICAL page code from one file. Apple Events cannot be handed a function reference the way
+// chrome.scripting can, so this driver stringifies the same function instead — see runSnippet().
+import snippets from "../../extension/snippets.js";
+
+const { SNIPPETS } = snippets;
 
 const CHROME = 'application id "com.google.Chrome"';
 
@@ -224,6 +230,33 @@ export async function evalInTab(tab, js) {
   return r.out;
 }
 
+/**
+ * Flatten a snippet's source to ONE LINE.
+ *
+ * AppleScript string literals cannot contain a raw newline, and asStr() escapes them — but a `//`
+ * line comment inside a flattened function would then comment out everything after it, silently.
+ * That failure has happened here before: openConversation returned "no error" and simply never
+ * clicked. So snippets carry block comments only (extension/snippets.js rule 3) and every one is
+ * flattened here; scripts/test-security.mjs asserts both properties against the real functions.
+ *
+ * Exported so the test flattens exactly what production flattens, rather than a copy of the rule.
+ */
+export const flattenSnippet = (fn) => String(fn).replace(/\r\n|\r|\n/g, " ");
+
+/**
+ * Run a NAMED snippet from extension/snippets.js in a tab and return its value.
+ *
+ * The extension hands `SNIPPETS[name]` to chrome.scripting.executeScript as a function reference;
+ * Apple Events has no such call, so here the same function is stringified and evaluated as
+ * `(<source>)(<args as JSON>)`. Chrome returns the program's completion value, which is the call's
+ * result — exactly what the extension's executeScript returns. One file, two transports, no drift.
+ */
+export async function runSnippet(tab, name, args = {}) {
+  const fn = Object.prototype.hasOwnProperty.call(SNIPPETS, name) ? SNIPPETS[name] : null;
+  if (!fn) throw new Error(`unknown snippet "${name}" (known: ${Object.keys(SNIPPETS).join(", ")})`);
+  return evalInTab(tab, `(${flattenSnippet(fn)})(${JSON.stringify(args ?? {})})`);
+}
+
 /** Open `url` in a new tab at the end of window 1 (creating a window if none) and return its address. */
 export async function openTab(url) {
   const open = await osa(
@@ -424,6 +457,9 @@ export const driver = {
   ensureChrome,
   chromeRunning,
   listTabs,
+  runSnippet,
+  // Raw string evaluation. Still available HERE because Apple Events allow it and the probe uses
+  // it, but everything else routes through runSnippet so both platforms run the same page code.
   evalInTab,
   openTab,
   closeTabsByUrl,

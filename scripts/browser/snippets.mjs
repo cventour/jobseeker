@@ -9,12 +9,21 @@
 // enforcement is that the capability is simply absent from this API. The exception is
 // openConversation() below; its own comment explains the three constraints that keep it narrow.
 
+// Nothing in here writes page code any more. Every snippet that runs inside a page is a real named
+// function in extension/snippets.js — the ONE source of truth, shipped by the extension and
+// stringified by the AppleScript driver — and this module only ever names one. That is not a style
+// choice: sending JavaScript as a string cannot work under Manifest V3 (measured on Chrome 152; the
+// note is in extension/snippets.js), so a composite that built JS text would work on macOS and be
+// impossible on Windows.
+import snippets from "../../extension/snippets.js";
 import { withBrowserLock } from "../../server/lock.mjs";
+
+export const { SNIPPETS } = snippets;
 
 let driver = null;
 
 export function setDriver(d) {
-  if (!d || typeof d.evalInTab !== "function") throw new Error("setDriver: not a browser driver");
+  if (!d || typeof d.runSnippet !== "function") throw new Error("setDriver: not a browser driver");
   driver = d;
 }
 
@@ -48,21 +57,45 @@ export const scriptableTabs = (tabs) =>
     .sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)));
 
 /**
- * Run an extraction snippet in a tab and return its value.
- * The snippet MUST be read-only. Return a JSON string for anything structured.
+ * Run a NAMED snippet from extension/snippets.js in a tab and return its value.
+ * The snippet MUST be read-only. It returns a JSON string for anything structured.
+ *
+ * The name is checked here as well as in both drivers, so a typo fails in Node with the list of
+ * real names rather than as "the page did not answer" after a browser round-trip.
  */
-export function evalInTab(tab, js) {
-  return getDriver().evalInTab(tab, js);
+export function runSnippet(tab, name, args = {}) {
+  if (!Object.prototype.hasOwnProperty.call(SNIPPETS, name)) {
+    throw new Error(`unknown snippet "${name}" (known: ${Object.keys(SNIPPETS).join(", ")})`);
+  }
+  return getDriver().runSnippet(tab, name, args ?? {});
 }
 
-export async function evalJson(tab, js) {
-  const raw = await evalInTab(tab, js);
+const parseSnippetJson = (raw) => {
   if (!raw || raw === "missing value") return null;
   try {
     return JSON.parse(raw);
   } catch {
     throw new Error(`extraction did not return JSON (got: ${raw.slice(0, 120)})`);
   }
+};
+
+/** runSnippet + JSON.parse. What every structured extraction actually wants. */
+export async function snippetJson(tab, name, args = {}) {
+  return parseSnippetJson(await runSnippet(tab, name, args));
+}
+
+/**
+ * RAW string evaluation. Kept because the macOS probe path and any one-off debugging still use it,
+ * and because removing an export would break consumers — but it is a macOS-only capability now:
+ * the extension driver refuses it with the CSP measurement rather than failing at the far end.
+ * Everything in this repo goes through runSnippet/snippetJson instead.
+ */
+export function evalInTab(tab, js) {
+  return getDriver().evalInTab(tab, js);
+}
+
+export async function evalJson(tab, js) {
+  return parseSnippetJson(await evalInTab(tab, js));
 }
 
 /**
@@ -87,7 +120,7 @@ export async function assertCanReadContent(tabs) {
   let last;
   for (const tab of candidates.slice(0, 4)) {
     try {
-      await evalInTab(tab, "1");
+      await runSnippet(tab, "pageAlive");
       return;
     } catch (e) {
       last = e;
@@ -119,86 +152,15 @@ export async function openConversation(
   tab,
   { listSelector, nameSelector, name, index, messageSelector, waitMs = 2500, max = 8000 }
 ) {
-  const click = `
-(function(){
-  try{
-    var items = document.querySelectorAll(${JSON.stringify(listSelector)});
-    var want = ${JSON.stringify(name || "")};
-    var el = null;
-    /* Prefer matching by NAME. Both chat lists virtualise: scrolling re-renders the rows, so an
-       index captured during extraction can point at a different conversation by the time we click.
-       Opening the wrong thread is not a cosmetic bug here — it can be an unread one.
-       NOTE: block comments only in here. This whole script is flattened to ONE LINE before it is
-       injected, so a line comment would silently comment out everything after it. */
-    if (want) {
-      for (var i = 0; i < items.length && !el; i++) {
-        var t = items[i].querySelector(${JSON.stringify(nameSelector || "span[title]")});
-        var got = t ? (t.getAttribute('title') || t.textContent || '').trim() : '';
-        if (got === want) el = items[i];
-      }
-    }
-    if (!el) el = items[${Number(index)}];
-    if (!el) return JSON.stringify({ error: 'conversation not found (name/index both missed)' });
-
-    el.scrollIntoView({ block: 'center' });
-    var r = el.getBoundingClientRect();
-    if (!r.width || !r.height) return JSON.stringify({ error: 'conversation row is not visible' });
-    /* Dispatch on the deepest element under the row centre, not on the row itself. Measured on a
-       live WhatsApp: an event dispatched at the row does nothing — the handler is bound further
-       down — while the same sequence on elementFromPoint() opens the thread. A plain .click() does
-       not work either; the list wants the pointer/mouse pair. */
-    var target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    if (!target) return JSON.stringify({ error: 'nothing at the row centre' });
-    /* Two independent guards, both of which must hold. The containment check is the real one: it
-       makes "we only ever click inside the conversation row we chose" a property of the code rather
-       than of the selector being well behaved. */
-    if (!el.contains(target)) return JSON.stringify({ error: 'point resolved outside the row' });
-    if (target.closest('button, input, textarea, form, [contenteditable="true"]')) {
-      return JSON.stringify({ error: 'refusing to click a control' });
-    }
-
-    var b = { bubbles: true, cancelable: true, composed: true, view: window,
-              clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, detail: 1 };
-    var p = { pointerId: 1, pointerType: 'mouse', isPrimary: true };
-    target.dispatchEvent(new PointerEvent('pointerdown', Object.assign({}, b, p, { buttons: 1 })));
-    target.dispatchEvent(new MouseEvent('mousedown', Object.assign({}, b, { buttons: 1 })));
-    target.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, b, p, { buttons: 0 })));
-    target.dispatchEvent(new MouseEvent('mouseup', b));
-    target.dispatchEvent(new MouseEvent('click', b));
-    return JSON.stringify({ ok: true });
-  }catch(e){ return JSON.stringify({ error: String(e && e.message || e) }); }
-})()`.replace(/\n/g, " ");
-
-  const read = `
-(function(){
-  try{
-    /* Selector GENERATIONS, tried newest-first, first non-empty one wins — not one combined
-       selector. Combining them double-counts: on the current WhatsApp a message matches both
-       'div[role="row"]' and its nested '[data-testid="msg-container"]', so every message was
-       logged twice. Keeping the older generations still guards against the next DOM rotation. */
-    var gens = ${JSON.stringify(Array.isArray(messageSelector) ? messageSelector : [messageSelector])};
-    var nodes = [];
-    for (var g = 0; g < gens.length && nodes.length === 0; g++) {
-      nodes = document.querySelectorAll(gens[g]);
-    }
-    var out = [];
-    for (var i = Math.max(0, nodes.length - 40); i < nodes.length; i++) {
-      var t = (nodes[i].innerText || '').replace(/\\n{2,}/g, '\\n').trim();
-      if (t) out.push(t);
-    }
-    var joined = out.join('\\n---\\n');
-    /* Truncate from the FRONT, not the back: in a long thread the recent end is what matters, and
-       slicing the head would keep the oldest of the last 40 and drop what was just agreed. */
-    var cap = ${Number(max)};
-    if (joined.length > cap) joined = '[earlier messages omitted] ' + joined.slice(joined.length - cap);
-    return JSON.stringify({ messages: out.length, text: joined });
-  }catch(e){ return JSON.stringify({ error: String(e && e.message || e) }); }
-})()`.replace(/\n/g, " ");
-
-  const clicked = await evalJson(tab, click);
+  const clicked = await snippetJson(tab, "openConversationClick", {
+    listSelector,
+    nameSelector: nameSelector || "span[title]",
+    name: name || "",
+    index: Number(index),
+  });
   if (!clicked || clicked.error) return null;
   await new Promise((r) => setTimeout(r, waitMs));
-  const body = await evalJson(tab, read);
+  const body = await snippetJson(tab, "readThreadMessages", { messageSelector, max: Number(max) });
   if (!body || body.error || !body.messages) return null;
   return body;
 }
@@ -236,7 +198,7 @@ export async function waitForLoad(tab, { timeoutMs = 45_000 } = {}) {
 export async function waitForSelector(tab, selector, { timeoutMs = 60_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const hit = await evalInTab(tab, `document.querySelector(${JSON.stringify(selector)}) ? "1" : "0"`);
+    const hit = await runSnippet(tab, "hasSelector", { selector });
     if (String(hit ?? "").trim() === "1") return true;
     await new Promise((res) => setTimeout(res, 1000));
   }
@@ -257,6 +219,10 @@ export async function withBrowser(fn) {
       tabs,
       chrome,
       findTab: (host) => findTab(tabs, host),
+      runSnippet,
+      snippetJson,
+      // Raw evaluation, macOS only (see evalInTab above). Kept on the context so nothing that held
+      // a reference breaks; everything in this repo uses runSnippet/snippetJson.
       evalInTab,
       evalJson,
       withOwnedTab,

@@ -47,7 +47,12 @@ import { fileURLToPath } from "url";
 import { ROOT, chmodSafe } from "./platform.mjs";
 
 export const BRIDGE_VERSION = "1";
-export const METHODS = new Set(["ping", "listTabs", "evalInTab", "openTab", "closeTabsByUrlPrefix", "tabLoading"]);
+// `runSnippet` names a function the extension already ships; there is deliberately no way to send
+// it code. Manifest V3 refuses to evaluate a string in a page anyway (measured on Chrome 152: the
+// isolated world rejects both eval and new Function, and the main world is bound by the page's own
+// policy), so the old `evalInTab` could never have worked there -- and naming what may run is the
+// better boundary regardless.
+export const METHODS = new Set(["ping", "listTabs", "runSnippet", "openTab", "closeTabsByUrlPrefix", "tabLoading"]);
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const BODY_LIMIT = 1024 * 1024;

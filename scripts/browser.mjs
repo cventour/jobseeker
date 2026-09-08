@@ -20,8 +20,15 @@
 // the JobSeeker Bridge extension: an ordinary Chrome extension the user loads once and pairs from
 // Settings ▸ Browser ▸ Connect. It long-polls a localhost bridge (server/bridge.mjs) over HTTP and
 // this module reaches it over plain HTTP. Same profile, no flags, no port anyone else can use, and
-// the extension exposes the same six primitives the AppleScript path has — list tabs, evaluate,
+// the extension exposes the same primitives the AppleScript path has — list tabs, run a snippet,
 // open, close-by-URL, loading? — so everything above the transport is shared.
+//
+// What runs INSIDE a page is one file for both platforms: extension/snippets.js. Node names a
+// snippet; the extension passes the real function to chrome.scripting.executeScript, and the
+// AppleScript driver stringifies that same function. Node never sends JavaScript as a string any
+// more, because under Manifest V3 it cannot: measured on Windows 11 / Chrome 152.0.7977.83 with the
+// extension loaded and paired, https://web.whatsapp.com/ refused all three routes —
+// "Content Security Policy refuses string evaluation (ISOLATED/eval, ISOLATED/function, MAIN/eval)".
 //
 // This file is therefore a FACADE. The two transports are ./browser/applescript.mjs and
 // ./browser/extension.mjs; the site-agnostic composites (findTab, openConversation, withOwnedTab,
@@ -50,6 +57,9 @@ import {
   setDriver,
   findTab,
   scriptableTabs,
+  SNIPPETS,
+  runSnippet,
+  snippetJson,
   evalInTab,
   evalJson,
   assertCanReadContent,
@@ -78,6 +88,9 @@ export {
   CHROME_PROC_PATTERN,
   findTab,
   scriptableTabs,
+  SNIPPETS,
+  runSnippet,
+  snippetJson,
   evalInTab,
   evalJson,
   assertCanReadContent,

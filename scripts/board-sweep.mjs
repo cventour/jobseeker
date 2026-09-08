@@ -156,18 +156,9 @@ function listingSignal(text) {
   return { titleLines: titles.size, hasListings: titles.size >= 3 };
 }
 
-const EXTRACT = (max) =>
-  `
-(function () {
-  try {
-    var kill = document.querySelectorAll('script,style,noscript,svg,iframe');
-    for (var i = 0; i < kill.length; i++) kill[i].remove();
-    var main = document.querySelector('main,[role="main"],#content,.careers,.jobs') || document.body;
-    var t = (main.innerText || '').replace(/\\n{3,}/g, '\\n\\n').trim();
-    return JSON.stringify({ title: document.title || '', href: location.href, text: t.slice(0, ${max}), length: t.length });
-  } catch (e) { return JSON.stringify({ error: String(e && e.message || e) }); }
-})()
-`.replace(/\n/g, " ");
+// The page extraction is `extractPageText` in extension/snippets.js — one real function, shipped by
+// the bridge extension and stringified by the AppleScript driver, so both platforms run the same
+// code. (Under Manifest V3 a snippet sent as a string is refused outright; see that file's note.)
 
 async function main() {
   const queue = JSON.parse(await record(["list-boards", "needs-browser"])).boards || [];
@@ -230,7 +221,7 @@ async function main() {
           // Careers pages are JS-rendered — that is why they are in this queue at all — so a
           // settling wait is not optional.
           await new Promise((r) => setTimeout(r, WAIT_S * 1000));
-          return ctx.evalJson(tab, EXTRACT(60_000));
+          return ctx.snippetJson(tab, "extractPageText", { max: 60_000 });
         });
       } catch (e) {
         err = String(e?.message || e);

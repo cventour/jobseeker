@@ -10,9 +10,13 @@
 //   POST /bridge/call  {method, params, timeoutMs}  Authorization: Bearer <data/.bridge.token>
 //                                       → { ok, result } | { ok:false, error }; 503 = no extension
 //
-// Methods: ping, listTabs, evalInTab, openTab, closeTabsByUrlPrefix, tabLoading. The extension
-// JSON-stringifies any non-string page result, so evalInTab returns exactly what the AppleScript
+// Methods: ping, listTabs, runSnippet, openTab, closeTabsByUrlPrefix, tabLoading. The extension
+// JSON-stringifies any non-string page result, so runSnippet returns exactly what the AppleScript
 // path returns — a string — and the composites in ./snippets.mjs need no per-driver branches.
+//
+// There is no evalInTab on this transport. Sending JavaScript as a STRING cannot work under
+// Manifest V3 — measured on Chrome 152, see evalInTab() below — so Node names a snippet the
+// extension already ships (extension/snippets.js) and both platforms run the same function.
 //
 // Same read-only surface as the macOS driver: no typing, no form submission, no general clicking.
 // The bridge exposes only the methods listed above, so the constraint holds on the wire as well.
@@ -321,14 +325,15 @@ async function tabIdOf(tab) {
 }
 
 /**
- * Run an extraction snippet in a tab and return its value as a string.
- * The snippet MUST be read-only. Return a JSON string for anything structured.
+ * Run a NAMED snippet from extension/snippets.js in a tab and return its value as a string.
+ * The snippet MUST be read-only. It returns a JSON string for anything structured, so this returns
+ * exactly what the AppleScript driver returns and the composites need no per-driver branches.
  */
-export async function evalInTab(tab, js, { timeoutMs = 30_000 } = {}) {
+export async function runSnippet(tab, name, args = {}, { timeoutMs = 30_000 } = {}) {
   const tabId = await tabIdOf(tab);
   let r;
   try {
-    r = await call("evalInTab", { tabId, js, timeoutMs }, { timeoutMs });
+    r = await call("runSnippet", { tabId, name, args: args ?? {}, timeoutMs }, { timeoutMs });
   } catch (e) {
     const msg = String(e?.message || e);
     if (/timed out|timeout/i.test(msg)) {
@@ -339,11 +344,30 @@ export async function evalInTab(tab, js, { timeoutMs = 30_000 } = {}) {
           "guaranteed to be live."
       );
     }
-    throw new Error(`evalInTab failed: ${msg}`);
+    throw new Error(`snippet "${name}" failed: ${msg}`);
   }
   const v = r && r.value;
   if (v === null || v === undefined) return "";
   return typeof v === "string" ? v : JSON.stringify(v);
+}
+
+/**
+ * Raw string evaluation — IMPOSSIBLE on this transport, and refused here rather than at the far end.
+ *
+ * Measured on Windows 11, Chrome 152.0.7977.83, with the extension loaded and paired: on
+ * https://web.whatsapp.com/ (a host in the extension's own host_permissions) all three routes were
+ * refused — "this page's Content Security Policy refuses string evaluation (ISOLATED/eval,
+ * ISOLATED/function, MAIN/eval)". Indirect eval and new Function are governed by the extension's own
+ * MV3 CSP in the isolated world; the MAIN world is governed by the page's. Nothing about that is
+ * per-site or per-version enough to be worth retrying, so the honest answer is a clear error at the
+ * call site instead of a bridge round-trip that always fails.
+ */
+export async function evalInTab() {
+  throw new Error(
+    "the JobSeeker Bridge cannot evaluate JavaScript sent as a string: Manifest V3 refuses it in the " +
+      "isolated world and the page's CSP refuses it in the main world (measured on Chrome 152). " +
+      "Use runSnippet(tab, name, args) with a snippet from extension/snippets.js."
+  );
 }
 
 export async function openTab(url) {
@@ -434,6 +458,7 @@ export const driver = {
   ensureChrome,
   chromeRunning,
   listTabs,
+  runSnippet,
   evalInTab,
   openTab,
   closeTabsByUrl,

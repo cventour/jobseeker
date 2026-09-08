@@ -35,19 +35,10 @@ if (!url || !/^https?:\/\//i.test(url)) {
   process.exit(64);
 }
 
-// Extract visible text, not markup. Scripts, styles and nav chrome are stripped so a scout reads the
-// listing rather than a page of boilerplate.
-const EXTRACT = `
-(function () {
-  try {
-    var kill = document.querySelectorAll('script,style,noscript,svg,iframe');
-    for (var i = 0; i < kill.length; i++) kill[i].remove();
-    var main = document.querySelector('main,[role="main"],#content,.careers,.jobs') || document.body;
-    var t = (main.innerText || '').replace(/\\n{3,}/g, '\\n\\n').trim();
-    return JSON.stringify({ title: document.title || '', href: location.href, text: t.slice(0, ${MAX}), length: t.length });
-  } catch (e) { return JSON.stringify({ error: String(e && e.message || e) }); }
-})()
-`.replace(/\n/g, " ");
+// The extraction snippet is not written here any more: `extractPageText` is a real function in
+// extension/snippets.js, shipped by the bridge extension and stringified by the AppleScript driver,
+// so this page read runs identical code on macOS and Windows. (Under Manifest V3 a snippet sent as
+// a string is refused outright — see the note in that file.)
 
 await withBrowser(async (ctx) => {
   // Probe only to turn a permission denial into a precise error. We open our own tab below, so
@@ -59,7 +50,7 @@ await withBrowser(async (ctx) => {
   const out = await ctx.withOwnedTab(url, async (tab) => {
     // Wait for the document to settle, then give client-side rendering a chance.
     await new Promise((r) => setTimeout(r, WAIT_S * 1000));
-    return ctx.evalJson(tab, EXTRACT);
+    return ctx.snippetJson(tab, "extractPageText", { max: MAX });
   });
 
   if (!out || out.error) {
