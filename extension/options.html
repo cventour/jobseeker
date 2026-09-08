@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobSeeker Bridge</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f7f5;
+      --card: #ffffff;
+      --text: #1d1d1b;
+      --muted: #6b6b66;
+      --line: #dedcd6;
+      --accent: #1b6ee8;
+      --accent-text: #ffffff;
+      --ok: #1f7a3a;
+      --warn: #a15d00;
+      --bad: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #17181a;
+        --card: #202225;
+        --text: #ececea;
+        --muted: #9b9b95;
+        --line: #33363b;
+        --accent: #6aa2ff;
+        --accent-text: #0b1830;
+        --ok: #5ccb7a;
+        --warn: #f0b04a;
+        --bad: #ff7a70;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 560px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .lead { color: var(--muted); margin: 0 0 24px; }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    h2 { font-size: 15px; margin: 0 0 8px; }
+    p { margin: 0 0 12px; }
+    p:last-child { margin-bottom: 0; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .status { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+    .dot[data-state="connected"] { background: var(--ok); }
+    .dot[data-state="not-paired"] { background: var(--warn); }
+    .dot[data-state="error"], .dot[data-state="no-bridge"] { background: var(--bad); }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    input {
+      font: inherit;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      width: 140px;
+    }
+    input#code { letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
+    button {
+      font: inherit;
+      font-weight: 600;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .note { min-height: 1.2em; font-size: 13px; margin-top: 8px; }
+    .note[data-kind="ok"] { color: var(--ok); }
+    .note[data-kind="bad"] { color: var(--bad); }
+    code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>JobSeeker Bridge</h1>
+    <p class="lead">Lets the JobSeeker dashboard running on this computer read WhatsApp Web, LinkedIn and careers pages in this Chrome. Nothing leaves this computer, and it can only read; it never types, clicks or submits anything.</p>
+
+    <section>
+      <h2>Status</h2>
+      <div class="status"><span class="dot" id="dot"></span><span id="statusText">Checking…</span></div>
+      <p class="muted" id="statusDetail"></p>
+    </section>
+
+    <section>
+      <h2>Pair with the dashboard</h2>
+      <p class="muted">In the JobSeeker dashboard, open Settings, then Browser, then Connect. It shows a six-digit code. Type it here.</p>
+      <div class="row">
+        <div>
+          <label for="code">Pairing code</label>
+          <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000">
+        </div>
+        <div>
+          <label for="port">Dashboard port</label>
+          <input id="port" inputmode="numeric" value="4319">
+        </div>
+        <div style="align-self:flex-end">
+          <button class="primary" id="connect">Connect</button>
+        </div>
+      </div>
+      <div class="note" id="pairNote"></div>
+    </section>
+
+    <section>
+      <h2>Careers pages</h2>
+      <p class="muted">Out of the box the bridge can read only WhatsApp Web and LinkedIn. To let JobSeeker also read job postings on company careers sites, allow it to read any site. This is read-only, and you can take it back at any time from <code>chrome://extensions</code>.</p>
+      <div class="row">
+        <button id="grantAll">Also let it read careers pages</button>
+        <span class="muted" id="grantState"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Forget pairing</h2>
+      <p class="muted">Removes the pairing token from this Chrome. The dashboard will show a new code the next time you connect.</p>
+      <button id="forget">Forget pairing</button>
+      <div class="note" id="forgetNote"></div>
+    </section>
+
+    <p class="muted">Extension id: <code id="extId"></code></p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

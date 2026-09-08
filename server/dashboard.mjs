@@ -41,6 +41,32 @@ const CONFIG = path.join(ROOT, "config", "job-seeker.config.md");
 const CV_DIR = path.join(ROOT, "templates", "cv");
 const PUBLIC = path.join(ROOT, "public");
 
+// The Chrome-extension bridge (server/bridge.mjs) is how Windows reaches the browser: there is no
+// Apple Events / launchd broker to lean on, so a small extension talks to this server over
+// /bridge/*. The module is loaded dynamically and guarded, so a checkout without it (or a bridge
+// that fails to construct) still gets a working dashboard -- the Settings row then reports it.
+const bridge = await import("./bridge.mjs")
+  .then((mod) => (mod && typeof mod.createBridge === "function" ? mod.createBridge({ dataDir: DATA }) : null))
+  .catch(() => null);
+// The pairing code most recently minted from the UI, kept only until it expires. Minting is a POST;
+// the code is shown on the GET that follows, so it has to live somewhere between the two.
+let pairing = null;
+function activePairing() {
+  if (!pairing) return null;
+  const exp = typeof pairing.expires === "number" ? pairing.expires : Date.parse(pairing.expires);
+  if (Number.isNaN(exp) || exp <= Date.now()) {
+    pairing = null;
+    return null;
+  }
+  return pairing;
+}
+// Where a Connect click should land back. An allow-list -- never a raw Referer.
+const BRIDGE_RETURN = new Map([
+  ["settings", "/settings?tab=setup&sub=system"],
+  ["welcome", "/welcome?step=chrome"],
+  ["setup-step", "/setup-step?step=chrome&back=settings"],
+]);
+
 // Brand assets, served from public/. An explicit allowlist rather than a static file handler:
 // this server has no other GET surface, and a literal map cannot be path-traversed.
 const ASSETS = new Map([
@@ -1971,6 +1997,37 @@ function unfinishedHTML(w, markets) {
     </div>`;
 }
 
+// Windows only: the extension's connection state and, once Connect has been clicked, the two
+// steps that pair it. Shared by Settings and the wizard so the words cannot drift apart.
+function bridgeStateHTML(bs) {
+  if (!bs) return `<span class="bad-pill">bridge unavailable</span>`;
+  if (bs.connected) return `<span class="ok-pill">connected as ${esc(bs.extensionId || "extension")}</span>`;
+  if (bs.paired) return `<span class="bad-pill">paired, extension not running</span>`;
+  return `<span class="bad-pill">not paired</span>`;
+}
+
+function bridgeConnectHTML(back, extraHidden = "") {
+  return `<form method="POST" action="/bridge-mint" class="inline">${extraHidden}
+      <input type="hidden" name="_back" value="${esc(back)}">
+      <button type="submit" class="btn-small">Connect</button></form>`;
+}
+
+function bridgePairingHTML(pair) {
+  if (!pair) return "";
+  const exp = typeof pair.expires === "number" ? pair.expires : Date.parse(pair.expires);
+  const when = Number.isNaN(exp) ? "" : new Date(exp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const folder = path.join(ROOT, "extension");
+  return `<div class="alert warn bridge-pair">
+      <ol>
+        <li>Open <code>chrome://extensions</code>, turn on <b>Developer mode</b>, click <b>Load unpacked</b>
+          and choose this folder:<br><code class="bridge-path" title="Select and copy">${esc(folder)}</code></li>
+        <li>Open the extension's <b>Options</b> and enter this code:
+          <div class="bridge-code">${esc(String(pair.code))}</div>
+          ${when ? `<span class="muted tiny">Expires at ${esc(when)}.</span>` : ""}</li>
+      </ol>
+    </div>`;
+}
+
 function setupHTML(st, criteria, marketNames = [], subReq = "") {
   if (!st) return `<p class="empty">Status unavailable.</p>`;
   const cfg = st.config || {};
@@ -1994,12 +2051,21 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
       actionBtn("probe", "Re-check"),
       canRead ? "" : (b?.blockers || []).join(" "),
     ],
-    [
-      "Browser agent",
-      pill(st.agentInstalled, "installed", "not installed"),
-      actionBtn("install-browser-agent", st.agentInstalled ? "Reinstall" : "Install"),
-      "Lets the scheduled run drive Chrome with a permission that survives Claude Code updates.",
-    ],
+    platform.IS_WIN
+      ? [
+          "Chrome extension",
+          bridgeStateHTML(st.bridge),
+          bridgeConnectHTML("settings", hidden),
+          "Lets the scheduled run read WhatsApp Web and LinkedIn through your Chrome. Windows has no " +
+            "Automation permission, so a small extension stands in for it." +
+            bridgePairingHTML(activePairing()),
+        ]
+      : [
+          "Browser agent",
+          pill(st.agentInstalled, "installed", "not installed"),
+          actionBtn("install-browser-agent", st.agentInstalled ? "Reinstall" : "Install"),
+          "Lets the scheduled run drive Chrome with a permission that survives Claude Code updates.",
+        ],
     [
       "Daily run",
       st.schedInstalled ? `<span class="ok-pill">${esc(st.schedTime)}</span>` : `<span class="bad-pill">not scheduled</span>`,
@@ -2022,21 +2088,25 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
 
   // --- what only you can do -----------------------------------------------------------------
   const manual = [];
-  if (b?.blockers?.some((x) => /Allow JavaScript from Apple Events/i.test(x))) {
-    manual.push([
-      "Chrome setting",
-      "<ol><li>Open Chrome</li><li>Menu bar ▸ View ▸ Developer</li>" +
-        "<li>Click &quot;Allow JavaScript from Apple Events&quot;</li></ol>" +
-        "<p class='muted'>Automating this would need Accessibility permission — control of your whole UI. " +
-        "JobSeeker never asks for that.</p>",
-    ]);
-  }
-  if (b?.apple_events === "denied" || b?.apple_events === "prompt-pending") {
-    manual.push([
-      "macOS Automation",
-      "<ol><li>Open System Settings</li><li>Privacy &amp; Security ▸ Automation</li>" +
-        "<li>Tick <b>Google Chrome</b> under Claude</li></ol>",
-    ]);
+  // Apple Events and the Automation pane do not exist on Windows; there the extension row above is
+  // the whole story.
+  if (!platform.IS_WIN) {
+    if (b?.blockers?.some((x) => /Allow JavaScript from Apple Events/i.test(x))) {
+      manual.push([
+        "Chrome setting",
+        "<ol><li>Open Chrome</li><li>Menu bar ▸ View ▸ Developer</li>" +
+          "<li>Click &quot;Allow JavaScript from Apple Events&quot;</li></ol>" +
+          "<p class='muted'>Automating this would need Accessibility permission — control of your whole UI. " +
+          "JobSeeker never asks for that.</p>",
+      ]);
+    }
+    if (b?.apple_events === "denied" || b?.apple_events === "prompt-pending") {
+      manual.push([
+        "macOS Automation",
+        "<ol><li>Open System Settings</li><li>Privacy &amp; Security ▸ Automation</li>" +
+          "<li>Tick <b>Google Chrome</b> under Claude</li></ol>",
+      ]);
+    }
   }
   // Shown only when a tab actually failed to answer. Chrome discards long-idle background tabs, and
   // a discarded tab has no renderer — so the read fails with the same timeout a missing permission
@@ -2275,6 +2345,7 @@ async function systemStatus() {
       linkedin: ageDays(wm.linkedin),
     },
     profileParsed,
+    bridge: bridge ? bridge.status() : null,
   };
 }
 
@@ -2925,7 +2996,11 @@ ${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcom
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
-<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a></footer>
+<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a>${
+  platform.IS_WIN
+    ? ` <form method="POST" action="/quit" class="inline" style="display:inline"><button type="submit" class="quitbtn">Quit JobSeeker</button></form>`
+    : ""
+}</footer>
 <div id="confirmOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
   <div class="modal confirm-modal">
     <h3 id="confirmTitle"></h3>
@@ -3376,6 +3451,13 @@ table td.wrap:first-child{white-space:normal}
 @media (max-width:720px){.pop{width:min(320px,calc(100vw - 48px))}}
 .alert{padding:11px 14px;border-radius:9px;margin:0 0 18px;font-size:13px;line-height:1.5}
 .alert.warn{background:rgba(214,138,0,.10);box-shadow:inset 3px 0 0 #d68a00}
+/* Chrome-extension pairing (Windows): the folder to load and the code to type, both meant to be read
+   across the room or copied in one select. */
+.bridge-pair ol{margin:6px 0 0;padding-left:20px}
+.bridge-pair li+li{margin-top:8px}
+.bridge-path{display:inline-block;margin-top:4px;padding:3px 7px;user-select:all;-webkit-user-select:all;word-break:break-all}
+.bridge-code{font:700 30px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.18em;margin:6px 0 2px;user-select:all;-webkit-user-select:all}
+.quitbtn{background:transparent;border:0;padding:0;color:var(--mut);font:inherit;cursor:pointer;text-decoration:underline}
 .alert.bad{background:rgba(214,0,60,.10);box-shadow:inset 3px 0 0 #d0224a}
 .alert strong{color:var(--fg)}
 .alert a{color:var(--acc)}
@@ -5577,7 +5659,15 @@ function welcomeStepHTML(key, st, mode = {}) {
           browser. You would be turning off recruiter messages that arrive on WhatsApp or LinkedIn.</em></span></label>
       </div>
       ${
-        canRead
+        platform.IS_WIN
+          ? `<div class="wcard" style="margin-top:12px">
+              <p class="wnote" style="margin:0 0 8px"><b>Chrome extension</b> ${bridgeStateHTML(bridge ? bridge.status() : null)}
+              ${bridgeConnectHTML(solo ? "setup-step" : "welcome")}</p>
+              <p class="wnote" style="margin:0">Windows has no Automation permission, so a small extension
+                lets JobSeeker read the tabs you already have open. Click Connect, then follow the two steps.</p>
+              ${bridgePairingHTML(activePairing())}
+            </div>`
+          : canRead
           ? `<p class="wnote">Chrome is reachable on this Mac.</p>`
           : `<p class="wnote">macOS has not granted Chrome access yet. Saying yes here records the
              decision; the permission itself is one dialog on the first run, and
@@ -5758,6 +5848,7 @@ const WELCOME_CSS = `
 .wsub{color:var(--mut);font-size:13.5px;margin:0 0 16px;max-width:64ch}
 .wsub2{flex:1;min-width:0}
 .wnote{font-size:11.5px;color:var(--mut);margin:9px 0 0;max-width:64ch;line-height:1.6}
+.wcard .bridge-pair{margin-top:10px}
 .wcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .wstack{display:flex;flex-direction:column;gap:14px}
 .wtwo{display:flex;gap:13px;flex-wrap:wrap}.wtwo>*{flex:1;min-width:200px}
@@ -7074,6 +7165,12 @@ function crossSitePost(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
+    // The Chrome extension's own channel. It authenticates with its pairing token, not with the
+    // browser's same-origin labels (an extension origin is never ours), so it is routed before
+    // the CSRF check below ever sees it.
+    if (bridge && url.pathname.startsWith("/bridge/")) {
+      if (bridge.handle(req, res)) return;
+    }
     // First run: if there is no config and no targeting, the dashboard is useless and the user has
     // nowhere obvious to start. Send them to Setup once. Any query string (including the flash
     // params a redirect adds) means they have been somewhere deliberately, so this cannot loop.
@@ -7280,6 +7377,29 @@ async function handlePost(req, res, url) {
   res._returnTab = form._tab || "";
   res._returnSub = form._sub || "";
   res._returnPage = form._page || "";
+  // Mint a pairing code for the Chrome extension and come back to the page that asked.
+  if (url.pathname === "/bridge-mint") {
+    const back = BRIDGE_RETURN.get(String(form._back || "")) || BRIDGE_RETURN.get("settings");
+    if (!bridge) {
+      res.writeHead(303, { Location: back + "&flash=err&msg=" + encodeURIComponent("The extension bridge is not available in this build.") });
+      return res.end();
+    }
+    pairing = await bridge.mintPairingCode();
+    res.writeHead(303, { Location: back });
+    return res.end();
+  }
+  // Windows only: the tray-less desktop launcher has no other way to stop the server. On macOS the
+  // app owns the process and kills it itself, so this route does not exist there.
+  if (url.pathname === "/quit") {
+    if (!platform.IS_WIN) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      return res.end("Not found");
+    }
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("Bye");
+    setTimeout(() => process.exit(0), 200);
+    return;
+  }
   if (url.pathname === "/save-config") {
     try {
       await handleSaveConfig(form);

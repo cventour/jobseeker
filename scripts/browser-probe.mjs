@@ -20,8 +20,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { execFile } from "child_process";
-import { ensureChrome, scriptableTabs } from "./browser.mjs";
+import { IS_WIN } from "../server/platform.mjs";
+import { ensureChrome, scriptableTabs, driver, driverName } from "./browser.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -29,32 +29,6 @@ const DATA = path.join(ROOT, "data");
 const STATUS_FILE = path.join(DATA, ".browser-status.json");
 
 const CDP_PORT = Number(process.env.JOBSEEKER_CDP_PORT || 9333);
-
-// Apple Events to a busy Chrome can take seconds; the first one after idle is the slowest and a
-// cold call has been observed to time out at 10s while the very next one succeeds. So: generous
-// timeout, and one retry before believing a failure.
-function osa(script, { timeoutMs = 25_000 } = {}) {
-  return new Promise((resolve) => {
-    execFile("osascript", ["-e", script], { timeout: timeoutMs }, (err, stdout, stderr) => {
-      if (err) return resolve({ ok: false, err: String(stderr || err.message || err).trim() });
-      resolve({ ok: true, out: String(stdout).trim() });
-    });
-  });
-}
-
-async function osaRetry(script, opts) {
-  const first = await osa(script, opts);
-  if (first.ok) return first;
-  return osa(script, opts);
-}
-
-function sh(cmd) {
-  return new Promise((resolve) => {
-    execFile("/bin/sh", ["-c", cmd], { timeout: 10_000 }, (err, stdout) =>
-      resolve(err ? "" : String(stdout).trim())
-    );
-  });
-}
 
 // A socket that accepts is NOT a ready CDP endpoint — Chrome binds the DevTools HTTP server before
 // it can serve. Require a 200 that parses as JSON and carries a websocket URL.
@@ -75,16 +49,6 @@ async function probeCdp(port) {
 // Unread counts ride along in the tab title ("(11) WhatsApp"), which AppleScript can read with NO
 // extra permission — worth capturing even when we cannot read the messages themselves, because
 // "11 unread and we could not read them" is a far more useful thing to report than silence.
-// Host only — a probe detail that ends up in the digest must not carry query strings, which on a
-// careers or mail tab can hold search terms and ids that are none of this file's business.
-const hostOf = (u) => {
-  try {
-    return new URL(u).host.replace(/^www\./, "");
-  } catch {
-    return "unknown host";
-  }
-};
-
 function unreadFromTitle(title) {
   const m = /^\((\d+)\)/.exec(String(title || "").trim());
   return m ? Number(m[1]) : null;
@@ -104,76 +68,20 @@ async function main() {
     if (!c.running && c.reason) launchReason = c.reason;
   }
 
-  const chromePid = await sh(
-    // See chromeRunning() in browser.mjs: the trailing `$` matched only an argument-less Chrome,
-    // so this reported "not running" against a browser that was open the whole time.
-    "pgrep -f '^/Applications/Google Chrome.app/Contents/MacOS/Google Chrome( |$)' | head -1"
-  );
-  const chromeRunning = Boolean(chromePid);
+  // Everything transport-specific — is Chrome up, can we list tabs, can we run a script in one —
+  // is measured by the driver (browser/applescript.mjs on macOS, browser/extension.mjs on Windows)
+  // and comes back as the same named facts, so the verdict below is written once.
+  const facts = await driver.probe({ launched, scriptableTabs });
+  const chromePid = facts.chrome_pid || "";
+  const chromeRunning = Boolean(facts.chrome_running);
+  const tabs = facts.tabs || [];
+  const appleEvents = facts.apple_events;
+  const appleEventsError = facts.apple_events_error || "";
+  const jsFromAppleEvents = facts.js_from_apple_events;
+  const jsProbeDetail = facts.js_probe_detail || "";
+  const bridge = facts.bridge || null;
 
   const cdp = await probeCdp(CDP_PORT);
-
-  // Tab inventory. Titles and URLs are plain scripting properties — no "Allow JavaScript from
-  // Apple Events" needed — so this works even when content reading does not.
-  let tabs = [];
-  let appleEvents = "unknown";
-  let appleEventsError = "";
-  if (chromeRunning) {
-    // Carries the 1-based window/tab indices, because addressing anything other than the first tab
-    // needs them — and the first tab is precisely what must not be assumed (see the JS probe below).
-    const script =
-      'set out to "" \n' +
-      'tell application id "com.google.Chrome"\n' +
-      "  set wi to 0\n" +
-      "  repeat with w in windows\n" +
-      "    set wi to wi + 1\n" +
-      "    set ai to active tab index of w\n" +
-      "    set ti to 0\n" +
-      "    repeat with t in tabs of w\n" +
-      "      set ti to ti + 1\n" +
-      '      set out to out & wi & "\\t" & ti & "\\t" & ai & "\\t" & (URL of t) & "\\t" & (title of t) & "\\n"\n' +
-      "    end repeat\n" +
-      "  end repeat\n" +
-      "end tell\n" +
-      "return out";
-    let r = await osaRetry(script);
-    // A Chrome we started ourselves is often still settling; give it a few more chances rather
-    // than recording a hard failure on the first stumble.
-    for (let i = 0; i < 3 && !r.ok && launched; i++) {
-      await new Promise((res) => setTimeout(res, 3000));
-      r = await osaRetry(script);
-    }
-    if (r.ok) {
-      appleEvents = "ok";
-      tabs = r.out
-        .split("\n")
-        .map((l) => l.split("\t"))
-        .filter((p) => p.length >= 4 && p[3])
-        .map(([w, t, a, url, title]) => ({
-          window: Number(w),
-          tab: Number(t),
-          active: Number(t) === Number(a),
-          url,
-          title: title || "",
-        }));
-    } else {
-      // Three distinct failures that must not be collapsed into one:
-      //   -1743  the user actively denied Automation, or it was revoked.
-      //   -1712  the event timed out. Unattended, this usually means a TCC consent dialog is on
-      //          screen with nobody to click it. It is the expected 08:00 failure, because the
-      //          grant is keyed to the RESPONSIBLE PROCESS: approving it for Claude does not
-      //          approve it for /bin/bash under launchd. Reporting this as a generic "error" would
-      //          hide a one-click fix behind a shrug.
-      //   other  a real transient.
-      if (/-1743|not authori/i.test(r.err)) appleEvents = "denied";
-      else if (/-1712|timed out/i.test(r.err)) appleEvents = "prompt-pending";
-      else appleEvents = "error";
-      // KEEP THE TEXT. Discarding it produced a real run whose only diagnostic was the generic
-      // "no mechanism available to read page content" — precisely the guessing this probe exists
-      // to end. Trimmed because osascript echoes the whole script back on failure.
-      appleEventsError = String(r.err).replace(/\s+/g, " ").slice(0, 300);
-    }
-  }
 
   const findTab = (host) => tabs.find((t) => t.url.includes(host)) || null;
   const whatsappTab = findTab("web.whatsapp.com");
@@ -181,70 +89,16 @@ async function main() {
   // The message list lives ONLY here. Any other LinkedIn page carries the badge but no threads.
   const linkedinMsgTab = findTab("linkedin.com/messaging");
 
-  // Can we read PAGE CONTENT via Apple Events?
-  //
-  // The question is whether the MECHANISM works, so ANY tab that answers proves it. Probing a
-  // single hardcoded `tab 1 of window 1` answered a different and useless question — "is whatever
-  // happens to be leftmost responsive right now" — and got it wrong in both directions:
-  //   * a chrome:// or New Tab page refuses injected JS regardless of permission;
-  //   * a heavy SPA leaves the Apple Event pending until it times out. On 2026-08-17 tab 1 was a
-  //     careers portal that took the full timeout, so the run reported "cannot read pages", the
-  //     digest told the user WhatsApp and LinkedIn were unreadable, and job-run.sh skipped the
-  //     board sweep entirely — while reading actually worked fine on every other tab.
-  // So: walk several scriptable tabs with a short timeout each, and stop at the first success.
-  // A denial or a disabled setting is instant and applies to every tab, so it still surfaces.
-  const JS_PROBE_TABS = 5;
-  const JS_PROBE_TIMEOUT_MS = 8000; // a trivial `1` on a healthy tab answers in milliseconds
-  let jsFromAppleEvents = "unknown";
-  let jsProbeDetail = "";
-  const candidates = scriptableTabs(tabs);
-  if (appleEvents === "ok" && !tabs.length) {
-    jsProbeDetail = "no tabs open";
-  } else if (appleEvents === "ok" && !candidates.length) {
-    // Not a permission failure: there is simply nothing injectable open (a cold Chrome sitting on
-    // the New Tab Page). Saying "cannot read" here would be a guess dressed as a measurement.
-    jsFromAppleEvents = "unknown";
-    jsProbeDetail = `no http(s) tab among ${tabs.length} open — permission untested, not denied`;
-  } else if (appleEvents === "ok") {
-    const tried = [];
-    for (const t of candidates.slice(0, JS_PROBE_TABS)) {
-      const r = await osa(
-        `tell application id "com.google.Chrome" to execute (tab ${t.tab} of window ${t.window}) javascript "1"`,
-        { timeoutMs: JS_PROBE_TIMEOUT_MS }
-      );
-      if (r.ok) {
-        jsFromAppleEvents = "on";
-        jsProbeDetail = `succeeded on ${hostOf(t.url)}${tried.length ? ` after ${tried.length} unresponsive tab(s)` : ""}`;
-        break;
-      }
-      // Conclusive for the whole browser — no point asking four more tabs.
-      if (/Allow JavaScript from Apple Events|turned off/i.test(r.err)) {
-        jsFromAppleEvents = "off";
-        jsProbeDetail = "Chrome reports the Apple Events JavaScript setting is off";
-        break;
-      }
-      if (/-1743|not authori/i.test(r.err)) {
-        jsFromAppleEvents = "denied";
-        jsProbeDetail = "Automation permission denied";
-        break;
-      }
-      tried.push(`${hostOf(t.url)} (${/-1712|timed out/i.test(r.err) ? "timed out" : "error"})`);
-    }
-    if (jsFromAppleEvents === "unknown") {
-      jsFromAppleEvents = "error";
-      jsProbeDetail = `tried ${tried.length} tab(s), none responded: ${tried.join(", ")}`.slice(0, 300);
-    }
-  }
-
   // The capability layer — what callers should actually branch on.
-  const canReadPages = cdp.up || jsFromAppleEvents === "on";
+  const driverReads = Boolean(facts.read_mechanism) && facts.read_mechanism !== "none";
+  const canReadPages = cdp.up || driverReads;
   const capabilities = {
     // Reading WhatsApp/LinkedIn message CONTENT. Distinct from sending, below.
     read_page_content: canReadPages,
     // Which mechanism would serve it. null when none can.
-    read_mechanism: cdp.up ? "cdp" : jsFromAppleEvents === "on" ? "apple-events" : null,
+    read_mechanism: cdp.up ? "cdp" : driverReads ? facts.read_mechanism : null,
     // Listing open tabs, titles and unread badges. Much weaker, but works with no extra grant.
-    enumerate_tabs: appleEvents === "ok",
+    enumerate_tabs: appleEvents === "ok" || Boolean(bridge?.connected),
     // Deliberately recorded so no digest ever again claims a browser failure blocked delivery:
     // sending goes over the WhatsApp MCP and never touches a browser.
     send_whatsapp: "independent-of-browser",
@@ -259,13 +113,26 @@ async function main() {
   if (appleEvents === "prompt-pending")
     blockers.push(
       "Apple Events timed out, most likely an unanswered Automation consent dialog. The grant is per " +
-        "responsible-app, so approving it for Claude does NOT cover the launchd run: run " +
-        "`launchctl start com.jobseeker.jobrun` once while you are at the Mac and click Allow."
+        "responsible-app, so approving it for Claude does NOT cover the scheduled run: " +
+        (IS_WIN
+          ? "use Settings ▸ Run now once while you are at the PC and click Allow."
+          : "run `launchctl start com.jobseeker.jobrun` once while you are at the Mac and click Allow.")
     );
   if (jsFromAppleEvents === "off")
     blockers.push(
       "Chrome: View > Developer > Allow JavaScript from Apple Events is OFF — one-time toggle, no restart"
     );
+  // The extension driver has two states worth naming, and each has one fix.
+  if (bridge && !bridge.connected) {
+    blockers.push(
+      bridge.paired
+        ? "JobSeeker Bridge extension is not connected (is Chrome running with the extension enabled?). " +
+            "Load the JobSeeker Bridge extension and connect it from Settings ▸ Browser" +
+            (bridge.error ? ` — ${bridge.error}` : "")
+        : "Load the JobSeeker Bridge extension and connect it from Settings ▸ Browser" +
+            (bridge.reachable ? "" : " (the bridge is not running — start the dashboard or `npm run bridge`)")
+    );
+  }
   // Every remaining failure must name ITSELF. A generic fallback here is how a real morning was
   // lost with nothing in the digest but "no mechanism available".
   if (launchReason) blockers.push(launchReason);
@@ -291,8 +158,12 @@ async function main() {
   }
   if (!canReadPages && !blockers.length) {
     blockers.push(
-      `no mechanism available to read page content (apple_events=${appleEvents}, ` +
-        `js_from_apple_events=${jsFromAppleEvents}, cdp=${cdp.up ? "up" : "down"})`
+      IS_WIN
+        ? `no mechanism available to read page content (bridge=${bridge?.connected ? "connected" : "not connected"}, ` +
+            `cdp=${cdp.up ? "up" : "down"}) — load the JobSeeker Bridge extension and connect it from ` +
+            "Settings ▸ Browser, then use Settings ▸ Run now"
+        : `no mechanism available to read page content (apple_events=${appleEvents}, ` +
+            `js_from_apple_events=${jsFromAppleEvents}, cdp=${cdp.up ? "up" : "down"})`
     );
   }
 
@@ -302,6 +173,9 @@ async function main() {
     // Surfaced so a browser that appeared "by itself" overnight is never a mystery to the user.
     chrome_launched_by_us: launched,
     chrome_pid: chromePid || null,
+    // Which transport measured this: "applescript" (macOS) or "extension" (Windows bridge).
+    driver: driverName,
+    ...(bridge ? { bridge } : {}),
     cdp,
     apple_events: appleEvents,
     apple_events_error: appleEventsError || null,
