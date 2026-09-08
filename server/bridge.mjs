@@ -215,12 +215,28 @@ export function createBridge({
 
   const connected = () => lastSeen > 0 && Date.now() - lastSeen < connectedWindowMs;
 
-  /** Bearer token must match; for the extension's own endpoints the Origin must be the pinned one too. */
+  /**
+   * The bearer token is the authentication. The pinned origin is a second opinion, and it is only
+   * consulted when the browser actually offers one.
+   *
+   * That distinction is load-bearing. An extension with host permissions for this port does not
+   * make a CORS request, so Chrome sends an `Origin` header on the pairing POST and sends none on
+   * the polling GET. Demanding it on every request meant the extension paired, was refused 403 on
+   * its very first poll, concluded the pairing had been revoked, threw its token away, and sat
+   * there checking status forever. Measured on Chrome 152: paired, then never polled again.
+   *
+   * So a request that carries an origin must carry the right one, and a request that carries none
+   * is judged on its token alone. The token is a 32-byte secret readable only by processes that can
+   * already read this user's data directory, which is the same trust boundary the rest of JobSeeker
+   * has.
+   */
   async function authenticate(req, { requireOrigin }) {
     if (!safeEqual(bearer(req), await getToken())) throw new HttpError(403, "bad or missing token");
     if (requireOrigin) {
       const e = await getExt();
-      if (!e || req.headers.origin !== e.extensionId) throw new HttpError(403, "origin is not the paired extension");
+      if (!e) throw new HttpError(403, "no extension has paired with this bridge yet");
+      const origin = req.headers.origin;
+      if (origin && origin !== e.extensionId) throw new HttpError(403, "origin is not the paired extension");
     }
   }
 

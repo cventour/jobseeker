@@ -8,6 +8,7 @@ const STATE_TEXT = {
   "no-bridge": "No JobSeeker dashboard found on this computer",
   "not-paired": "Dashboard found, not paired yet",
   connected: "Connected to the dashboard",
+  refused: "The dashboard refused this pairing",
   error: "Connected, but the last request failed",
 };
 

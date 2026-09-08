@@ -348,8 +348,17 @@ async function runLoop() {
           break; // back to discovery with backoff
         }
         if (res.status === 403) {
-          await chrome.storage.local.remove("token");
-          await setStatus({ state: "not-paired", port, lastError: "the dashboard no longer recognises this pairing" });
+          // Stop, and say so, but KEEP the token. A refusal is not proof the pairing is gone: the
+          // dashboard may have been restarting mid-request, or another JobSeeker may have answered
+          // on this port for a moment. Deleting the credential on a single refusal turns a blip
+          // into "set it up again", and the user has no way to tell the two apart. Forgetting a
+          // pairing is a decision, so it stays on the Forget button in the options page.
+          await setStatus({
+            state: "refused",
+            port,
+            lastError:
+              "the dashboard refused this pairing. If this persists, use Forget pairing and connect again.",
+          });
           return;
         }
         if (res.status === 204) {

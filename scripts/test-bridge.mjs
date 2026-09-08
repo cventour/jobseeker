@@ -131,6 +131,12 @@ async function main() {
   s = await (await api("/bridge/status")).json();
   check("rejected polls do not count as seen", s.connected === false && s.lastSeen === null);
 
+  // Chrome sends an Origin on the pairing POST and none on the polling GET, because an extension
+  // holding host permissions for this port is not making a CORS request. Rejecting the header's
+  // absence is what made a real, correctly paired extension throw its token away and stop.
+  r = await api("/bridge/poll", { headers: { authorization: `Bearer ${token}` } });
+  check("poll with the right token and NO Origin is accepted", r.status === 204 || r.status === 200, `got ${r.status}`);
+
   // An idle poll is held, then released with 204.
   let t0 = Date.now();
   r = await api("/bridge/poll", { headers: auth });
