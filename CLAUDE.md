@@ -42,6 +42,9 @@ Natural request → what to run:
 - **Chrome is a serial resource** — only ever one Chrome-driving agent at a time (AGENT-RULES §13).
 - **Never send a message or submit an application without an approved approval.** Scheduled runs queue
   approvals; they never auto-apply or auto-send.
+- **Never run `bash scripts/<x>.sh` directly.** Use `npm run <script>` or
+  `node scripts/run.mjs <name>`: `server/platform.mjs` picks the right twin — `scripts/<name>.sh` on
+  macOS, `scripts\win\<name>.ps1` on Windows. Naming a shell breaks the Windows install.
 - **Personal settings live in `config/job-seeker.config.md` (gitignored), not in code or rules.**
   `company_aliases` folds an employer's alternate names into one canonical entry; `ignored_chats`
   lists group chats that must never be logged. Both are read automatically — never hardcode either.

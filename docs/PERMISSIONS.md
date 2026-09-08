@@ -1,4 +1,4 @@
-# macOS permissions
+# Permissions
 
 **Short version: run `npm run setup` once.** It checks prerequisites, installs the browser agent,
 triggers each permission prompt at the right moment, and — importantly — **verifies the result rather
@@ -8,7 +8,68 @@ than trusting it**. Everything below is the reference for when something needs f
 npm run setup
 ```
 
-The steps it cannot do for you are two Chrome settings. Both are one-time.
+The two operating systems need different things, and this page covers both:
+
+- **[Windows](#windows--no-permissions-to-grant)** — nothing to grant in System Settings. Chrome is
+  read through the JobSeeker Bridge extension, which you load once and pair with a code.
+- **macOS** — sections 1 to 4 below, plus "Why 'forever' needs an agent" and "The permissions are
+  not granted to Node". **All of that is macOS-only** and does not apply on Windows.
+
+The troubleshooting table at the end covers both.
+
+---
+
+## Windows — no permissions to grant
+
+Windows has no TCC and no Apple Events, so there is **nothing to approve in System Settings**. There
+is no Automation grant, no consent dialog, and no per-binary permission to re-approve after a Claude
+Code update.
+
+What stands in for it is the **JobSeeker Bridge** Chrome extension. It runs in your own Chrome, in
+your own profile, and talks to the dashboard on `127.0.0.1` only. Full detail — the protocol, the
+method allowlist, and what the extension cannot do — is in
+[`extension/README.md`](../extension/README.md).
+
+**Load it, once:**
+
+1. Open `chrome://extensions`.
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked** and choose this repository's `extension/` folder.
+
+Chrome shows a "Disable developer mode extensions" bar on every start while an unpacked extension is
+loaded. Dismiss it; it comes back next start.
+
+**Pair it, once:**
+
+1. Start the dashboard (`npm run dashboard`).
+2. Open **Settings ▸ Browser ▸ Connect**. It shows a six-digit code, good for five minutes.
+3. Open the extension's options (`chrome://extensions` ▸ JobSeeker Bridge ▸ Details ▸ Extension
+   options), type the code and click **Connect**.
+
+The setup wizard's Chrome step offers the same code. Pairing writes a token to `data/.bridge.token`
+and pins the extension's `chrome-extension://` origin, so a stray web page cannot pair in its place.
+
+**Careers pages need one more click.** By default the extension may read `web.whatsapp.com` and
+`www.linkedin.com` (plus `127.0.0.1` and `localhost`) — enough for WhatsApp and LinkedIn. Reading job
+postings on company careers sites needs the optional **"Also let it read careers pages"** grant
+(`<all_urls>`) from the extension's options page; Chrome asks you to confirm. It is still read-only,
+and the same button takes it back. Without it, a careers-page read fails with a message telling you
+to grant it there.
+
+**Chrome Memory Saver still matters on Windows** — see section 3. Discarded background tabs have no
+renderer, so an extension read of one fails exactly as an Apple Event read does.
+
+Check the current state at any time with `npm run browser:probe`. It writes
+`data/.browser-status.json` with `driver: "extension"` and a `bridge` block
+(`reachable`, `paired`, `connected`). The Apple Events fields read `not-applicable`.
+
+---
+
+## macOS
+
+Everything from here to the troubleshooting table is macOS-only.
+
+The steps `npm run setup` cannot do for you are two Chrome settings. Both are one-time.
 
 **Let JobSeeker read page content:**
 
@@ -32,7 +93,7 @@ npm run browser:probe
 
 ---
 
-## Why "forever" needs an agent
+## Why "forever" needs an agent (macOS)
 
 macOS keys Automation permission to the **responsible process**, and for an interactive Claude Code
 session that is `~/.local/share/claude/versions/<version>/claude` — a version-pinned binary with no
@@ -62,7 +123,7 @@ caller ──► scripts/browser-do.mjs ──► launchctl kickstart ──► 
 `browser-do.mjs` falls back to running in-process if the agent is not installed, so nothing breaks
 on a fresh clone — you just get prompted more often.
 
-## The permissions are not granted to Node
+## The permissions are not granted to Node (macOS)
 
 This surprises people, and it is the thing to understand before the rest makes sense.
 
@@ -128,7 +189,7 @@ the 08:00 scheduled run never depends on it.
 
 ---
 
-## 2. Allow JavaScript from Apple Events — Chrome
+## 2. Allow JavaScript from Apple Events — Chrome (macOS)
 
 **Chrome menu bar ▸ View ▸ Developer ▸ Allow JavaScript from Apple Events**
 
@@ -145,7 +206,7 @@ by hand.
 
 ---
 
-## 3. Chrome Memory Saver
+## 3. Chrome Memory Saver (both platforms)
 
 **Keep the WhatsApp and LinkedIn tabs active.**
 
@@ -179,6 +240,9 @@ for (const p of fs.readdirSync(dir)) {
 }'
 ```
 
+(That check reads Chrome's macOS preferences path. On Windows, set the exemptions the same way in
+`chrome://settings/performance` and confirm with `npm run browser:probe`.)
+
 Both `web.whatsapp.com` and `linkedin.com` should be listed. **Check every profile it prints** — the
 active profile is often not `Default` (it may be `Profile 3` or similar), and the setting only
 applies to the profile it was made in.
@@ -202,7 +266,7 @@ holds your WhatsApp Web linked-device session, which would put you back at a QR 
 
 ---
 
-## 4. DarkWake — why Chrome sometimes never opens at all
+## 4. DarkWake — why Chrome sometimes never opens at all (macOS)
 
 Not a permission either, and not something `npm run setup` can fix, but it produces the single most
 confusing failure this project has: **the digest reports "no Chrome this run", `chrome_launched_by_us`
@@ -236,7 +300,9 @@ node -e 'console.log(require("./data/.browser-status.json"))'
 
 ## What JobSeeker does NOT need
 
-Worth stating, because these are the permissions people assume an automation like this wants:
+Worth stating, because these are the permissions people assume an automation like this wants. The
+first three are macOS names; on Windows there is no equivalent to grant at all, and the last two rows
+apply on both platforms:
 
 | Not required | Why |
 |---|---|
@@ -263,6 +329,19 @@ failure.
 | `chrome_running: false` with a blocker | Chrome is closed and could not be started | Check `JOBSEEKER_CHROME_AUTOLAUNCH` is not set to `0` |
 | `read_page_content: true` | Everything is working | — |
 
+The first four rows are macOS. On Windows the probe reports `apple_events: "not-applicable"` and
+names the bridge state instead:
+
+| Probe says | Meaning | Fix |
+|---|---|---|
+| blocker `Load the JobSeeker Bridge extension and connect it from Settings ▸ Browser`, with `bridge.paired: false` | The extension has never been paired — there is no `data/.bridge.token` | Load `extension/` unpacked, then pair from **Settings ▸ Browser ▸ Connect** (see the Windows section above) |
+| the same blocker with `(the bridge is not running — start the dashboard or ``npm run bridge``)` appended | Nothing is listening on loopback for the extension to poll | Start the dashboard (`npm run dashboard`), or run `npm run bridge` |
+| blocker `JobSeeker Bridge extension is not connected (is Chrome running with the extension enabled?)`, with `bridge.paired: true` | Paired, but the extension is not polling — Chrome is closed, or the extension is disabled or was removed | Open Chrome; check the extension is enabled in `chrome://extensions`. `js_probe_detail` reads `extension paired but not connected` |
+| blocker `Chrome was launched but the JobSeeker Bridge extension never connected within …s` | Chrome was started for you but the extension never came up | Same fix as the row above; the blocker carries the last state it saw |
+| `JobSeeker Bridge rejected the pairing token` | The token and the extension no longer agree | Re-pair from **Settings ▸ Browser ▸ Connect** |
+| A careers page fails but WhatsApp and LinkedIn work | The optional all-sites grant is missing | Extension options ▸ **"Also let it read careers pages"** |
+| blocker `no mechanism available to read page content (bridge=not connected, …)` | Nothing can read pages this run | Connect the extension, then use **Settings ▸ Run now** |
+
 A run that cannot read pages is **not** a failed run. It completes, records the gap in
 `coverage`, and the digest names the blocker. Unread channels then age visibly through
 `browser_debt` in `npm run audit` rather than disappearing.
@@ -270,7 +349,9 @@ A run that cannot read pages is **not** a failed run. It completes, records the 
 ## Privacy note
 
 These grants are real: Automation access to Chrome means JobSeeker can read any page you have open,
-including authenticated ones. That is inherent to reading WhatsApp Web and LinkedIn at all. What
+including authenticated ones. On Windows the extension is the same shape of access, bounded to the
+sites it holds host permissions for — WhatsApp Web and LinkedIn by default, every site once you grant
+the optional careers-pages permission. That is inherent to reading WhatsApp Web and LinkedIn at all. What
 bounds it is that the browser API exposes navigation, extraction, and one narrow conversation-row
 click that cannot reach a button, input or form — never general clicking, typing or
 submitting — and that the sweep records message content **only** for threads carrying a job-search

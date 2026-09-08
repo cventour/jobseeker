@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Send one message you have already approved, from the dashboard.
+# Windows twin: scripts/win/send-approval.ps1 — change both together.
 #
 #   bash scripts/send-approval.sh appr_ab12cd
 #

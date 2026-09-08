@@ -383,30 +383,37 @@ unreadable, which makes the work *harder* to act on — the opposite of the poin
   that is a queue, not a bigger wave: as each agent reports back, start the next queued one. A run
   that covers 6 markets in two waves is only marginally slower than one that tries all 6 at once,
   and it is the difference between a completed run and a dead machine.
-- **`scripts/rss-guard.sh <pid>` is the backstop.** `scripts/job-run.sh` starts it automatically for
-  scheduled runs; it kills any descendant over 4 GB and aborts the run if the tree passes 12 GB.
+- **`npm run guard -- <pid>` is the backstop** (`scripts/rss-guard.sh`, or `scripts/win/rss-guard.ps1`
+  on Windows). The run entrypoint starts it automatically for scheduled runs; it kills any descendant over 4 GB and aborts the run if the tree passes 12 GB.
   For a long interactive session, run it by hand against that session's pid.
 - **Writes to `data/` are safe to parallelize.** `server/record.mjs` takes a lock on `data/` and
   writes atomically (temp file + rename), so concurrent agents cannot lose each other's rows or
   leave a half-written table. This is what makes the fan-outs in `/track`, `/curate`, `/markets`,
   and `/job-run` safe — it is NOT safe to hand-edit `data/` alongside them (rule 3 already forbids that).
-- **Apple Events is the DESIGNED browser mechanism, not a fallback — never recommend CDP.**
+- **The DESIGNED browser mechanism is Apple Events on macOS and the JobSeeker Bridge extension on
+  Windows — never a fallback, and never CDP.**
   A digest once suggested *"restarting Chrome with remote debugging enabled would restore the faster
-  path"*. That advice is wrong and actively harmful, and must never appear again:
+  path"*. That advice is wrong and actively harmful on both platforms, and must never appear again:
   * Chrome 136+ **refuses** `--remote-debugging-port` when the profile directory is the default one
     (verified on Chrome 150). Restarting to get a port means landing on a **different profile** —
     which means WhatsApp shows a **QR code** and the linked device is gone. That is the single
     outcome this whole design exists to prevent.
   * An open CDP port lets **any local process** drive the browser with the user's full authenticated
     identity, with no per-site gate.
-  So `cdp: down` / `"no listener"` is the **correct, intended** state. Report it as normal, never as
-  a defect, and never propose enabling it. Likewise, the Claude-in-Chrome MCP tools being absent in a
-  scheduled run is expected — they are interactive-only — not something to fix.
+  So `cdp: down` / `"no listener"` is the **correct, intended** state on both platforms. Report it as
+  normal, never as a defect, and never propose enabling it. Likewise, the Claude-in-Chrome MCP tools
+  being absent in a scheduled run is expected — they are interactive-only — not something to fix.
+  On Windows, `apple_events: "not-applicable"` is equally correct and equally not a defect: the
+  transport there is the Bridge extension (`scripts/browser/extension.mjs` over `server/bridge.mjs`),
+  paired once from the dashboard's Settings ▸ Browser ▸ Connect. Reporting the extension as unpaired
+  or not connected is a setup step to name, not a browser failure to diagnose.
 - **Chrome is auto-STARTED when closed, and never stopped, restarted, or flagged.**
-  `ensureChrome()` in `scripts/browser.mjs` runs `open -g -a "Google Chrome"` — background, through
-  LaunchServices, with **no command-line flags at all**, which is byte-identical to how macOS starts
-  it at login. Flags are what would risk a different profile, and a different profile means WhatsApp
-  shows a QR code. Verified no-op when Chrome is already up (same pid, same tabs, one instance), so
+  `ensureChrome()` in `scripts/browser.mjs` launches Chrome with **no command-line flags at all** on
+  both platforms: `open -g -a "Google Chrome"` on macOS (background, through LaunchServices,
+  byte-identical to how macOS starts it at login), and plain `chrome.exe` on Windows, letting Chrome
+  pick its own last-used profile. Flags are what would risk a different profile, and a different
+  profile means WhatsApp shows a QR code — and on Windows it would also mean a Chrome without the
+  Bridge extension loaded, which can never be read from. Verified no-op when Chrome is already up (same pid, same tabs, one instance), so
   it can never disturb a running browser. `data/.browser-status.json` records
   `chrome_launched_by_us`, so a browser that appeared overnight is never a mystery.
   Never quit or relaunch Chrome to obtain a capability: Chrome 150 refuses a debugging port on the
@@ -471,7 +478,9 @@ So, before writing `access: none`:
   ```
   node server/record.mjs list-boards needs-browser
   ```
-  **Use the Apple Events path, NOT the Chrome MCP tools.** `mcp__claude-in-chrome__*` exists only in
+  **Use the browser-do path, NOT the Chrome MCP tools.** That path is Apple Events on macOS and the
+  Bridge extension on Windows; either way `browser-do.mjs` is the entry point.
+  `mcp__claude-in-chrome__*` exists only in
   an interactive session; a scheduled `claude -p` run does not have it. Telling an agent to "switch
   to Chrome" while its only Chrome tools were absent is why this queue reached 45 boards without one
   of them ever being read. What works in both:

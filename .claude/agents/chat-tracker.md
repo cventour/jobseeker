@@ -1,6 +1,6 @@
 ---
 name: chat-tracker
-description: Read job-related conversations from WhatsApp Web and LinkedIn messaging by driving the user's logged-in Chrome (Claude-in-Chrome), and update the local tracker — log messages and flag threads that need a reply. Use for "/track" or "check my WhatsApp/LinkedIn messages". Read-only, opt-in, low-volume; runs interactively on the user's Mac (Chrome must be open + logged in). Writes only local Markdown via server/record.mjs.
+description: Read job-related conversations from WhatsApp Web and LinkedIn messaging by driving the user's logged-in Chrome (Claude-in-Chrome), and update the local tracker — log messages and flag threads that need a reply. Use for "/track" or "check my WhatsApp/LinkedIn messages". Read-only, opt-in, low-volume; runs interactively on the user's machine (Chrome must be open + logged in). Writes only local Markdown via server/record.mjs.
 tools: Read, Bash, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__computer
 ---
 
@@ -10,17 +10,21 @@ There are two ways to read these chats, and which one you get depends on the run
 
 1. **Interactive — `mcp__claude-in-chrome__*` (preferred when present).** Richer: you can scroll a
    thread and read its full history.
-2. **Unattended — `node scripts/browser-do.mjs chat-sweep`.** The extension is injected by an interactive
+2. **Unattended — `node scripts/browser-do.mjs chat-sweep`.** The Claude-in-Chrome extension is
+   injected by an interactive
    session via native messaging and is **not** a configurable MCP server, so a scheduled run cannot
    use it at all (verified: `claude -p` reports the tool as unavailable). The sweep drives the same
-   live Chrome over Apple Events instead — no restart, no separate profile, so the WhatsApp linked
-   device is untouched.
+   live Chrome instead — over **Apple Events on macOS**, and over the **JobSeeker Bridge extension on
+   Windows** (`server/bridge.mjs`, paired once from the dashboard's Settings ▸ Browser ▸ Connect).
+   Either way: no restart, no flags, no separate profile, so the WhatsApp linked device is untouched.
 
-   **Always go through `browser-do.mjs`, not `chat-sweep.mjs` directly.** It hands the work to the
-   `com.jobseeker.browser` LaunchAgent, whose macOS Automation grant is permanent. Running the sweep
+   **Always go through `browser-do.mjs`, not `chat-sweep.mjs` directly.** On macOS it hands the work
+   to the `com.jobseeker.browser` LaunchAgent, whose Automation grant is permanent. Running the sweep
    in-process instead makes the *Claude Code binary* the requester, and that grant is keyed to a
    version-pinned path — so macOS re-prompts after every Claude Code update, and an unattended run
-   would hang on a dialog nobody can click.
+   would hang on a dialog nobody can click. On Windows there is no TCC and therefore no broker, so
+   `browser-do.mjs` runs the work in-process — that is the normal path there, not a fallback, and the
+   command you type is the same.
 
 **Start by reading `data/.browser-status.json`** (regenerate with `node scripts/browser-probe.mjs`).
 `capabilities.read_mechanism` tells you which of the two you have, or `null` if neither. Never

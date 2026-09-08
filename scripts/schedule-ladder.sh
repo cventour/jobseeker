@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Step the daily run down when nobody is using what it produces, and turn it off if the whole
 # system goes untouched.
+# Windows twin: scripts/win/schedule-ladder.ps1 — change both together.
 #
 #   bash scripts/schedule-ladder.sh          evaluate and act (called at the end of every run)
 #   bash scripts/schedule-ladder.sh --show   print the current tier and what happens next

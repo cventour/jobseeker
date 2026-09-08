@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Memory watchdog for a job-run (or any Claude Code session).
+# Windows twin: scripts/win/rss-guard.ps1 — change both together.
 #
 # Why this exists: on 2026-07-29 an interactive run fanned out 7 subagents at once. Three extra
 # `claude` processes appeared alongside the session and grew at a steady ~14.5 MB/s each — with

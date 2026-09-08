@@ -17,7 +17,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="Licence: PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/licence-PolyForm--Noncommercial--1.0.0-111?style=flat-square"></a>
   <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-D6F84C?style=flat-square&labelColor=111">
-  <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-111?style=flat-square">
+  <img alt="Platform: macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-111?style=flat-square">
   <a href="https://myjobseeker.ai"><img alt="Website" src="https://img.shields.io/badge/website-myjobseeker.ai-111?style=flat-square"></a>
 </p>
 
@@ -119,9 +119,13 @@ That folder is excluded from version control, so it cannot be published by accid
 
 ## Getting started
 
-**You need:** a Mac, [Google Chrome](https://google.com/chrome),
+**You need:** a Mac or a Windows 10/11 PC, [Google Chrome](https://google.com/chrome),
 [Node 20+](https://nodejs.org), and [Claude Code](https://claude.com/claude-code). Gmail and Google
 Calendar work through Claude Code's own connectors — nothing to install for those.
+
+On Windows you also need [Git for Windows](https://git-scm.com/download/win): Claude Code runs its
+commands through Git's bash. The setup window installs it for you, along with Node, Claude Code and
+optionally Chrome.
 
 **Optional — WhatsApp delivery.** By default the digest and approval prompts sit in the dashboard.
 To have them reach your phone instead, install
@@ -144,7 +148,7 @@ Then, inside Claude Code, pair it to your own WhatsApp:
 `config/job-seeker.config.md`. Skip all of this and JobSeeker still works exactly the same — the
 digest is written to `data/.last-digest.md` and shown in the dashboard either way.
 
-**The short way.** Open Terminal, paste this, press Return:
+**The short way, on a Mac.** Open Terminal, paste this, press Return:
 
 ```bash
 curl -fsSL https://myjobseeker.ai/install.sh | bash
@@ -167,6 +171,25 @@ window to leave open.
 
 Read [`install.sh`](install.sh) before you run it if you like — it is short, and deliberately so.
 
+**The short way, on Windows.** Open PowerShell, paste this, press Return:
+
+```powershell
+irm https://myjobseeker.ai/install.ps1 | iex
+```
+
+It downloads JobSeeker to `%USERPROFILE%\JobSeeker`, makes sure Node is there, and opens a setup
+window. That window is Edge (or Chrome) in `--app` mode — a browser with no tabs and no address bar,
+so it looks like an ordinary window. It shows you what it proposes to install and where each
+download comes from, waits for you to agree, then installs Git for Windows, Claude Code and
+optionally Chrome, writes your settings and starts the dashboard.
+
+It puts a **JobSeeker** shortcut in your Start Menu and on your Desktop; that is how you open it
+afterwards. There is a **Quit JobSeeker** shortcut next to it in the Start Menu, and a Quit button in
+Settings. The install command refuses to run as administrator, and re-running it updates in place and
+leaves `data/` and `config/` alone.
+
+Read [`install.ps1`](install.ps1) before you run it if you like — it is short too.
+
 **The developer way**, which does the same thing with more output:
 
 ```bash
@@ -179,13 +202,20 @@ walks you through the one or two things macOS insists you click yourself, and th
 each one actually worked** rather than assuming. There is nothing to `npm install` — JobSeeker itself
 has zero package dependencies; everything above is Claude Code or the OS, not an npm package.
 
+`npm run setup` is the same command on Windows. It runs `scripts\win\setup.ps1` instead of
+`scripts/setup.sh` — `server/platform.mjs` picks the right one, so you never name a shell. There are
+no permissions to grant on Windows; setup explains how to load and pair the Chrome extension, then
+checks that it worked.
+
 It asks one question that decides how much setup you actually need:
 
 - **Run it manually** (the default) — you run `/job-run` when you want it, nothing runs on its own.
   No background job, no System Settings changes. This is the short path, and the one to start on.
 - **Run it on a schedule** — it goes off at 08:00 and sends you a summary. Because that has to work
   while you are away, it needs a few one-time macOS permissions: an Automation grant for the
-  scheduler specifically, and a Chrome setting or two.
+  scheduler specifically, and a Chrome setting or two. On Windows there is nothing to grant; the
+  Chrome extension has to be loaded and paired instead, and the run only fires while you are logged
+  in.
 
 Start manual. Add the schedule later, in one command, once it has earned some trust:
 
@@ -230,7 +260,7 @@ That is the whole routine. It reads your channels, finds roles, and sends you a 
 You do not need to memorise commands. Address **`jobseeker`** in plain English and it works out what
 to run — and after setup this works in Claude Code from **any** directory, not just this folder
 (setup installs a thin front-door agent into `~/.claude/agents` that defers to this install's own
-playbooks; `scripts/install-global-agent.sh --remove` takes it back out):
+playbooks; `node scripts/run.mjs install-global-agent --remove` takes it back out):
 
 ```text
 jobseeker, check my email and WhatsApp for anything new
@@ -270,14 +300,14 @@ npm run schedule -- 09:00   # move the daily run (--show / --remove)
 - [`.claude/AGENT-RULES.md`](.claude/AGENT-RULES.md) — normative rules every agent follows
 - [`SECURITY.md`](SECURITY.md) — the trust model, what is protected, and what is knowingly exposed
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — the rules that are not negotiable, and why
-- [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) — macOS permissions, what is *not* needed, and troubleshooting
+- [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) — macOS permissions and the Windows Chrome extension, what is *not* needed, and troubleshooting
 - [`docs/SCHEDULER.md`](docs/SCHEDULER.md) — the unattended run
 - [`docs/boards.md`](docs/boards.md) — careers-board quirks
 - [`docs/PLAN.md`](docs/PLAN.md) — the original design (**superseded**, kept for history)
 
 ## Status and scope
 
-Single-user, local, macOS. Built for one person's job search and shaped by its real failures — the
+Single-user, local, macOS and Windows. Built for one person's job search and shaped by its real failures — the
 memory crash, the lost writes, the digest that contradicted itself, the nine runs in a row that
 quietly read nothing. Most of the defensive design here exists because something went wrong first.
 

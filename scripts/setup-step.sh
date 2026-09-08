@@ -1,5 +1,6 @@
 #!/bin/bash
 # One step of the graphical setup, run as a detached child of JobSeeker.app.
+# Windows twin: scripts/win/setup-step.ps1 — change both together.
 #
 #   bash scripts/setup-step.sh check-all      report the state of every prerequisite, change nothing
 #   bash scripts/setup-step.sh node           install Node, then verify it

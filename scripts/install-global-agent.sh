@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Make "jobseeker, ..." work from ANY directory, not only inside this repo.
+# Windows twin: scripts/win/install-global-agent.ps1 — change both together.
 #
 #   bash scripts/install-global-agent.sh            install / refresh
 #   bash scripts/install-global-agent.sh --remove   take it back out

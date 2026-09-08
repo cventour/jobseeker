@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Local scheduler entrypoint for the daily job-search pipeline.
+# Windows twin: scripts/win/job-run.ps1 — change both together.
 # Runs the /job-run slash command headless via the Claude Code CLI, from the repo root, so it has
 # access to the local Markdown state, the agents in .claude/, and the connected MCP servers.
 # Invoked by launchd/cron. See docs/SCHEDULER.md to install.
