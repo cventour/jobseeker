@@ -322,8 +322,15 @@ async function main() {
     "---\nsource_cv: templates/cv/old.pdf\ntitles: Pre-sales Engineer\nseniority: Mid\ndomains: Networking\n---\n\n# Summary\n\nOld.\n");
   await fs.writeFile(path.join(sandbox, "templates", "cv", "old.pdf"), "%PDF-1.4\n");
   await fetch(url("/welcome-parse"), { method: "POST", headers: { origin: `http://127.0.0.1:${PORT}` } });
-  await new Promise((r) => setTimeout(r, 2500));
-  const changed = await get("/setup-step?step=cv&back=settings");
+  // Poll rather than sleep a fixed span. The parse is detached, and starting PowerShell costs far
+  // more than starting bash -- a 2.5s wait passed on macOS and expired on Windows before the twin
+  // had written profile.md. The assertion below is unchanged: if the re-read never lands, the last
+  // body polled still has no "What changed" and the check fails as it always would.
+  let changed = await get("/setup-step?step=cv&back=settings");
+  for (let i = 0; i < 60 && !changed.body.includes("What changed"); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    changed = await get("/setup-step?step=cv&back=settings");
+  }
   check(changed.body.includes("What changed") && changed.body.includes("Pre-sales Engineer"),
     "a re-read shows the old values beside the new ones");
   check(changed.body.includes("keep the score they were given") || changed.body.includes("only future hunts"),
