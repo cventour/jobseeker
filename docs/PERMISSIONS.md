@@ -77,7 +77,10 @@ path is the one to hand to Chrome.
 
 ![The same panel during setup](images/windows-wizard-chrome-step.png)
 
-Then, in Chrome:
+Then, in Chrome. **Load unpacked only appears once Developer mode is on**, which is the step people
+miss:
+
+![Chrome's Extensions page with the Developer mode switch and the Load unpacked button circled](images/windows-chrome-extensions.png)
 
 1. Open `chrome://extensions` and turn on **Developer mode** (top right).
 2. Click **Load unpacked** and choose the folder the dashboard named.

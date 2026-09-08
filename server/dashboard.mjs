@@ -71,6 +71,9 @@ const BRIDGE_RETURN = new Map([
 // this server has no other GET surface, and a literal map cannot be path-traversed.
 const ASSETS = new Map([
   ["/favicon.ico", ["favicon.ico", "image/x-icon"]],
+  // Shown inside the Chrome-extension instructions on Windows, so the reader can match the page in
+  // front of them to the one being described.
+  ["/help-chrome-extensions.png", ["help-chrome-extensions.png", "image/png"]],
   ["/favicon-16.png", ["favicon-16.png", "image/png"]],
   ["/favicon-32.png", ["favicon-32.png", "image/png"]],
   ["/favicon-48.png", ["favicon-48.png", "image/png"]],
@@ -2038,6 +2041,13 @@ function bridgeHowToHTML() {
         <li>Press <b>Connect</b> above for a six-digit code, then enter it in the extension's <b>Options</b>.</li>
       </ol>
       <p class="muted">You only do this once. Chrome does not let a program add an extension for you.</p>
+      <figure class="bridge-shot">
+        <img src="/help-chrome-extensions.png" alt="Chrome's Extensions page, with two things circled: the Developer mode switch at the top right,
+          and the Load unpacked button below it on the left. Once loaded, JobSeeker Bridge appears as a card."
+          loading="lazy" width="1050" height="560">
+        <figcaption>Chrome's Extensions page. Developer mode is the switch top right; Load unpacked appears
+          under it once that is on. After loading, JobSeeker Bridge shows up as a card here.</figcaption>
+      </figure>
     </div>`;
 }
 
@@ -3487,6 +3497,9 @@ table td.wrap:first-child{white-space:normal}
    across the room or copied in one select. */
 .bridge-pair ol{margin:6px 0 0;padding-left:20px}
 .bridge-pair li+li{margin-top:8px}
+.bridge-shot{margin:10px 0 0}
+.bridge-shot img{display:block;width:100%;max-width:560px;height:auto;border:1px solid var(--line);border-radius:8px}
+.bridge-shot figcaption{margin-top:6px;font-size:12px;color:var(--muted)}
 .bridge-path{display:inline-block;margin-top:4px;padding:3px 7px;user-select:all;-webkit-user-select:all;word-break:break-all}
 .bridge-code{font:700 30px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.18em;margin:6px 0 2px;user-select:all;-webkit-user-select:all}
 .quitbtn{background:transparent;border:0;padding:0;color:var(--mut);font:inherit;cursor:pointer;text-decoration:underline}
