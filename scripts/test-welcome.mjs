@@ -356,12 +356,14 @@ async function main() {
       );
       // Decisive split: if this probe also comes back silent with exit 0, the host itself is not
       // running anything and the script is innocent.
+      const sp = c.args.find((a) => /\.ps1$/.test(a)) || scriptPath;
       const probe = await new Promise((res) =>
-        execFile(c.cmd, ["-NoProfile", "-NonInteractive", "-Command", "Write-Output 'probe-ok'; exit 7"],
+        execFile(c.cmd, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+          `$ErrorActionPreference='Continue'; & '${sp}'; Write-Output ('rc=' + $LASTEXITCODE); $Error | ForEach-Object { Write-Output ('ERR: ' + $_.ToString()) }`],
           { cwd: sandbox, timeout: 60_000, env: sandboxEnv() },
-          (e, so, se) => res(`exit ${e ? e.code : 0}; out=${JSON.stringify(String(so || "").trim())}; err=${JSON.stringify(String(se || "").trim().slice(0, 200))}`))
+          (e, so, se) => res(`exit ${e ? e.code : 0}; out=${JSON.stringify(String(so || "").trim().slice(0, 600))}; err=${JSON.stringify(String(se || "").trim().slice(0, 400))}`))
       );
-      why += ` | cmd=${c.cmd} script=${present} | ${out.replace(/\s+/g, " ")} | host probe: ${probe}`;
+      why += ` | cmd=${c.cmd} script=${present} | ${out.replace(/\s+/g, " ")} | invoked with -Command: ${probe}`;
     } catch (e) {
       why += ` | could not run it directly: ${e.message}`;
     }
