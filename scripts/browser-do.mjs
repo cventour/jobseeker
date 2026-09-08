@@ -13,11 +13,16 @@
 //
 // Falls back to running in-process if the agent is not installed, so nothing breaks on a machine
 // that has not run scripts/install-browser-agent.sh -- it just prompts more often.
+//
+// On Windows there is no TCC and therefore no broker: Automation permission is not a concept there,
+// so there is nothing to grant to a stable identity. Work always runs in-process on Windows, and that
+// is the normal path rather than a fallback.
 
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { execFile } from "child_process";
+import { IS_MAC, uid } from "../server/platform.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -34,7 +39,8 @@ const sh = (cmd, args, timeout = 600_000) =>
   );
 
 async function agentInstalled() {
-  const r = await sh("launchctl", ["print", `gui/${process.getuid()}/${LABEL}`], 15_000);
+  if (!IS_MAC) return false;
+  const r = await sh("launchctl", ["print", `gui/${uid()}/${LABEL}`], 15_000);
   return r.ok;
 }
 
@@ -46,16 +52,19 @@ async function main() {
   }
 
   if (!(await agentInstalled())) {
-    // Honest fallback: say why the slower path is being used rather than silently prompting.
-    process.stderr.write(
-      `browser-do: ${LABEL} is not installed — running in-process instead.\n` +
-        `            macOS will ask for Automation permission again after every Claude Code update.\n` +
-        `            Install once with: bash scripts/install-browser-agent.sh\n`
-    );
+    // Honest fallback on macOS: say why the slower path is being used rather than silently prompting.
+    // Elsewhere the LaunchAgent is not an option, so in-process is simply how it works -- no warning.
+    if (IS_MAC) {
+      process.stderr.write(
+        `browser-do: ${LABEL} is not installed — running in-process instead.\n` +
+          `            macOS will ask for Automation permission again after every Claude Code update.\n` +
+          `            Install once with: bash scripts/install-browser-agent.sh\n`
+      );
+    }
     const script =
       { probe: "browser-probe.mjs", "read-url": "browser-read.mjs", "board-sweep": "board-sweep.mjs" }[action] ||
       "chat-sweep.mjs";
-    const r = await sh("node", [path.join(ROOT, "scripts", script), ...args]);
+    const r = await sh(process.execPath, [path.join(ROOT, "scripts", script), ...args]);
     process.stdout.write(r.out);
     if (r.err) process.stderr.write(r.err);
     process.exit(r.ok ? 0 : 1);
@@ -68,7 +77,7 @@ async function main() {
 
   // -k restarts the job if it is somehow already running, so a stuck previous request cannot wedge
   // every later one.
-  const kick = await sh("launchctl", ["kickstart", "-k", `gui/${process.getuid()}/${LABEL}`], 30_000);
+  const kick = await sh("launchctl", ["kickstart", "-k", `gui/${uid()}/${LABEL}`], 30_000);
   if (!kick.ok) {
     process.stderr.write(`browser-do: could not start ${LABEL}: ${kick.err}\n`);
     process.exit(1);

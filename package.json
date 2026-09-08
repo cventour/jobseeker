@@ -1,6 +1,6 @@
 {
   "name": "jobseeker",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "private": true,
   "description": "A local-first job-search assistant. Reads your email, chats and calendar, finds roles worth your time, and each morning surfaces the few things that need you. Never applies or sends without your approval.",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -19,21 +19,21 @@
     "ai-agents",
     "local-first",
     "markdown",
-    "macos",
     "automation"
   ],
   "engines": {
     "node": ">=20"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "win32"
   ],
   "scripts": {
     "dashboard": "node server/dashboard.mjs",
     "audit": "node server/audit.mjs",
     "check:urls": "node scripts/check-urls.mjs",
     "test:concurrency": "node scripts/test-concurrency.mjs",
-    "guard": "bash scripts/rss-guard.sh",
+    "guard": "node scripts/run.mjs rss-guard",
     "icons": "python3 scripts/make-icons.py",
     "browser:probe": "node scripts/browser-do.mjs probe",
     "chat:sweep": "node scripts/browser-do.mjs chat-sweep",
@@ -43,11 +43,13 @@
     "test:welcome": "node scripts/test-welcome.mjs",
     "test:runstate": "node scripts/test-run-state.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
-    "setup": "bash scripts/setup.sh",
+    "setup": "node scripts/run.mjs setup",
     "app": "bash scripts/build-app.sh",
-    "schedule": "bash scripts/set-schedule.sh",
+    "schedule": "node scripts/run.mjs set-schedule",
     "notes": "node scripts/release-notes.mjs",
     "notes:site": "node scripts/release-notes.mjs --html ../jobseeker-site",
-    "mock:wizard": "node scripts/mock-wizard.mjs"
+    "mock:wizard": "node scripts/mock-wizard.mjs",
+    "test:platform": "node scripts/test-platform.mjs",
+    "bridge": "node server/bridge.mjs --serve"
   }
 }

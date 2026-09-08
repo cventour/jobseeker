@@ -18,10 +18,26 @@ export async function writeFileAtomic(file, content) {
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   try {
     await fs.writeFile(tmp, content, "utf8");
-    await fs.rename(tmp, file);
+    await renameWithWin32Retry(tmp, file);
   } catch (e) {
     await fs.rm(tmp, { force: true });
     throw e;
+  }
+}
+
+// Windows file locks: rename() over a file that another process has open (antivirus scanner, the
+// dashboard mid-read) fails with EPERM/EBUSY/EACCES instead of waiting. Those are transient, so
+// retry briefly. POSIX never raises them here, so on macOS/Linux this is a single plain rename.
+const WIN32_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function renameWithWin32Retry(from, to, attempts = 5, delayMs = 20) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fs.rename(from, to);
+    } catch (e) {
+      if (process.platform !== "win32" || !WIN32_RETRY_CODES.has(e?.code) || i >= attempts) throw e;
+      await sleep(delayMs);
+    }
   }
 }
 
@@ -31,8 +47,11 @@ export async function writeFileAtomic(file, content) {
 // (strings); lists are left as raw comma strings for the caller to split.
 export function parseFrontmatter(text) {
   const data = {};
-  let body = text ?? "";
-  const m = /^﻿?---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text ?? "");
+  // CRLF editors: Notepad/VS Code on Windows save `\r\n`, which the bare-`\n` regex below would
+  // reject and hand back an empty config. Normalise line endings first.
+  const src = String(text ?? "").replace(/\r\n?/g, "\n");
+  let body = src;
+  const m = /^﻿?---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(src);
   if (m) {
     body = m[2] ?? "";
     for (const line of m[1].split("\n")) {
@@ -124,7 +143,8 @@ export const splitRow = (line) =>
 // Parse the first Markdown table found. Returns { headers, rows } where each row is an
 // object keyed by header. Separator row (---|---) is skipped.
 export function parseTable(text) {
-  const lines = (text ?? "").split("\n");
+  // CRLF editors: normalise `\r\n` so a table saved on Windows still splits into clean rows.
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
   let headers = null;
   const rows = [];
   for (const line of lines) {

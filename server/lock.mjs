@@ -85,7 +85,7 @@ async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
         const dead = `${LOCK_FILE}.dead.${process.pid}`;
         try {
           await fs.rename(LOCK_FILE, dead);
-          await fs.rm(dead, { force: true });
+          await rmWithWin32Retry(dead);
         } catch {
           /* another process broke it first */
         }
@@ -100,6 +100,22 @@ async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
       );
     }
     await sleep(POLL_MS + Math.random() * POLL_MS); // jitter so waiters don't sync up
+  }
+}
+
+// Windows file locks: rm() on a file another process still has open (antivirus, a concurrent
+// inspect()) fails with EPERM/EBUSY/EACCES instead of waiting. Retry briefly on win32 only; on
+// POSIX this is a single plain rm. Kept local rather than imported from md.mjs so lock.mjs stays
+// dependency-free of the data layer it guards.
+const WIN32_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+async function rmWithWin32Retry(file, attempts = 5, delayMs = 20) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fs.rm(file, { force: true });
+    } catch (e) {
+      if (process.platform !== "win32" || !WIN32_RETRY_CODES.has(e?.code) || i >= attempts) throw e;
+      await sleep(delayMs);
+    }
   }
 }
 

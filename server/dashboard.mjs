@@ -9,7 +9,7 @@ import http from "http";
 import { promises as fs, default as fsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, execFile } from "child_process";
+import * as platform from "./platform.mjs";
 import {
   parseFrontmatter,
   stringifyFrontmatter,
@@ -2200,13 +2200,6 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
 }
 
 async function systemStatus() {
-  const sh = (cmd, args, timeout = 8000) =>
-    new Promise((resolve) =>
-      execFile(cmd, args, { cwd: ROOT, timeout }, (err, stdout) =>
-        resolve({ ok: !err, out: String(stdout || "").trim() })
-      )
-    );
-
   let browser = null;
   try {
     browser = JSON.parse(await fs.readFile(path.join(DATA, ".browser-status.json"), "utf8"));
@@ -2214,13 +2207,16 @@ async function systemStatus() {
     /* probe has not run here yet */
   }
 
-  const uid = process.getuid();
-  const [agent, sched, schedTime, spendRaw] = await Promise.all([
-    sh("launchctl", ["print", `gui/${uid}/com.jobseeker.browser`]),
-    sh("launchctl", ["print", `gui/${uid}/com.jobseeker.jobrun`]),
-    sh("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--show"]),
-    sh("node", [path.join(ROOT, "server", "record.mjs"), "list-spend", "--limit", "10"]),
+  // platform.mjs is the only module that knows which OS this is; everything here is OS-neutral.
+  const [agentStatus, schedInstalled, schedShown, spendRaw] = await Promise.all([
+    platform.browserAgentStatus(),
+    platform.isScheduled(),
+    platform.scheduleShow(),
+    platform.node([path.join(ROOT, "server", "record.mjs"), "list-spend", "--limit", "10"]),
   ]);
+  const agent = { ok: agentStatus.installed };
+  const sched = { ok: schedInstalled };
+  const schedTime = { out: schedShown };
 
   let spend = { month_total_usd: 0, month_runs: 0, runs_recorded: 0, recent: [], month: "" };
   try {
@@ -4645,12 +4641,7 @@ async function handleAddCompany(form) {
   );
 
   if (!known) {
-    const child = spawn("node", [path.join(ROOT, "scripts", "discover-board.mjs"), company, market], {
-      cwd: ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    platform.spawnNodeDetached("scripts/discover-board.mjs", [company, market]);
   }
 
   return {
@@ -5121,16 +5112,6 @@ async function mergeCriteria(fields) {
   return out;
 }
 
-// Run a command and hand back its stdout. systemStatus() has had its own copy of this since before
-// there was a second caller; this one is module-level so the wizard can read the schedule back
-// without duplicating it a third time.
-const shOut = (cmd, args, timeout = 8000) =>
-  new Promise((resolve) =>
-    execFile(cmd, args, { cwd: ROOT, timeout }, (err, stdout) =>
-      resolve({ ok: !err, out: String(stdout || "").trim() })
-    )
-  );
-
 async function readConfigRaw() {
   const file = path.join(ROOT, "config", "job-seeker.config.md");
   const existing = await safeRead(file);
@@ -5169,10 +5150,9 @@ async function welcomeState({ schedule = false } = {}) {
     /* never parsed */
   }
   const answers = await readAnswers();
-  // Reading the schedule means running launchctl's plist reader, so it happens only on the step
+  // Reading the schedule means running the OS scheduler's reader, so it happens only on the step
   // that shows it — not on every dashboard load.
-  const sched = schedule ? await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--show"]) : { out: "" };
-  const schedRaw = (sched.out || "").trim();
+  const schedRaw = schedule ? (await platform.scheduleShow()).trim() : "";
   const [schedTime, schedDays] = schedRaw.split(/\s+/);
   return {
     cfg,
@@ -6108,7 +6088,7 @@ async function handleWelcomeStep(form) {
     if (!cad) return { redirect: back, flash: { kind: "bad", msg: "Unknown schedule — nothing changed." } };
 
     if (cad.off) {
-      if (st.scheduled) await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--remove"], 20000);
+      if (st.scheduled) await platform.scheduleRemove();
       await mergeConfig({ schedule_days: "off", min_hours_between_runs: "" });
       await logActivity("onboard", "Schedule removed — runs only when asked");
     } else {
@@ -6132,11 +6112,9 @@ async function handleWelcomeStep(form) {
         }
         days = picked.join(",");
       }
-      const args = [path.join(ROOT, "scripts", "set-schedule.sh"), time];
-      if (days) args.push(days);
-      const r = await shOut("bash", args, 20000);
+      const r = await platform.scheduleSet(time, days);
       if (!r.ok) {
-        return { redirect: back, flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || "see docs/SCHEDULER.md"}` } };
+        return { redirect: back, flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || r.err || "see docs/SCHEDULER.md"}` } };
       }
       // The chosen cadence is the BASELINE the ladder steps down from. Without it recorded, the
       // ladder's Restore button would put a twice-a-week user back on daily — a change they never
@@ -6281,31 +6259,32 @@ async function handleDeferMarketAsk(form) {
 // Actions the Setup page may run. An ALLOWLIST of named actions mapped to fixed scripts — never a
 // command from the request. This endpoint changes OS state (installs launch agents), so the set of
 // things it can do is closed and auditable, exactly as scripts/browser-agent.sh does.
+// runner "script" is a bare script name that platform.mjs resolves to scripts/<name>.sh on macOS
+// and scripts/win/<name>.ps1 on Windows; runner "node" is a repo-relative .mjs path.
 const ACTIONS = new Map([
-  ["probe", { script: "scripts/browser-probe.mjs", runner: "node", detached: false }],
-  ["install-browser-agent", { script: "scripts/install-browser-agent.sh", runner: "bash", detached: false }],
-  ["set-schedule", { script: "scripts/set-schedule.sh", runner: "bash", detached: false, arg: "time" }],
-  ["remove-schedule", { script: "scripts/set-schedule.sh", runner: "bash", detached: false, fixedArgs: ["--remove"] }],
+  ["probe", { script: "scripts/browser-probe.mjs", runner: "node" }],
+  ["install-browser-agent", { script: "install-browser-agent", runner: "script", darwinOnly: true }],
+  ["set-schedule", { script: "set-schedule", runner: "script", arg: "time" }],
+  ["remove-schedule", { script: "set-schedule", runner: "script", fixedArgs: ["--remove"] }],
 ]);
 
 async function handleRunAction(form) {
   const name = String(form.action_name || "");
   const spec = ACTIONS.get(name);
   if (!spec) throw new Error(`Unknown action: ${JSON.stringify(name).slice(0, 40)}`);
+  if (spec.darwinOnly && !platform.IS_MAC) throw new Error("This action only applies on macOS");
 
-  const args = [path.join(ROOT, spec.script), ...(spec.fixedArgs || [])];
+  const extraArgs = [...(spec.fixedArgs || [])];
   if (spec.arg === "time") {
     const t = String(form.time || "").trim();
     // Validated here as well as in the script: defence in depth on the boundary that faces the web.
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new Error(`Invalid time ${JSON.stringify(t)} — expected HH:MM`);
-    args.push(t);
+    extraArgs.push(t);
   }
 
-  const out = await new Promise((resolve) => {
-    execFile(spec.runner, args, { cwd: ROOT, timeout: 120_000 }, (err, stdout, stderr) =>
-      resolve({ ok: !err, text: String(stdout || stderr || err?.message || "").trim() })
-    );
-  });
+  const c = spec.runner === "node" ? platform.nodeCommand(spec.script, extraArgs) : platform.scriptCommand(spec.script, extraArgs);
+  const r = await platform.run(c.cmd, c.args, { timeout: 120_000 });
+  const out = { ok: r.ok, text: r.out || r.err };
   await logActivity("setup-action", `${name}: ${out.ok ? "ok" : "failed"} — ${out.text.slice(0, 120)}`);
   if (!out.ok) throw new Error(out.text.split("\n")[0] || `${name} failed`);
   return out.text.split("\n").filter(Boolean).pop() || `${name} done`;
@@ -6777,12 +6756,7 @@ async function handleRunNow(form) {
 
   // Detached: these take minutes to tens of minutes. The page must come straight back, and the
   // run's own log and status file are how it reports, not this response.
-  const child = spawn("bash", [path.join(ROOT, "scripts", "run-now.sh"), slug], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  const child = platform.spawnScriptDetached("run-now", [slug]);
   // Claim the run immediately: run-now.sh takes its own lock seconds later, and until it does this
   // is the only record that something is starting.
   await fs
@@ -6828,12 +6802,7 @@ async function handleApplyNow(form) {
     };
   }
 
-  const child = spawn("bash", [path.join(ROOT, "scripts", "run-now.sh"), "apply", id], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  const child = platform.spawnScriptDetached("run-now", ["apply", id]);
   await fs
     .writeFile(
       path.join(DATA, ".run-now.pending.json"),
@@ -6931,12 +6900,7 @@ async function handleDecideApproval(form) {
 // Detached on purpose: a send is a whole `claude` session and the dashboard must never block on
 // one. Failures land in the record (`dispatch: failed`) and in the log, not in a lost HTTP response.
 function dispatchApproval(id) {
-  const child = spawn("bash", [path.join(ROOT, "scripts", "send-approval.sh"), id], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  platform.spawnScriptDetached("send-approval", [id]);
 }
 
 async function handleSetTaskStatus(form) {
@@ -7305,12 +7269,7 @@ async function handlePost(req, res, url) {
   // Starting the parse takes no fields, and must be handled before the body is parsed as a form.
   if (url.pathname === "/welcome-parse") {
     await snapshotProfile();
-    const child = spawn("bash", [path.join(ROOT, "scripts", "parse-cv.sh")], {
-      cwd: ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    platform.spawnScriptDetached("parse-cv");
     await logActivity("cv-parse", "Reading the uploaded CV, started from the wizard");
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("started");
@@ -7401,7 +7360,7 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/restore-schedule") {
     // Recovery is manual by design: the ladder slows itself down, but only a person speeds it back
     // up. Delegates to the same script that stepped it down, so there is one writer of the plist.
-    const r = await shOut("bash", [path.join(ROOT, "scripts", "schedule-ladder.sh"), "--reset"], 20000);
+    const r = await platform.runScript("schedule-ladder", ["--reset"], { timeout: 20000 });
     await logActivity("schedule-ladder", `Schedule restored to daily from the dashboard: ${r.out || "done"}`);
     return redirect(res, r.ok
       ? { kind: "ok", msg: `Schedule restored — ${r.out || "done"}.` }
@@ -7437,12 +7396,7 @@ async function handlePost(req, res, url) {
     }
     // Detached, because a research pass runs for minutes and the dashboard must not block on it.
     // Same pattern as the per-company board discovery in handleAddCompany.
-    const child = spawn("bash", [path.join(ROOT, "scripts", "research-market.sh"), market], {
-      cwd: ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    platform.spawnScriptDetached("research-market", [market]);
     await logActivity("markets", `Market research started for ${market} from the dashboard`);
     return redirect(res, {
       kind: "ok",

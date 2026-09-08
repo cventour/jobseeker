@@ -51,7 +51,7 @@ const ONLY = (() => {
 function record(args) {
   return new Promise((resolve, reject) => {
     execFile(
-      "node",
+      process.execPath,
       [path.join(ROOT, "server", "record.mjs"), ...args],
       { cwd: ROOT, timeout: 60_000, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message))) : resolve(String(stdout).trim()))
