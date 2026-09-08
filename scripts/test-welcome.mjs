@@ -10,16 +10,27 @@
 //   node scripts/test-welcome.mjs
 //
 // `claude` is stubbed as well: the CV step spends money, and a test must not.
+//
+// Windows: the same sandbox, with the OS-shaped bits swapped rather than skipped. The stubs are
+// `.cmd` batch files (PATHEXT makes `claude` resolve to claude.cmd), HOME *and* USERPROFILE are
+// redirected, PATH is joined with path.delimiter, and every script is invoked through
+// platform.scriptCommand() — which is imported FROM THE SANDBOX COPY, so its ROOT is the sandbox
+// and the PowerShell twin under scripts\win\ is what actually runs. The schedule the wizard
+// installs is a real Task Scheduler task, so JOBSEEKER_TASK_NAME isolates it to
+// JobSeeker\WelcomeTest and the cleanup below unregisters it.
 
 import { promises as fs } from "fs";
 import { spawn, execFile } from "child_process";
 import path from "path";
 import os from "os";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const IS_WIN = process.platform === "win32";
+// One Task Scheduler task name for the whole suite, never the real \JobSeeker\JobRun.
+const WIN_TASK = "JobSeeker\\WelcomeTest";
 const PORT = 4400 + Math.floor(Math.random() * 80);
-let sandbox, server;
+let sandbox, server, plat;
 let pass = 0, fail = 0;
 
 const ok = (name, extra = "") => { pass++; console.log(`  ok    ${name}${extra ? " — " + extra : ""}`); };
@@ -43,29 +54,61 @@ async function makeSandbox() {
   await fs.writeFile(path.join(dir, "data", "activity.md"), "# Activity\n\n| timestamp | type | detail |\n|-----------|------|--------|\n");
 
   // Stubs. launchctl must never address the real domain; claude must never be called for real.
-  await fs.writeFile(path.join(dir, "bin", "launchctl"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
-  await fs.writeFile(
-    path.join(dir, "bin", "claude"),
+  await writeStub(dir, "launchctl", "#!/bin/bash\nexit 0\n", "@echo off\r\nexit /b 0\r\n");
+  await writeStub(
+    dir,
+    "claude",
     `#!/bin/bash
 cat > data/profile.md <<'PROF'
----
-titles: Solution Architect, Pre-sales Manager
-seniority: Senior
-skills: Cybersecurity, Pre-sales
-domains: Cybersecurity
-locations: Dubai, UAE; Remote
----
-
-# Summary
-
-Stubbed parse.
+${PROFILE_LINES.join("\n")}
 PROF
 printf '{"result":"stub","total_cost_usd":0}\\n'
 `,
-    { mode: 0o755 }
+    // The batch twin writes the same profile.md, byte for byte, and echoes the same JSON.
+    // %~dp0 is bin\, so ..\data\profile.md is the sandbox's own copy whatever the cwd is.
+    ["@echo off", ...PROFILE_LINES.map((l, i) => cmdWrite("%~dp0..\\data\\profile.md", l, i === 0)),
+     'echo {"result":"stub","total_cost_usd":0}'].join("\r\n") + "\r\n"
   );
   return dir;
 }
+
+// The profile the stubbed `claude` parse writes. Shared so the bash and batch stubs cannot drift.
+const PROFILE_LINES = [
+  "---",
+  "titles: Solution Architect, Pre-sales Manager",
+  "seniority: Senior",
+  "skills: Cybersecurity, Pre-sales",
+  "domains: Cybersecurity",
+  "locations: Dubai, UAE; Remote",
+  "---",
+  "",
+  "# Summary",
+  "",
+  "Stubbed parse.",
+];
+
+// One line of a here-doc, as batch. The redirect goes FIRST so no trailing space is echoed, and an
+// empty line is `echo(` — plain `echo` with nothing after it prints the echo state instead.
+const cmdWrite = (file, line, first) =>
+  `${first ? ">" : ">>"} "${file}" echo${line === "" ? "(" : " " + line}`;
+
+// A stub executable: a bash script on macOS, a .cmd batch file on Windows (cmd is ahead of the
+// extensionless file in PATHEXT, and an extensionless file is not executable there at all).
+async function writeStub(dir, name, bash, cmd) {
+  if (IS_WIN) await fs.writeFile(path.join(dir, "bin", `${name}.cmd`), cmd);
+  else await fs.writeFile(path.join(dir, "bin", name), bash, { mode: 0o755 });
+}
+
+// HOME is what the launchd path reads; USERPROFILE is what Windows reads. Both point at the
+// sandbox so neither OS can touch the developer's real home.
+const sandboxEnv = (extra = {}) => ({
+  ...process.env,
+  HOME: path.join(sandbox, "home"),
+  USERPROFILE: path.join(sandbox, "home"),
+  PATH: `${path.join(sandbox, "bin")}${path.delimiter}${process.env.PATH}`,
+  ...(IS_WIN ? { JOBSEEKER_TASK_NAME: WIN_TASK } : {}),
+  ...extra,
+});
 
 const url = (p) => `http://127.0.0.1:${PORT}${p}`;
 
@@ -89,9 +132,11 @@ const read = (rel) => fs.readFile(path.join(sandbox, rel), "utf8").catch(() => "
 
 async function main() {
   sandbox = await makeSandbox();
-  server = spawn("node", [path.join(sandbox, "server", "dashboard.mjs")], {
+  // platform.mjs from the SANDBOX, so scriptCommand() resolves scripts inside the throwaway copy.
+  plat = await import(pathToFileURL(path.join(sandbox, "server", "platform.mjs")).href);
+  server = spawn(process.execPath, [path.join(sandbox, "server", "dashboard.mjs")], {
     cwd: sandbox,
-    env: { ...process.env, PORT: String(PORT), HOME: path.join(sandbox, "home"), PATH: `${path.join(sandbox, "bin")}:${process.env.PATH}` },
+    env: { ...sandboxEnv(), PORT: String(PORT) },
     stdio: "ignore",
   });
   for (let i = 0; i < 60; i++) {
@@ -180,11 +225,11 @@ async function main() {
   check(/ignored_chats: Family, Football/.test(cfg), "the never-log list is saved");
 
   // --- a schedule that could never fire is refused ---
-  const showSched = () =>
-    run("bash", [path.join(sandbox, "scripts", "set-schedule.sh"), "--show"], {
-      cwd: sandbox,
-      env: { ...process.env, HOME: path.join(sandbox, "home"), PATH: `${path.join(sandbox, "bin")}:${process.env.PATH}` },
-    }).then((x) => x.trim());
+  // set-schedule.sh on macOS, scripts\win\set-schedule.ps1 on Windows — same command, same output.
+  const showSched = () => {
+    const c = plat.scriptCommand("set-schedule", ["--show"]);
+    return run(c.cmd, c.args, { cwd: sandbox, env: sandboxEnv() }).then((x) => x.trim());
+  };
 
   let r = await post("/welcome-step", { step: "finish", action: "next", cadence: "custom", time: "07:30" });
   check(decodeURIComponent(r.location).includes("Pick at least one day"), "a schedule with no days is refused");
@@ -297,6 +342,12 @@ try {
   fail++;
 } finally {
   server?.kill();
+  // The wizard's last act installs a schedule. On macOS that is a plist inside the sandbox HOME and
+  // goes with the directory; on Windows it is a real Task Scheduler task, which has to be removed.
+  if (IS_WIN && sandbox && plat) {
+    const c = plat.scriptCommand("set-schedule", ["--remove"]);
+    await run(c.cmd, c.args, { cwd: sandbox, env: sandboxEnv() }).catch(() => {});
+  }
   if (sandbox) await fs.rm(sandbox, { recursive: true, force: true });
   process.exit(fail ? 1 : 0);
 }
