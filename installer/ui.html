@@ -3,9 +3,12 @@
 <meta charset="utf-8">
 <title>JobSeeker Setup</title>
 <!--
-  The setup window's UI. Rendered inside a WKWebView owned by JobSeeker.app.
+  The setup window's UI. Rendered inside a WKWebView owned by JobSeeker.app on macOS, and inside an
+  Edge app window served by installer/win/setup-server.mjs on Windows. ONE page, two hosts: the
+  state object and the command envelope are identical, and only the transport differs (see send()
+  and the EventSource at the bottom). Anything changed here must keep working on both.
 
-  The bridge, in both directions:
+  The bridge, in both directions -- the macOS half, which is the one with the sharp edges:
 
   * app -> page : the app calls __render(state) directly, via evaluateJavaScript. Nothing is
     fetched from here -- this is a file:// page, where XHR and fetch to a sibling file are blocked
@@ -219,7 +222,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 
     <div id="wa-known" class="waknown" hidden>
       <b id="wa-known-num">connected</b>
-      <span>Already linked to this Mac. Nothing to do — the digest will reach this number.</span>
+      <span>Already linked to this computer. Nothing to do — the digest will reach this number.</span>
     </div>
 
     <div id="wa-pair" hidden>
@@ -259,11 +262,25 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 "use strict";
 
 // ---- outbound: the only way this page talks to the app ------------------------------------
+// Two hosts, one page, one envelope. On the Mac this is a file:// page inside a WKWebView and the
+// only channel is location.hash, which the app polls. On Windows the same page is served over
+// http:// by installer/win/setup-server.mjs, where a POST is available and a fragment poll is not
+// -- so the protocol is identical and only the pipe differs.
+var HOSTED = location.protocol === "http:" || location.protocol === "https:";
 var seq = 0;
 function send(cmd, id, val) {
   seq++;
-  location.hash = "#" + encodeURIComponent(
-    JSON.stringify({ n: seq, cmd: cmd, id: id || "", v: val || "" }));
+  var msg = { n: seq, cmd: cmd, id: id || "", v: val || "" };
+  if (HOSTED) {
+    try {
+      var x = new XMLHttpRequest();
+      x.open("POST", "/cmd", true);
+      x.setRequestHeader("Content-Type", "application/json");
+      x.send(JSON.stringify(msg));
+    } catch (e) { /* the server has gone; the window is on its way out anyway */ }
+    return;
+  }
+  location.hash = "#" + encodeURIComponent(JSON.stringify(msg));
 }
 
 // ---- appearance: Auto / Light / Dark -------------------------------------------------------
@@ -409,6 +426,11 @@ window.__render = function (st) {
   if (j === lastJSON) return;      // nothing changed; leave the DOM alone
   lastJSON = j;
 
+  // The handover, hosted-side. The Mac app owns its web view and simply loads the dashboard into
+  // it; a browser window can only be sent somewhere by the page inside it, so the server says
+  // where and the page goes. The Mac host never sets this field, so this is dead code there.
+  if (st.dashboardUrl) { location.replace(st.dashboardUrl); return; }
+
   document.getElementById("title").textContent = st.title || "";
   document.getElementById("subtitle").textContent = st.subtitle || "";
   document.getElementById("brandnote").textContent = st.brandnote || "";
@@ -478,5 +500,19 @@ window.__render = function (st) {
   }
   renderActions(st);
 };
+
+// ---- inbound, hosted: the server pushes the same state object over SSE ----------------------
+// One event per change, each carrying exactly what the Mac app passes to __render, so everything
+// above this line is unaware of which host it is talking to.
+if (HOSTED) {
+  try {
+    var es = new EventSource("/events");
+    es.onmessage = function (ev) {
+      var st;
+      try { st = JSON.parse(ev.data); } catch (e) { return; }
+      window.__render(st);
+    };
+  } catch (e) { /* no EventSource: nothing renders, which is visible and reportable */ }
+}
 </script>
 </html>
