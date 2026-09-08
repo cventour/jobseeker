@@ -54,9 +54,16 @@ async function inspect(LOCK_FILE) {
   }
 }
 
+// Codes that mean "someone else got there first", per platform. See the catch in acquire().
+const CONTENDED = process.platform === "win32"
+  ? new Set(["EEXIST", "EPERM", "EACCES", "EBUSY"])
+  : new Set(["EEXIST"]);
+const isContended = (e) => CONTENDED.has(e?.code);
+
 async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
   const token = mintToken();
   const deadline = Date.now() + timeoutMs;
+  let lastContendedCode = null;
   await fs.mkdir(path.dirname(LOCK_FILE), { recursive: true });
 
   for (;;) {
@@ -66,13 +73,34 @@ async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
       await fs.writeFile(LOCK_FILE, token, { flag: "wx" });
       return token;
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      // POSIX reports a lost race as EEXIST and nothing else. Windows is looser: when two processes
+      // call create-exclusive on the same path in the same instant, or one is opening the file while
+      // another deletes it, the loser can come back EPERM, EACCES or EBUSY instead. Treating those
+      // as fatal is how a parallel agent lost its write on Windows CI -- the exact failure this lock
+      // exists to prevent. They mean "contended, try again", so they rejoin the loop. A real
+      // permission problem still surfaces: it simply keeps failing until the deadline below, and
+      // the timeout names the code it kept seeing.
+      if (!isContended(e)) throw e;
+      lastContendedCode = e.code;
     }
 
     const held = await inspect(LOCK_FILE);
     // Absent → it was just released. Retry immediately; do NOT delete anything, or we would
-    // destroy the lock of whoever acquired it in the meantime.
-    if (held === null) continue;
+    // destroy the lock of whoever acquired it in the meantime. The deadline is checked here as
+    // well as below, because a create that fails while the file does not exist is not contention
+    // at all -- it is a directory we cannot write to -- and without this that case would spin
+    // forever instead of reporting itself.
+    if (held === null) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `Timed out after ${timeoutMs / 1000}s trying to create the ${label} lock at ${LOCK_FILE}` +
+            (lastContendedCode ? ` (last error: ${lastContendedCode})` : "") +
+            ". The lock is never there when we look, so the directory is most likely not writable."
+        );
+      }
+      await sleep(POLL_MS);
+      continue;
+    }
 
     if (held.ageMs > staleMs) {
       // Presumed-dead holder. Re-verify immediately before acting so we cannot break a lock that
