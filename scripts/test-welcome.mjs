@@ -359,7 +359,13 @@ async function main() {
       const sp = c.args.find((a) => /\.ps1$/.test(a)) || scriptPath;
       const probe = await new Promise((res) =>
         execFile(c.cmd, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-          `$ErrorActionPreference='Continue'; & '${sp}'; Write-Output ('rc=' + $LASTEXITCODE); $Error | ForEach-Object { Write-Output ('ERR: ' + $_.ToString()) }`],
+          `$ErrorActionPreference='Continue'; ` +
+          `$r = (Resolve-Path (Join-Path (Split-Path '${sp}') '..\\..')).Path; ` +
+          `Write-Output ('repo=' + $r); ` +
+          `Write-Output ('pdfs=' + ((Get-ChildItem (Join-Path $r 'templates\\cv\\*.pdf') -File -ErrorAction SilentlyContinue).Count)); ` +
+          `& '${sp}'; Write-Output ('rc=' + $LASTEXITCODE); ` +
+          `Write-Output ('status_at_repo=' + (Test-Path (Join-Path $r 'data\\.cv-parse.status.json'))); ` +
+          `$Error | ForEach-Object { Write-Output ('ERR: ' + $_.ToString()) }`],
           { cwd: sandbox, timeout: 60_000, env: sandboxEnv() },
           (e, so, se) => res(`exit ${e ? e.code : 0}; out=${JSON.stringify(String(so || "").trim().slice(0, 600))}; err=${JSON.stringify(String(se || "").trim().slice(0, 400))}`))
       );
