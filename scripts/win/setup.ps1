@@ -16,7 +16,9 @@
 #     two positions are not in conflict.)
 #   * Grant permissions. There is nothing on Windows to grant: no TCC, no Automation consent. Chrome
 #     is read through the JobSeeker Bridge extension, which the user loads and pairs themselves --
-#     which is a thing this script can EXPLAIN and then VERIFY, and that is what it does.
+#     Chrome allows nothing else, and that has been measured rather than assumed. What this script
+#     does is everything either side of those two clicks: it stands the bridge up, mints the pairing
+#     code, copies the folder path, opens chrome://extensions, and then VERIFIES the result.
 #
 # The verification is the point. A setup script that accepts "I did it" on trust and prints "Ready"
 # reproduces the exact silent-success failure this project exists to prevent.
@@ -299,8 +301,8 @@ if ($showed.ExitCode -eq 0 -and $showed.Out -and $showed.Out.Trim() -ne "not sch
 # The Mac twin installs a browser LaunchAgent for the scheduled path here, and walks the user
 # through Chrome ▸ View ▸ Developer ▸ Allow JavaScript from Apple Events. NEITHER EXISTS ON WINDOWS.
 # There is no TCC to grant and no Apple Events to allow: Chrome is read through the JobSeeker Bridge
-# extension over a localhost bridge, loaded once by hand and paired from the dashboard. So the whole
-# permissions dance is replaced by three lines of instruction and the same probe that verified it.
+# extension over a localhost bridge, loaded once by hand. So the permissions dance is replaced by
+# the pairing below -- done here rather than described, and then proved by the same probe.
 
 # ---------------------------------------------------------------- 3. the browser extension: explain + verify
 
@@ -326,16 +328,176 @@ function Browser-Blockers {
   }
 }
 
-function Show-ExtensionSteps {
+# ---- connecting the extension, rather than describing it -------------------------------------
+# Chrome 152 will not let a program add an unpacked extension: --load-extension is gone, the
+# external-extension registry key does not install it, and enterprise force-install with a local
+# update manifest does not either. All three were measured, not assumed; scripts\win\setup-step.ps1's
+# extension step carries the full list. So the two clicks stay with the user -- but everything
+# around them, and the proof that they worked, does not have to.
+
+function Get-ConfigNum([string]$Key, [string]$Default) {
+  if (Test-Path -LiteralPath $ConfigFile) {
+    foreach ($line in [IO.File]::ReadAllLines($ConfigFile)) {
+      if ($line -match ("^" + $Key + ':\s*(\d+)')) { return $Matches[1] }
+    }
+  }
+  return $Default
+}
+
+# One GET, short deadline, never throws. 127.0.0.1 and not localhost: the bridge binds the IPv4
+# loopback only, and where localhost resolves to ::1 first this would report nothing about a
+# perfectly healthy bridge.
+function Get-Url([string]$Url, [int]$TimeoutSec) {
+  $prev = $ProgressPreference
+  $ProgressPreference = "SilentlyContinue"
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec $TimeoutSec
+    return [string]$r.Content
+  } catch {
+    return ""
+  } finally {
+    $ProgressPreference = $prev
+  }
+}
+
+# The extension probes 4319 then 4320 (extension\background.js) and pairs with whichever answers.
+# "connected" is held in the memory of that one process, so both ports are asked and either saying
+# yes is the answer.
+function Get-BridgeState {
+  $ports = @([string](Get-ConfigNum "dashboard_port" "4319"))
+  $bp = [string](Get-ConfigNum "bridge_port" "4320")
+  if ($ports -notcontains $bp) { $ports += $bp }
+  $answered = $false
+  $answeredPort = ""
+  foreach ($p in $ports) {
+    $body = Get-Url ("http://127.0.0.1:{0}/bridge/status" -f $p) 2
+    if (-not $body) { continue }
+    $j = $null
+    try { $j = ConvertFrom-Json $body } catch { $j = $null }
+    if (-not $j) { continue }
+    if (-not $answered) { $answeredPort = $p }
+    $answered = $true
+    if ($j.connected) { return @{ Answered = $true; Connected = $true; Port = $p } }
+  }
+  return @{ Answered = $answered; Connected = $false; Port = $answeredPort }
+}
+
+# Returns $true only when /bridge/status actually said connected. Never throws, never blocks setup.
+function Connect-Extension {
+  if (-not (Test-Path -LiteralPath (Join-Path $ExtensionDir "manifest.json"))) {
+    Warn ("no manifest.json under " + $ExtensionDir + " — nothing to load")
+    return $false
+  }
+
+  $st = Get-BridgeState
+  if ($st.Connected) { return $true }
+
+  if (-not $st.Answered) {
+    Say "  Starting the browser bridge…"
+    $bridgeJs = Join-Path $Repo "server\bridge.mjs"
+    $sp = @{
+      FilePath               = $nodeCmd.Source
+      ArgumentList           = (ConvertTo-CmdLine @($bridgeJs, "--serve"))
+      WorkingDirectory       = $Repo
+      RedirectStandardOutput = (Join-Path $Repo "data\.setup\bridge.log")
+      RedirectStandardError  = (Join-Path $Repo "data\.setup\bridge.err.log")
+      PassThru               = $true
+    }
+    if ($OnWindows) { $sp["WindowStyle"] = "Hidden" } else { $sp["NoNewWindow"] = $true }
+    try {
+      New-Item -ItemType Directory -Force -Path (Join-Path $Repo "data\.setup") | Out-Null
+      $null = Start-Process @sp
+    } catch {
+      Warn ("could not start the browser bridge: " + $_.Exception.Message)
+      return $false
+    }
+    # It is left running on purpose: stopping it here would disconnect whatever just connected. With
+    # nothing polling it, it exits by itself after 15 minutes.
+    for ($i = 1; $i -le 40; $i++) {
+      $st = Get-BridgeState
+      if ($st.Answered) { break }
+      Start-Sleep -Milliseconds 500
+    }
+    if (-not $st.Answered) {
+      Warn "the browser bridge did not start — see data\.setup\bridge.err.log"
+      return $false
+    }
+  }
+
+  # mintPairingCode() writes data\.bridge.pair.json, which is the file the running bridge reads when
+  # the extension posts a code back, so minting it from here is as good as asking the bridge to.
+  # The module path is derived from the working directory rather than passed as an argument, and
+  # that is not a style choice: under `node -e` process.argv[1] is the first USER argument, and
+  # bridge.mjs treats "argv[1] resolves to me" as "I was run directly" and exits with a usage line.
+  # Handing it its own path would make it refuse to be imported.
+  $snippet = 'const p=require("path"),{pathToFileURL}=require("url");import(pathToFileURL(p.join(process.cwd(),"server","bridge.mjs")).href).then(m=>m.mintPairingCode(process.argv[1])).then(x=>console.log(x.code)).catch(e=>{console.error(e&&e.message?e.message:String(e));process.exit(1)})'
+  $dataDir = $env:JOBSEEKER_DATA_DIR
+  if (-not $dataDir) { $dataDir = Join-Path $Repo "data" }
+  $env:JOBSEEKER_NODE_SNIPPET = $snippet
+  $code = ""
+  try {
+    $r = Invoke-Captured $nodeCmd.Source @("-e", "eval(process.env.JOBSEEKER_NODE_SNIPPET)", $dataDir)
+    if ($r.ExitCode -eq 0 -and $r.Out -match '(\d{6})') { $code = $Matches[1] }
+  } finally {
+    Remove-Item -Path Env:JOBSEEKER_NODE_SNIPPET -ErrorAction SilentlyContinue
+  }
+  if (-not $code) {
+    Warn "could not make a pairing code"
+    return $false
+  }
+
+  $copied = $true
+  try { Set-Clipboard -Value $ExtensionDir } catch { $copied = $false }
+
+  try {
+    $null = Start-Process -FilePath $chromeExe -ArgumentList (ConvertTo-CmdLine @("chrome://extensions")) -PassThru
+  } catch {
+    Warn ("could not open Chrome: " + $_.Exception.Message)
+  }
+
   Say ""
-  Say ("    1. Open chrome://extensions and turn on Developer mode")
-  Say ("    2. Click Load unpacked and choose: " + $ExtensionDir)
-  Say ("    3. In the dashboard, Settings ▸ Browser ▸ Connect, and enter the code it shows")
+  Write-Host "  One step needs you:" -ForegroundColor White
   Say ""
+  Say ("    1. In the chrome://extensions tab that just opened, turn on Developer mode (top right)")
+  if ($copied) {
+    Say ("    2. Click Load unpacked and paste the folder path — it is already on your clipboard:")
+    Say ("       " + $ExtensionDir)
+  } else {
+    Say ("    2. Click Load unpacked and choose: " + $ExtensionDir)
+  }
+  Say ("    3. Open JobSeeker Bridge ▸ Details ▸ Extension options, and enter this code:")
+  Say ""
+  Write-Host ("       " + $code) -ForegroundColor White
+  if ($st.Port -ne "4319" -and $st.Port -ne "4320") {
+    Say ""
+    Say ("       (set Dashboard port to " + $st.Port + " in the same options page first)")
+  }
+  Say ""
+  Say "  Loading an unpacked extension and pairing it is a thing only you can do — Chrome"
+  Say "  deliberately gives no other program a way to do it for you."
+  Say ""
+
+  # A scripted run has nobody at the keyboard to do any of that, so it must not sit here for five
+  # minutes pretending otherwise. The instructions above are still printed; only the wait is skipped.
+  $noHuman = $false
+  try { $noHuman = [Console]::IsInputRedirected } catch { $noHuman = $false }
+  if ($noHuman) {
+    Skip "not waiting for the extension — no terminal attached"
+    return $false
+  }
+
+  Say "  Waiting for the extension to connect (up to 5 minutes, Ctrl-C to stop waiting)…"
+  $deadline = (Get-Date).AddMinutes(5)
+  while ((Get-Date) -lt $deadline) {
+    $st = Get-BridgeState
+    if ($st.Connected) { return $true }
+    Start-Sleep -Seconds 2
+  }
+  return $false
 }
 
 if ($Dry) {
-  Skip "would explain the Chrome extension and verify browser access"
+  Skip "would connect the Chrome extension (code, clipboard, chrome://extensions) and verify browser access"
 } elseif (-not $chromeExe) {
   Skip "browser check — Chrome is not installed"
 } else {
@@ -351,13 +513,24 @@ if ($Dry) {
   } else {
     Fail "browser cannot read page content yet"
     if (Browser-Blockers) { foreach ($b in ((Browser-Blockers) -split "`r?`n")) { if ($b) { Say ("          " + $b) } } }
-    Say ""
-    Write-Host "  One step needs you:" -ForegroundColor White
-    Show-ExtensionSteps
-    Say "  Loading an unpacked extension and pairing it is a thing only you can do — Chrome"
-    Say "  deliberately gives no other program a way to do it for you."
-    Say ""
-    [void]$Gaps.Add("Chrome extension not connected — load " + $ExtensionDir + ", then Settings ▸ Browser ▸ Connect")
+    # Do the work rather than describe it: bridge up, code minted, path on the clipboard, the page
+    # open — and then WAIT for /bridge/status to say connected. Nothing below claims success on
+    # anything weaker than that.
+    if (Connect-Extension) {
+      Done_ "extension connected"
+      # Connected is not the same claim as "can read a page", so the probe decides that, again.
+      $null = Invoke-WithTimeout -Seconds 90 -FilePath $nodeCmd.Source -ArgumentList @($probe, "probe") -WorkingDirectory $Repo
+      if (Browser-CanRead) {
+        $BrowserOk = $true
+        Ok "browser verified — read-pages via the JobSeeker Bridge extension"
+      } else {
+        Fail "extension connected, but the browser still cannot read page content"
+        if (Browser-Blockers) { foreach ($b in ((Browser-Blockers) -split "`r?`n")) { if ($b) { Say ("          " + $b) } } }
+        [void]$Gaps.Add("Chrome extension connected but not reading pages — run: npm run browser:probe")
+      }
+    } else {
+      [void]$Gaps.Add("Chrome extension not connected — load " + $ExtensionDir + ", then Settings ▸ Browser ▸ Connect")
+    }
   }
 }
 

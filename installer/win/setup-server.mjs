@@ -126,6 +126,21 @@ const STEPS = [
     note: `On ${HOST_NOUN} only. Nothing is sent anywhere.`,
     password: false,
   },
+  // AFTER `start`, not before it, and the ordering is load-bearing rather than cosmetic. The
+  // extension finds the bridge by probing 4319 then 4320 and pairs with whichever answers, and
+  // "connected" lives in the memory of THAT process only. Run before `start` and the step would
+  // stand up its own `bridge.mjs --serve` on 4320, pair the extension against it, and then the
+  // dashboard that starts a moment later on 4319 would show Settings > Browser as not connected --
+  // a green row in the installer contradicted by the first screen the user sees. Running after
+  // `start` means the extension pairs with the dashboard's own bridge, so what this step proves is
+  // the same thing the dashboard reports afterwards.
+  {
+    id: "extension",
+    label: "Connect the Chrome extension",
+    note: "Chrome makes you load this one by hand — it opens the page and copies the path for you.",
+    password: false,
+    optional: true,
+  },
   // Listed so "everything that will happen" is true, but `interactive` keeps it out of the queue:
   // it needs a phone number and a phone, so it gets its own screen after the rest is done.
   {
@@ -246,6 +261,10 @@ function launchStep(id, extraArg) {
   state.pct = 0;
   state.say = "";
   state.log = "";
+  // A `need` (or a `code`) belongs to the step that asked for it. Carrying one into the next step
+  // leaves the page asking for something nobody is waiting on any more.
+  state.need = "";
+  state.code = "";
   push();
   return true;
 }
@@ -282,6 +301,12 @@ function drainStepLog() {
       const s2 = stepById(q === -1 ? rest : rest.slice(0, q));
       if (s2) s2.detail = q === -1 ? "" : rest.slice(q + 1);
     }
+  }
+  // ui.html paints `code` only on the WhatsApp screen (#wa-code). The extension step runs in the
+  // ordinary work view, where the one thing that is always drawn is the need box, so its code is
+  // folded into that text -- same protocol on the step's side, same place on the page for both.
+  if (running === "extension" && state.code && state.need && !state.need.includes(state.code)) {
+    state.need = `${state.need}  Code: ${state.code}`;
   }
   state.log = plain.slice(-200).join("\n");
 }
@@ -371,6 +396,12 @@ function afterStep(ok) {
       push();
     }
     return;
+  }
+  if (running === "extension") {
+    // Its code is single-use and five minutes old at most; leaving it on screen for the rest of the
+    // run would be showing a number that no longer works.
+    state.code = "";
+    state.need = "";
   }
   if (!ok) {
     const s = stepById(running);

@@ -21,6 +21,24 @@ Everything stays on this computer. The extension talks to `127.0.0.1` and `local
    extension is loaded. Click the X to dismiss it; it comes back next start. A Chrome Web Store
    listing removes it for good, which is the plan once the extension has settled.
 
+### Why by hand, and not by the installer
+
+The Windows setup does everything either side of those two clicks — it starts the bridge, mints the
+pairing code, copies this folder's path to the clipboard and opens `chrome://extensions` — but it
+cannot do the loading itself. That is Chrome's position, not a gap in the setup, and it was measured
+on Chrome 152.0.7977.83 (Windows 11 ARM) rather than assumed:
+
+| Route | Result |
+|---|---|
+| `chrome.exe --load-extension=<dir>` | Installs nothing. The switch was removed, and `--disable-features=DisableLoadExtensionCommandLineSwitch` does not bring it back: the profile's extension list stayed empty. |
+| `HKCU\Software\Google\Chrome\Extensions\<id>` with `path` to a packed `.crx` and `version` | Does not install it. |
+| Enterprise policy force-install (`ExtensionInstallForcelist` with `ExtensionInstallAllowlist`, `ExtensionAllowedTypes` and a `file:///` update manifest), at both `HKCU\Software\Policies\Google\Chrome` and `HKLM\SOFTWARE\Policies\Google\Chrome` | Does not install it. |
+| `chrome.exe --pack-extension=<dir>` | Works, and produces a `.crx` and a `.pem` — but nothing above will install that `.crx` automatically, so it buys nothing on its own. |
+
+So on Chrome 152 an off-store extension can only be added by a person, here, with Developer mode on.
+A **Chrome Web Store listing is the only route to a fully automatic install**, and it would remove
+both the manual load and the developer-mode warning bar. That is a later phase.
+
 ## Pair it with the dashboard
 
 1. Start the dashboard (`npm run dashboard`, default port 4319).

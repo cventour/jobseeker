@@ -8,6 +8,7 @@
 #   powershell -File scripts\win\setup-step.ps1 chrome         install Google Chrome, then verify it
 #   powershell -File scripts\win\setup-step.ps1 configure      settings file, global agent, data folders
 #   powershell -File scripts\win\setup-step.ps1 start          start the dashboard and wait for it to answer
+#   powershell -File scripts\win\setup-step.ps1 extension      load the Chrome extension and pair it
 #   powershell -File scripts\win\setup-step.ps1 whatsapp <num> install the WhatsApp plugin and pair a phone
 #
 # This is the GUI half of what scripts\win\setup.ps1 does at a terminal. It differs in one way that
@@ -424,6 +425,66 @@ function Check-Whatsapp {
   return Ck $true "connected"
 }
 
+# ---- the JobSeeker Bridge extension (also read by check-all, so it lives with the other checks) ----
+
+function Get-DataDir {
+  if ($env:JOBSEEKER_DATA_DIR) { return $env:JOBSEEKER_DATA_DIR }
+  return (Join-Path $Repo "data")
+}
+
+function Get-BridgePort {
+  if (Test-Path -LiteralPath $ConfigFile) {
+    foreach ($line in [IO.File]::ReadAllLines($ConfigFile)) {
+      if ($line -match '^bridge_port:\s*(\d+)') { return $Matches[1] }
+    }
+  }
+  return "4320"
+}
+
+# Ask every port the extension itself would ask. extension\background.js probes 4319 then 4320, the
+# dashboard serves /bridge/* on dashboard_port, and `node server\bridge.mjs --serve` serves the same
+# routes on bridge_port. "connected" is held in the memory of whichever of those the extension is
+# actually polling, never on disk, so both are asked and either one saying yes is the answer.
+# 127.0.0.1 and not localhost: the bridge binds the IPv4 loopback only, and on a machine where
+# localhost resolves to ::1 first the probe would report "nothing there" about a running bridge.
+function Get-BridgeState {
+  $ports = @([string](Get-DashboardPort))
+  $bp = [string](Get-BridgePort)
+  if ($ports -notcontains $bp) { $ports += $bp }
+  $answered = $false
+  $paired = $false
+  $answeredPort = ""
+  foreach ($p in $ports) {
+    $body = Get-Url ("http://127.0.0.1:{0}/bridge/status" -f $p) 2
+    if (-not $body) { continue }
+    $j = $null
+    try { $j = ConvertFrom-Json $body } catch { $j = $null }
+    if (-not $j) { continue }
+    if (-not $answered) { $answeredPort = $p }
+    $answered = $true
+    if ($j.paired) { $paired = $true }
+    if ($j.connected) { return @{ Answered = $true; Paired = $true; Connected = $true; Port = $p } }
+  }
+  return @{ Answered = $answered; Paired = $paired; Connected = $false; Port = $answeredPort }
+}
+
+# Pairing, not liveness, is what "set up" means here -- the same shape as Check-Whatsapp. The token
+# the extension traded its code for is on disk in data\.bridge.ext.json and outlives Chrome being
+# closed, so a machine that connected the extension last month is not dragged back through this step
+# merely because Chrome is not open at this second.
+function Check-Extension {
+  if (-not (Test-Path -LiteralPath (Join-Path $Repo "extension\manifest.json"))) {
+    return Ck $false "the extension folder is missing from this checkout"
+  }
+  if (Test-Path -LiteralPath (Join-Path (Get-DataDir) ".bridge.ext.json")) {
+    $st = Get-BridgeState
+    if ($st.Connected) { return Ck $true "connected" }
+    return Ck $true "loaded and paired"
+  }
+  if (-not (Get-ChromeExe)) { return Ck $false "Chrome is not installed" }
+  return Ck $false ""
+}
+
 function Get-Check([string]$Id) {
   switch ($Id) {
     "node" { return Check-Node }
@@ -432,6 +493,7 @@ function Get-Check([string]$Id) {
     "chrome" { return Check-Chrome }
     "configure" { return Check-Configure }
     "start" { return Check-Start }
+    "extension" { return Check-Extension }
     "whatsapp" { return Check-Whatsapp }
   }
   return Ck $false ""
@@ -548,7 +610,7 @@ function Test-Signature([string]$Path, [string[]]$ExpectSubject) {
 function Do-CheckAll {
   # Same ids, same order and the same two lines per id as the bash, plus `git` — which is a real
   # prerequisite here and does not exist as one on macOS.
-  foreach ($id in @("node", "git", "claude", "chrome", "configure", "start", "whatsapp")) {
+  foreach ($id in @("node", "git", "claude", "chrome", "configure", "start", "extension", "whatsapp")) {
     $c = Get-Check $id
     if ($c.Ok) { Write-Step $id "ok" } else { Write-Step $id "fail" }
     if ($c.Text) { Write-Detail $id $c.Text }
@@ -997,6 +1059,179 @@ function Do-Start {
   Write-Step "start" "fail"; Finish "fail"
 }
 
+# ---------------------------------------------------------------------------- extension
+# Connecting the JobSeeker Bridge extension: everything around the two clicks Chrome insists a
+# person makes, and then a proof that it worked.
+#
+# CHROME NO LONGER LETS A PROGRAM ADD AN UNPACKED EXTENSION. That is not a guess or a policy
+# preference, it is what four routes measured on Chrome 152.0.7977.83 (Windows 11 ARM) did:
+#
+#   * chrome.exe --load-extension=<dir>
+#       Installs nothing. Google removed the switch, and
+#       --disable-features=DisableLoadExtensionCommandLineSwitch does not bring it back: after the
+#       run the profile's extension list was empty.
+#   * HKCU\Software\Google\Chrome\Extensions\<id>, `path` to a packed .crx plus `version`
+#       The external-extension registry route. Does not install it.
+#   * Enterprise policy force-install with a local update manifest
+#       ExtensionInstallForcelist + ExtensionInstallAllowlist + ExtensionAllowedTypes and a
+#       file:/// update.xml pointing at a locally packed .crx, tried at BOTH
+#       HKCU\Software\Policies\Google\Chrome and HKLM\SOFTWARE\Policies\Google\Chrome.
+#       Does not install it.
+#   * chrome.exe --pack-extension=<dir>
+#       This one works and produces a .crx and a .pem -- but nothing above will install that .crx
+#       automatically, so packing buys nothing on its own.
+#
+# So on Chrome 152 the only way in is a human at chrome://extensions with Developer mode on and
+# Load unpacked. A Chrome Web Store listing is the one thing that would remove that step, and it is
+# a later phase, not this one.
+#
+# What this step does is everything else -- make sure a bridge is listening, mint the pairing code,
+# put the folder path on the clipboard, open chrome://extensions, say plainly what to click -- and
+# then watch /bridge/status until it says connected. It reports success only when it did.
+#
+# A timeout is not a failure. Chrome is optional on Windows and the same thing can be finished at
+# any time from Settings > Browser > Connect, so the step finishes as skipped and setup carries on.
+function Do-Extension {
+  Write-Step "extension" "running"; Write-Pct 3
+
+  $extDir = Join-Path $Repo "extension"
+  if (-not (Test-Path -LiteralPath (Join-Path $extDir "manifest.json"))) {
+    Write-Log ("no extension\manifest.json under " + $Repo)
+    Write-Detail "extension" "The extension folder is missing from this checkout"
+    Write-Step "extension" "fail"; Finish "fail"
+  }
+
+  # Chrome is optional here, so from this point on nothing may stop the install. Every way out
+  # below is a skip, and every one of them names where the user can finish the job later.
+  $chromeExe = Get-ChromeExe
+  if (-not $chromeExe) {
+    Write-Log "Chrome is not installed; there is nothing to load the extension into"
+    Write-Detail "extension" "Chrome is not installed — you can connect this later from Settings ▸ Browser"
+    Write-Step "extension" "skip"; Write-Pct 100; Finish "ok"
+  }
+  $node = Get-NodeBin
+  if (-not $node) {
+    Write-Log "no node, so no bridge and no pairing code"
+    Write-Detail "extension" "Node is not installed — you can connect this later from Settings ▸ Browser"
+    Write-Step "extension" "skip"; Write-Pct 100; Finish "ok"
+  }
+
+  $st = Get-BridgeState
+  if ($st.Connected) {
+    Write-Log ("already connected, on port " + $st.Port)
+    Write-Detail "extension" "Already connected"
+    Write-Step "extension" "ok"; Write-Pct 100; Finish "ok"
+  }
+
+  # ---- make sure a bridge is listening ----
+  # Normally the dashboard is already up and answering /bridge/status on dashboard_port, because
+  # `start` ran before this step. The standalone bridge is the fallback for the run where it did not.
+  Write-Pct 12
+  if (-not $st.Answered) {
+    Write-Say "Starting the browser bridge"
+    $bridgeJs = Join-Path $Repo "server\bridge.mjs"
+    $sp = @{
+      FilePath               = $node
+      ArgumentList           = (ConvertTo-CmdLine @($bridgeJs, "--serve"))
+      WorkingDirectory       = $Repo
+      RedirectStandardOutput = (Join-Path $Work "bridge.log")
+      RedirectStandardError  = (Join-Path $Work "bridge.err.log")
+      PassThru               = $true
+    }
+    # Same hidden start as do_start: -WindowStyle Hidden is what stops a console flashing up, and
+    # pwsh on macOS (where the smoke test runs) rejects it outright.
+    if ($OnWindows) { $sp["WindowStyle"] = "Hidden" } else { $sp["NoNewWindow"] = $true }
+    $proc = $null
+    try { $proc = Start-Process @sp } catch { $proc = $null }
+    if ($proc) { Write-Log ("bridge pid " + $proc.Id) }
+    # It is deliberately NOT stopped at the end of this step: killing it would disconnect the very
+    # extension the step just connected. With nothing polling it, it exits on its own after 15 min.
+    for ($i = 1; $i -le 40; $i++) {
+      $st = Get-BridgeState
+      if ($st.Answered) { break }
+      Start-Sleep -Milliseconds 500
+    }
+    if (-not $st.Answered) {
+      Write-Log "nothing answered /bridge/status - see data\.setup\bridge.err.log"
+      Write-Detail "extension" "The browser bridge did not start — you can connect this later from Settings ▸ Browser"
+      Write-Step "extension" "skip"; Write-Pct 100; Finish "ok"
+    }
+  }
+  Write-Log ("bridge answering on port " + $st.Port)
+
+  # ---- mint a pairing code ----
+  # mintPairingCode() writes data\.bridge.pair.json, which is the same file the running bridge reads
+  # when the extension posts a code, so minting out of process is exactly as good as asking the
+  # bridge to do it. The snippet travels in an environment variable because 5.1's argument binder
+  # mangles the quotes in it on a command line.
+  Write-Pct 25
+  Write-Say "Making a pairing code"
+  # The module path is derived from the working directory rather than passed as an argument, and
+  # that is not a style choice: under `node -e` process.argv[1] is the first USER argument, and
+  # bridge.mjs treats "argv[1] resolves to me" as "I was run directly" and exits with a usage line.
+  # Handing it its own path would make it refuse to be imported.
+  $snippet = 'const p=require("path"),{pathToFileURL}=require("url");import(pathToFileURL(p.join(process.cwd(),"server","bridge.mjs")).href).then(m=>m.mintPairingCode(process.argv[1])).then(x=>console.log(x.code)).catch(e=>{console.error(e&&e.message?e.message:String(e));process.exit(1)})'
+  $r = Invoke-NodeSnippet -Snippet $snippet -ArgumentList @((Get-DataDir))
+  $code = ""
+  if ($r.ExitCode -eq 0 -and $r.Out -match '(\d{6})') { $code = $Matches[1] }
+  if (-not $code) {
+    Write-Log ("could not mint a pairing code: " + $r.Err)
+    Write-Detail "extension" "Could not make a pairing code — you can connect this later from Settings ▸ Browser"
+    Write-Step "extension" "skip"; Write-Pct 100; Finish "ok"
+  }
+  Write-Log "pairing code issued"
+
+  # ---- hand the two clicks to the user, with as little typing as possible ----
+  Write-Pct 35
+  $copied = $true
+  try { Set-Clipboard -Value $extDir } catch { $copied = $false }
+  if ($copied) { Write-Log ("copied to the clipboard: " + $extDir) }
+  else { Write-Log ("could not reach the clipboard; the folder is " + $extDir) }
+
+  Write-Say "Opening chrome://extensions"
+  try {
+    Start-Process -FilePath $chromeExe -ArgumentList (ConvertTo-CmdLine @("chrome://extensions")) | Out-Null
+  } catch {
+    Write-Log ("could not open Chrome: " + $_.Exception.Message)
+  }
+
+  # The extension looks for the bridge on 4319 then 4320 by itself. Any other port has to be typed
+  # into its "Dashboard port" field, so say so rather than leaving a silent dead end.
+  $portNote = ""
+  if ($st.Port -ne "4319" -and $st.Port -ne "4320") {
+    $portNote = " Set Dashboard port to " + $st.Port + " in the options first."
+  }
+  $where = "paste the folder path (already copied)"
+  if (-not $copied) { $where = "choose " + $extDir }
+
+  Emit ("::code " + $code)
+  Write-Need ("In Chrome: turn on Developer mode (top right), click Load unpacked and " + $where +
+    ". Then open JobSeeker Bridge ▸ Details ▸ Extension options, type this code and click Connect." + $portNote)
+  Write-Detail "extension" "Waiting for you to load it in Chrome"
+
+  # ---- wait for it to actually connect ----
+  # The only thing that ends this loop with a success is /bridge/status saying connected. There is
+  # no "it probably worked" branch: the whole point of the step is that it does not have to guess.
+  Write-Pct 45
+  Write-Say "Waiting for the extension to connect"
+  $deadline = (Get-Date).AddMinutes(5)
+  $i = 0
+  while ((Get-Date) -lt $deadline) {
+    $i = $i + 1
+    $st = Get-BridgeState
+    if ($st.Connected) {
+      Write-Log ("connected on port " + $st.Port)
+      Write-Detail "extension" "Connected to Chrome"
+      Write-Step "extension" "ok"; Write-Pct 100; Finish "ok"
+    }
+    Write-Pct ([Math]::Min(95, 45 + [int]($i / 3)))
+    Start-Sleep -Seconds 2
+  }
+  Write-Log "gave up waiting; nothing ever reported connected"
+  Write-Detail "extension" "Not connected yet — finish this any time from Settings ▸ Browser ▸ Connect"
+  Write-Step "extension" "skip"; Write-Pct 100; Finish "ok"
+}
+
 # ---------------------------------------------------------------------------- whatsapp
 # Everything here is OPTIONAL and only runs if the user asks for it on the WhatsApp screen.
 #
@@ -1228,9 +1463,10 @@ switch ($cmd) {
   "chrome" { Do-Chrome }
   "configure" { Do-Configure }
   "start" { Do-Start }          # the Mac passes its app pid as $arg1; there is no watchdog here
+  "extension" { Do-Extension }
   "whatsapp" { Do-Whatsapp $arg1 }
   default {
-    [Console]::Error.WriteLine("usage: setup-step.ps1 <check-all|node|git|claude|chrome|configure|start|whatsapp <number>>")
+    [Console]::Error.WriteLine("usage: setup-step.ps1 <check-all|node|git|claude|chrome|configure|start|extension|whatsapp <number>>")
     exit 64
   }
 }
