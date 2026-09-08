@@ -342,6 +342,19 @@ async function main() {
         why += ` | ${f}: absent`;
       }
     }
+    // Nothing written at all means the script never started, which the detached spawn cannot
+    // report. Run the same command in the foreground and quote whatever it says.
+    try {
+      const c = plat.scriptCommand("parse-cv");
+      const out = await new Promise((res) =>
+        execFile(c.cmd, c.args, { cwd: sandbox, timeout: 60_000, env: sandboxEnv() }, (e, so, se) =>
+          res(`${e ? `exit ${e.code}: ` : ""}${String(se || "").trim() || String(so || "").trim()}`)
+        )
+      );
+      why += ` | running it directly: ${out.replace(/\s+/g, " ").slice(0, 500) || "(no output)"}`;
+    } catch (e) {
+      why += ` | could not run it directly: ${e.message}`;
+    }
   }
   check(changed.body.includes("What changed") && changed.body.includes("Pre-sales Engineer"),
     "a re-read shows the old values beside the new ones", why);
