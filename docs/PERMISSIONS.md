@@ -63,6 +63,35 @@ Check the current state at any time with `npm run browser:probe`. It writes
 `data/.browser-status.json` with `driver: "extension"` and a `bridge` block
 (`reachable`, `paired`, `connected`). The Apple Events fields read `not-applicable`.
 
+### Connecting it, step by step
+
+Setup offers this, and Settings shows it whenever it is not connected. Both carry the same two
+steps and the same six-digit code, so it does not matter which one you start from.
+
+**Settings, System checks.** The row says what is wrong, what it costs, and what to do. The folder
+path is the one to hand to Chrome.
+
+![The Chrome extension row in Settings, showing the two steps and the folder to load](images/windows-settings-extension.png)
+
+**Or the setup wizard, at the Chrome step.**
+
+![The same panel during setup](images/windows-wizard-chrome-step.png)
+
+Then, in Chrome:
+
+1. Open `chrome://extensions` and turn on **Developer mode** (top right).
+2. Click **Load unpacked** and choose the folder the dashboard named.
+3. Press **Connect** in JobSeeker for a six-digit code.
+4. On the extension's card click **Details**, then **Extension options**, and type the code.
+
+The code lasts five minutes and is used once. The pairing it creates does not expire: it survives
+restarting Chrome, restarting the dashboard, and rebooting. You only do this again if you press
+**Forget pairing**, remove the extension, or delete `data/`.
+
+When it has worked, the row turns green and the steps disappear.
+
+![The same row once the extension is connected](images/windows-settings-extension-connected.png)
+
 ---
 
 ## macOS
