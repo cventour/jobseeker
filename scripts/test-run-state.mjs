@@ -158,7 +158,15 @@ async function main() {
   check(st.state === "ok" && Array.isArray(st.gaps) && st.gaps.length === 0, "clean run reports ok", st.state);
 
   st = await runWith(dir, { canRead: false, digest: "delivered: whatsapp", boards: 53 });
-  check(st.state === "partial", "a run that could not read pages reports partial", st.state);
+  // When the verdict is wrong, the verdict alone says nothing about why. Show what the run
+  // actually measured, and the tail of its own log.
+  const why = async () => {
+    const tail = await fs.readFile(path.join(dir, "data", ".job-run.log"), "utf8")
+      .then((t) => t.trim().split("\n").slice(-8).join(" / ")).catch(() => "no log");
+    return `state=${st.state} gaps=${JSON.stringify(st.gaps)} coverage=${JSON.stringify(st.coverage)} log: ${tail}`;
+  };
+  check(st.state === "partial", "a run that could not read pages reports partial",
+    st.state === "partial" ? st.state : await why());
   check((st.gaps || []).includes("browser-read"), "…and names browser-read");
   check((st.gaps || []).includes("boards-queued"), "…and the boards it therefore could not drain");
   check(String(st.coverage?.blockers?.[0] || "").includes("Apple Events"), "…keeping the blocker text verbatim");
