@@ -346,12 +346,15 @@ async function main() {
     // report. Run the same command in the foreground and quote whatever it says.
     try {
       const c = plat.scriptCommand("parse-cv");
+      const scriptPath = c.args[c.args.length - (c.cmd === "bash" ? 1 : 1)];
+      const present = await fs.access(c.args.find((a) => /\.(sh|ps1)$/.test(a)) || scriptPath)
+        .then(() => "present").catch(() => "MISSING");
       const out = await new Promise((res) =>
         execFile(c.cmd, c.args, { cwd: sandbox, timeout: 60_000, env: sandboxEnv() }, (e, so, se) =>
-          res(`${e ? `exit ${e.code}: ` : ""}${String(se || "").trim() || String(so || "").trim()}`)
+          res(`exit ${e ? e.code : 0}; stderr=${JSON.stringify(String(se || "").trim().slice(0, 300))}; stdout=${JSON.stringify(String(so || "").trim().slice(0, 300))}`)
         )
       );
-      why += ` | running it directly: ${out.replace(/\s+/g, " ").slice(0, 500) || "(no output)"}`;
+      why += ` | cmd=${c.cmd} script=${present} | ${out.replace(/\s+/g, " ")}`;
     } catch (e) {
       why += ` | could not run it directly: ${e.message}`;
     }
