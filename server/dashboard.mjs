@@ -2001,15 +2001,44 @@ function unfinishedHTML(w, markets) {
 // steps that pair it. Shared by Settings and the wizard so the words cannot drift apart.
 function bridgeStateHTML(bs) {
   if (!bs) return `<span class="bad-pill">bridge unavailable</span>`;
-  if (bs.connected) return `<span class="ok-pill">connected as ${esc(bs.extensionId || "extension")}</span>`;
-  if (bs.paired) return `<span class="bad-pill">paired, extension not running</span>`;
-  return `<span class="bad-pill">not paired</span>`;
+  if (bs.connected) return `<span class="ok-pill">connected</span>`;
+  if (bs.paired) return `<span class="bad-pill">Chrome not running</span>`;
+  return `<span class="bad-pill">not connected</span>`;
+}
+
+/**
+ * What the state actually costs, and what to do about it. Three states, three different fixes, and
+ * a pill on its own tells the reader none of that.
+ */
+function bridgeWhyHTML(bs) {
+  const lost =
+    "Until it is connected, a run cannot read WhatsApp Web, LinkedIn or careers pages. Everything " +
+    "else — your email, the tracker, applying — is unaffected.";
+  if (!bs) return `The bridge did not start. Restart JobSeeker, then re-check.`;
+  if (bs.connected) return `Reading WhatsApp Web, LinkedIn and careers pages through your own Chrome.`;
+  if (bs.paired) {
+    return `This Chrome is paired, but nothing is answering. Open Chrome and give it a moment. ${lost}`;
+  }
+  return `The JobSeeker Bridge extension is not connected to this dashboard yet. ${lost}`;
 }
 
 function bridgeConnectHTML(back, extraHidden = "") {
   return `<form method="POST" action="/bridge-mint" class="inline">${extraHidden}
       <input type="hidden" name="_back" value="${esc(back)}">
       <button type="submit" class="btn-small">Connect</button></form>`;
+}
+
+/** The two steps, with no code yet. Pressing Connect adds the code to the same shape. */
+function bridgeHowToHTML() {
+  const folder = path.join(ROOT, "extension");
+  return `<div class="alert warn bridge-pair">
+      <ol>
+        <li>Open <code>chrome://extensions</code>, turn on <b>Developer mode</b>, click <b>Load unpacked</b>
+          and choose this folder:<br><code class="bridge-path" title="Select and copy">${esc(folder)}</code></li>
+        <li>Press <b>Connect</b> above for a six-digit code, then enter it in the extension's <b>Options</b>.</li>
+      </ol>
+      <p class="muted">You only do this once. Chrome does not let a program add an extension for you.</p>
+    </div>`;
 }
 
 function bridgePairingHTML(pair) {
@@ -2055,10 +2084,13 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
       ? [
           "Chrome extension",
           bridgeStateHTML(st.bridge),
-          bridgeConnectHTML("settings", hidden),
-          "Lets the scheduled run read WhatsApp Web and LinkedIn through your Chrome. Windows has no " +
-            "Automation permission, so a small extension stands in for it." +
-            bridgePairingHTML(activePairing()),
+          st.bridge && st.bridge.connected ? "" : bridgeConnectHTML("settings", hidden),
+          bridgeWhyHTML(st.bridge) +
+            // A red pill with no way forward is a dead end, so the steps appear as soon as there is
+            // something to fix, rather than waiting for the user to guess that Connect comes first.
+            (st.bridge && st.bridge.connected
+              ? ""
+              : bridgePairingHTML(activePairing()) || bridgeHowToHTML()),
         ]
       : [
           "Browser agent",
@@ -5660,13 +5692,20 @@ function welcomeStepHTML(key, st, mode = {}) {
       </div>
       ${
         platform.IS_WIN
-          ? `<div class="wcard" style="margin-top:12px">
-              <p class="wnote" style="margin:0 0 8px"><b>Chrome extension</b> ${bridgeStateHTML(bridge ? bridge.status() : null)}
-              ${bridgeConnectHTML(solo ? "setup-step" : "welcome")}</p>
-              <p class="wnote" style="margin:0">Windows has no Automation permission, so a small extension
-                lets JobSeeker read the tabs you already have open. Click Connect, then follow the two steps.</p>
-              ${bridgePairingHTML(activePairing())}
-            </div>`
+          ? (() => {
+              // Same rule as Settings: if it is not connected, the way to fix it is on screen
+              // already. Nobody should have to press a button to find out what the steps are.
+              const bs = bridge ? bridge.status() : null;
+              const done = Boolean(bs && bs.connected);
+              return `<div class="wcard" style="margin-top:12px">
+              <p class="wnote" style="margin:0 0 8px"><b>Chrome extension</b> ${bridgeStateHTML(bs)}
+              ${done ? "" : bridgeConnectHTML(solo ? "setup-step" : "welcome")}</p>
+              <p class="wnote" style="margin:0">${bridgeWhyHTML(bs)}</p>
+              ${done ? "" : bridgePairingHTML(activePairing()) || bridgeHowToHTML()}
+              <p class="wnote" style="margin:8px 0 0">You can also finish this later, from
+                <a href="/settings?tab=setup">Settings</a>. Saying yes above is what matters here.</p>
+            </div>`;
+            })()
           : canRead
           ? `<p class="wnote">Chrome is reachable on this Mac.</p>`
           : `<p class="wnote">macOS has not granted Chrome access yet. Saying yes here records the
