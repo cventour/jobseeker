@@ -160,6 +160,10 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .wel img{width:min(380px,44vh);height:auto;display:block;margin-bottom:30px}
 .wel h1{font-size:30px;line-height:1.2;letter-spacing:-.02em;margin:0 0 12px;font-weight:600}
 .wel p{margin:0;font-size:16px;line-height:1.65;color:var(--mut);max-width:46ch}
+/* Get started belongs to the sentence that invites it, not to the strip at the foot of the window
+   twenty lines away. Quit stays down there: leaving is always available and never the offer. */
+#wel-acts{margin-top:26px}
+#wel-acts button{font-size:15px;padding:11px 22px}
 
 /* ---- WhatsApp ---- */
 .wa h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
@@ -280,7 +284,8 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     <img src="logo-128.png" alt="">
     <h1>Welcome to JobSeeker</h1>
     <p>This wizard will walk you through installing JobSeeker on your device and connecting it
-      to your cloud. Click <b>Get started</b> to begin.</p>
+      to your cloud.</p>
+    <span class="acts" id="wel-acts"></span>
   </div>
 
   <!-- Only ever used to report where something was written. Kept deliberately dumb: one message,
@@ -688,6 +693,13 @@ function renderChecklist(st) {
     // so the person has to. The button sits on the row it belongs to, and is offered whether the
     // step is waiting, finished or failed -- it is a reference, not an error message.
     if (s.help) {
+      // Neither of these can work before JobSeeker is running: the extension pairs against the
+      // bridge the dashboard hosts, and the WhatsApp step writes into a configured install. Offered
+      // early they lead somewhere that fails for a reason the user cannot see, so they are offered
+      // late instead -- visible the whole time, so nothing appears out of nowhere, and live only
+      // once the row above them is green.
+      var started = st.steps.some(function (x) { return x.id === "start" && x.state === "ok"; });
+      var needsStart = s.id === "extension" || s.id === "whatsapp";
       // Between the row and its instructions, where the eye already is: the code, then the button
       // that explains where to type it.
       if (s.id === "extension" && st.code && st.codeFor === "extension" && st.view === "work") {
@@ -702,6 +714,10 @@ function renderChecklist(st) {
       }
       var howto = el("button", s.state === "running" ? "primary" : "",
                      s.helpLabel || "Install instructions");
+      if (needsStart && !started) {
+        howto.disabled = true;
+        howto.title = "Available once JobSeeker has started.";
+      }
       howto.onclick = function () { send("help", s.help); };
       slot.appendChild(howto);
     }
@@ -780,7 +796,12 @@ function renderActions(st) {
 
   if (st.view === "welcome") {
     add("Quit", "ghost", "quit");
-    add("Get started", "primary", "continue");
+    // Get started goes under the welcome's own paragraph, not into the strip at the foot.
+    var wel = document.getElementById("wel-acts");
+    wel.textContent = "";
+    var go = el("button", "primary", "Get started");
+    go.onclick = function () { send("continue"); };
+    wel.appendChild(go);
   } else if (st.view === "plan") {
     add("Back", "ghost", "back");
     add(st.allInstalled ? "Start JobSeeker" : "Begin", "primary", "begin");
@@ -882,7 +903,9 @@ window.__render = function (st) {
 
   document.getElementById("status").innerHTML = "";
   var stat = document.getElementById("status");
-  if (st.status) {
+  // The welcome says nothing about installs. Whatever the survey has or has not found is the next
+  // screen's business; here it would only be a status line under a page that has no status.
+  if (st.status && st.view !== "welcome") {
     var parts = String(st.status).split("|");
     stat.appendChild(el("b", null, parts[0]));
     if (parts[1]) stat.appendChild(document.createTextNode(" " + parts[1]));

@@ -520,11 +520,18 @@ wa_plugin_name() {
   fi
 }
 
+# Linked, as opposed to half-way through linking.
+#
+# `registered` alone is not proof: Baileys sets it when the pairing code is REQUESTED, before the
+# phone has confirmed anything. A run that asked for a code and was then abandoned leaves a file
+# that says registered, and the next run believed it -- reporting "connected as +971..." to someone
+# who had never received a code, let alone typed one. `me.id` is written only once the phone has
+# actually completed the link, so both are required.
 wa_paired() {
   local creds="$WA_DIR/.baileys_auth/creds.json"
   [ -f "$creds" ] || return 1
   local n; n="$(node_bin)" || return 1
-  "$n" -e 'try{const c=require(process.argv[1]);process.exit(c.registered?0:1)}catch{process.exit(1)}' \
+  "$n" -e 'try{const c=require(process.argv[1]);process.exit(c.registered&&c.me&&c.me.id?0:1)}catch{process.exit(1)}' \
     "$creds" 2>/dev/null
 }
 

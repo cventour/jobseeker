@@ -441,10 +441,17 @@ $WaPluginRepo = "Rich627/whatsapp-claude-plugin"
 $WaPluginFallback = "whatsapp-claude-channel"
 $WaMarketplace = "whatsapp-claude-plugin"
 
+# Linked, as opposed to half-way through linking.
+#
+# `registered` alone is not proof: Baileys sets it when the pairing code is REQUESTED, before the
+# phone has confirmed anything. A run that asked for a code and was then abandoned leaves a file
+# that says registered, and the next run believed it -- reporting "connected as +971..." to someone
+# who had never received a code, let alone typed one. `me.id` is written only once the phone has
+# actually completed the link, so both are required.
 function Test-WaPaired {
   $creds = Join-Path $WaDir ".baileys_auth\creds.json"
   if (-not (Test-Path -LiteralPath $creds)) { return $false }
-  $snippet = 'try{const c=require(process.argv[1]);process.exit(c.registered?0:1)}catch{process.exit(1)}'
+  $snippet = 'try{const c=require(process.argv[1]);process.exit(c.registered&&c.me&&c.me.id?0:1)}catch{process.exit(1)}'
   $r = Invoke-NodeSnippet -Snippet $snippet -ArgumentList @($creds)
   return ($r.ExitCode -eq 0)
 }
@@ -1577,26 +1584,56 @@ function Do-Whatsapp([string]$Phone) {
   }
   Write-Log ("channel server pid " + $server.Id)
 
+  # Watch every place the code could appear, twice a second, for two minutes.
+  #
+  # It used to read pairing.log alone, once a second, for sixty. Three assumptions in that, and the
+  # plugin is a third party's: that it still writes that file, that it still writes that exact
+  # sentence, and that WhatsApp answers within a minute of a cold start. When the code did not
+  # arrive, the step said "WhatsApp did not send a code" -- which was a guess. It may well have
+  # sent one somewhere we were not looking.
+  #
+  # So: the plugin's own log AND the server's stdout and stderr; a loose pattern as well as the
+  # exact one; and if nothing matches, the tail of all three files goes into the log, so the next
+  # report is a reading rather than another guess.
   $code = ""
-  for ($i = 1; $i -le 60; $i++) {
-    if (Test-Path -LiteralPath $pairingLog) {
-      try {
-        $all = @([IO.File]::ReadAllLines($pairingLog))
-        for ($j = $all.Count - 1; $j -ge $before; $j--) {
-          if ($all[$j] -match 'PAIRING CODE: ([A-Z0-9-]+)') { $code = $Matches[1]; break }
-        }
-      } catch { }
+  $deadline = (Get-Date).AddSeconds(120)
+  $i = 0
+  while ((Get-Date) -lt $deadline) {
+    $i = $i + 1
+    foreach ($src in @($pairingLog, $waLog, $waErr)) {
       if ($code) { break }
+      if (-not (Test-Path -LiteralPath $src)) { continue }
+      $skip = 0
+      # Old codes in the plugin's own log are still there and still look valid. Only lines written
+      # since this attempt began count; the server logs are fresh each run, so they start at 0.
+      if ($src -eq $pairingLog) { $skip = $before }
+      try { $all = @([IO.File]::ReadAllLines($src)) } catch { continue }
+      for ($j = $all.Count - 1; $j -ge $skip; $j--) {
+        $line = $all[$j]
+        if ($line -match 'PAIRING CODE:\s*([A-Z0-9]{4}-?[A-Z0-9]{4})') { $code = $Matches[1]; break }
+        if ($line -match '(?i)pairing\s*code\b[^A-Za-z0-9]{0,12}([A-Z0-9]{4}-[A-Z0-9]{4})') { $code = $Matches[1]; break }
+      }
+      if ($code) { Write-Log ("found the code in " + (Split-Path -Leaf $src)) }
     }
+    if ($code) { break }
     if ($server.HasExited) { Write-Log "the channel server exited early"; break }
-    Write-Pct (65 + [int]($i / 4))
-    Start-Sleep -Seconds 1
+    Write-Pct (65 + [Math]::Min(18, [int]($i / 14)))
+    Start-Sleep -Milliseconds 500
   }
 
   if (-not $code) {
     Stop-ProcessTree $server
-    Write-Log "no pairing code appeared within 60s"
-    Write-Detail "whatsapp" "WhatsApp did not send a code. Check the number and try again."
+    Write-Log "no pairing code appeared within 120s - here is what the three logs say"
+    foreach ($src in @($pairingLog, $waLog, $waErr)) {
+      Write-Log ("--- " + $src)
+      if (Test-Path -LiteralPath $src) {
+        try { Write-Indented ((@([IO.File]::ReadAllLines($src)) | Select-Object -Last 25) -join "`n") }
+        catch { Write-Log "  (unreadable)" }
+      } else {
+        Write-Log "  (absent)"
+      }
+    }
+    Write-Detail "whatsapp" "No code arrived — press Collect logs and check the number"
     Write-Step "whatsapp" "fail"; Finish "fail"
   }
   Write-Log "pairing code issued"
