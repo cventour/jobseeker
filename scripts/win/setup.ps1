@@ -87,7 +87,11 @@ function Invoke-Captured {
     $out = ""
     try {
       $p = Start-Process @sp
-      $code = [int]$p.ExitCode
+      # Touching .Handle while the child is alive is what makes .ExitCode readable afterwards on
+      # PowerShell 5.1; without it the property is $null and [int]$null is 0, so every check built
+      # on this would report success whatever the child did.
+      try { $null = $p.Handle } catch { }
+      if ($null -eq $p.ExitCode) { $code = 127 } else { $code = [int]$p.ExitCode }
     } catch { }
     if (Test-Path -LiteralPath $outFile) { $out = [IO.File]::ReadAllText($outFile).TrimEnd("`r", "`n") }
     return @{ ExitCode = $code; Out = $out }

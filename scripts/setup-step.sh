@@ -691,7 +691,7 @@ do_whatsapp() {
   # Both places it could appear, for two minutes. Reading one file for sixty seconds assumed the
   # plugin still writes that file, still writes that sentence, and that WhatsApp answers within a
   # minute of a cold start -- three assumptions about a third party's program.
-  local code="" i
+  local code="" i exit_noted=""
   for i in $(seq 1 240); do
     if [ -f "$WA_DIR/pairing.log" ]; then
       code="$(tail -n +$((before + 1)) "$WA_DIR/pairing.log" 2>/dev/null \
@@ -701,7 +701,11 @@ do_whatsapp() {
       code="$(sed -n 's/.*PAIRING CODE: \([A-Z0-9-]*\).*/\1/p' "$WORK/whatsapp-server.log" 2>/dev/null | tail -1)"
     fi
     [ -n "$code" ] && break
-    kill -0 "$server_pid" 2>/dev/null || { log "the channel server exited early"; break; }
+    # A launcher that has exited says nothing about the server it started: `bun run start` hands
+    # over to a child and leaves. Keep reading the logs until the deadline.
+    if ! kill -0 "$server_pid" 2>/dev/null && [ -z "$exit_noted" ]; then
+      exit_noted=1; log "the launcher process has exited; still watching the logs for a code"
+    fi
     pct $(( 65 + i / 15 )); sleep 0.5
   done
 

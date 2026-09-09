@@ -173,8 +173,16 @@ function Invoke-Captured {
         $sp.Remove("RedirectStandardInput") | Out-Null
         $p = Start-Process @sp
       }
+      # Cache the handle. Start-Process -PassThru hands back a Process object that does not keep
+      # the OS handle open, so once the child is gone .ExitCode reads as $null -- and [int]$null is
+      # 0, so EVERY check built on this reported success no matter what the child did. Touching
+      # .Handle while the child is alive makes Windows keep the handle, and the exit code readable.
+      # Measured on Windows 11 / PowerShell 5.1: without this, node -e "process.exit(3)" reports
+      # an empty ExitCode; with it, 3.
+      try { $null = $p.Handle } catch { <# already gone; the wait below still settles it #> }
       if ($p.WaitForExit($TimeoutSec * 1000)) {
-        $code = [int]$p.ExitCode
+        # Null still means "we never learned", which is a failure to report -- not a zero.
+        if ($null -eq $p.ExitCode) { $code = 127 } else { $code = [int]$p.ExitCode }
       } else {
         # Past its budget. Stop this child (not the stragglers it may have left, which are none of
         # our business) and report the timeout so the step can decide what it means.
@@ -587,6 +595,10 @@ function Invoke-Elevated([string]$FilePath, [string[]]$Arguments, [string]$What,
     $sp = @{ FilePath = $FilePath; Verb = "RunAs"; PassThru = $true }
     if ($cmdline) { $sp["ArgumentList"] = $cmdline }
     $p = Start-Process @sp
+    # Same handle trick as Invoke-Captured: without it .ExitCode reads as $null afterwards, and
+    # [int]$null is 0 -- which would have this log say "installer exited 0" about an installer whose
+    # result was never learned.
+    if ($p) { try { $null = $p.Handle } catch { <# ShellExecute may not give one #> } }
     if (-not $p) {
       Write-Log ("{0} installer did not report a process; letting the step verify instead" -f $What)
       return $true
@@ -610,8 +622,12 @@ function Invoke-Elevated([string]$FilePath, [string[]]$Arguments, [string]$What,
     # An elevated child is launched through ShellExecute, and its exit code is not always readable
     # afterwards. Unreadable is not "failed": the step's own verify is the judge either way, and
     # refusing to run it because a number was missing would report a successful install as a failure.
+    # Read it raw first. [int]$null is 0, so converting before testing turns "never learned" into
+    # "succeeded" -- true by luck here, since unreadable is treated as success, but a lie in the log.
+    $raw = $null
+    try { $raw = $p.ExitCode } catch { $raw = $null }
     $code = $null
-    try { $code = [int]$p.ExitCode } catch { $code = $null }
+    if ($null -ne $raw) { $code = [int]$raw }
     if ($null -eq $code) {
       Write-Log ("{0} installer finished (no exit code reported)" -f $What)
       return $true
@@ -1443,6 +1459,28 @@ function Get-WaPluginName {
   return $WaPluginFallback
 }
 
+# Stop the channel server, including the one the launcher left behind.
+#
+# `bun run start` exits once it has handed over, so the process actually serving WhatsApp is an
+# orphan by the time we want it gone -- not in the tree we started, and holding the lock file that
+# makes the NEXT attempt refuse to run. The plugin writes its own pid there, so use it.
+function Stop-WaServer($Proc) {
+  if ($Proc) { Stop-ProcessTree $Proc }
+  $lockFile = Join-Path $WaDir ".server.lock"
+  if (-not (Test-Path -LiteralPath $lockFile)) { return }
+  $lockPid = ""
+  try { $lockPid = ([string](Get-Content -LiteralPath $lockFile -TotalCount 1)).Trim() } catch { $lockPid = "" }
+  $n = 0
+  if ($lockPid -and [int]::TryParse($lockPid, [ref]$n)) {
+    $p = Get-Process -Id $n -ErrorAction SilentlyContinue
+    if ($p) {
+      Write-Log ("stopping the channel server the launcher left behind (pid {0})" -f $n)
+      try { Stop-Process -Id $n -Force -ErrorAction Stop } catch { Write-Log ("could not stop pid {0}" -f $n) }
+    }
+  }
+  Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+}
+
 function Do-Whatsapp([string]$Phone) {
   Write-Step "whatsapp" "running"
   Write-Pct 5
@@ -1635,6 +1673,7 @@ function Do-Whatsapp([string]$Phone) {
   # exact one; and if nothing matches, the tail of all three files goes into the log, so the next
   # report is a reading rather than another guess.
   $code = ""
+  $exitNoted = $false
   $deadline = (Get-Date).AddSeconds(120)
   $i = 0
   while ((Get-Date) -lt $deadline) {
@@ -1655,13 +1694,18 @@ function Do-Whatsapp([string]$Phone) {
       if ($code) { Write-Log ("found the code in " + (Split-Path -Leaf $src)) }
     }
     if ($code) { break }
-    if ($server.HasExited) { Write-Log "the channel server exited early"; break }
+    # Same reasoning as the wait below: the launcher exiting says nothing about the server it
+    # started. Keep reading the logs until the deadline.
+    if ($server.HasExited -and -not $exitNoted) {
+      $exitNoted = $true
+      Write-Log "the launcher process has exited; still watching the logs for a code"
+    }
     Write-Pct (65 + [Math]::Min(18, [int]($i / 14)))
     Start-Sleep -Milliseconds 500
   }
 
   if (-not $code) {
-    Stop-ProcessTree $server
+    Stop-WaServer $server
     Write-Log "no pairing code appeared within 120s - here is what the three logs say"
     foreach ($src in @($pairingLog, $waLog, $waErr)) {
       Write-Log ("--- " + $src)
@@ -1698,6 +1742,7 @@ function Do-Whatsapp([string]$Phone) {
   Write-Say "Waiting for your phone"
   $issued = Get-Date
   $jid = ""
+  $noted = $false
   for ($i = 1; $i -le 150; $i++) {
     foreach ($src in @($waErr, $waLog)) {
       if ($jid) { break }
@@ -1708,7 +1753,7 @@ function Do-Whatsapp([string]$Phone) {
       }
     }
     if ($jid) {
-      Stop-ProcessTree $server
+      Stop-WaServer $server
       Write-Log ("the channel reports it is connected as " + $jid)
       $num = Get-WaNumber
       Write-WaLinked $jid $num
@@ -1716,22 +1761,25 @@ function Do-Whatsapp([string]$Phone) {
       Write-Step "whatsapp" "ok"; Write-Pct 100; Finish "ok"
     }
     if (((Get-Date) - $issued).TotalSeconds -ge 20 -and (Test-WaPaired)) {
-      Stop-ProcessTree $server
+      Stop-WaServer $server
       Write-Log "no 'connected as' line, but the credentials have looked complete for 20s"
       $num = Get-WaNumber
       Write-WaLinked "" $num   # no jid to record; the number is what we know
       if ($num) { Write-Detail "whatsapp" ("connected as +{0}" -f $num) } else { Write-Detail "whatsapp" "Connected" }
       Write-Step "whatsapp" "ok"; Write-Pct 100; Finish "ok"
     }
-    if ($server.HasExited) {
-      Stop-ProcessTree $server
-      Write-Log "the channel server exited while waiting for the phone"
-      Write-Detail "whatsapp" "The WhatsApp channel stopped before the phone answered"
-      Write-Step "whatsapp" "fail"; Finish "fail"
+    # NOT a failure, and treating it as one was a bug: `bun run start` is a launcher, and the
+    # server it starts is a CHILD. The launcher exits as soon as it has handed over, so this said
+    # "the channel stopped before the phone answered" to someone whose phone was mid-link -- and
+    # then killed the process tree that was completing it. The logs are the thing to watch; they
+    # keep being written by whatever is actually running. Note it once and carry on waiting.
+    if ($server.HasExited -and -not $noted) {
+      $noted = $true
+      Write-Log "the launcher process has exited; still watching the logs (its server is a child)"
     }
     Start-Sleep -Seconds 2
   }
-  Stop-ProcessTree $server
+  Stop-WaServer $server
   Write-Log "gave up waiting for the phone"
   Write-Detail "whatsapp" "The code was not entered in time. You can try again."
   Write-Step "whatsapp" "fail"; Finish "fail"
