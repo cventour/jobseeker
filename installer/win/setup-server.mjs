@@ -436,6 +436,8 @@ let waFromModal = false;
 let waCodeShown = false;
 // Set when a step was killed deliberately, so its exit is not read as a verdict.
 let cancelled = false;
+// True while a test message is in flight, so a second press cannot start a second channel.
+let waTesting = false;
 let queuedTotal = 0;
 let queuedDone = 0;
 let flowDone = false;
@@ -893,6 +895,37 @@ function openClaudeSignin() {
  */
 let lastLogZip = "";
 
+/**
+ * Send one message to the user's own number, so the link is proved rather than asserted.
+ *
+ * Offered only after a link this window watched succeed. A green row is a claim about a handshake;
+ * a message arriving on the phone in your hand is the thing the user actually wanted to know.
+ */
+function sendWhatsAppTest() {
+  if (waTesting) return;
+  waTesting = true;
+  if (state.modal && state.modal.flow === "whatsapp") {
+    state.modal.test = "sending";
+    state.modal.testErr = "";
+    push();
+  }
+  const c = platform.nodeCommand("scripts/wa-test-message.mjs", ["Hi! This is JobSeeker."]);
+  const p = spawn(c.cmd, c.args, { cwd: REPO, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let err = "";
+  p.stderr.on("data", (d) => (err += d));
+  p.on("error", (e) => (err += e.message));
+  p.on("exit", (code) => {
+    waTesting = false;
+    const ok = code === 0;
+    log(ok ? "test message sent" : `test message failed: ${err.trim().slice(0, 200)}`);
+    if (state.modal && state.modal.flow === "whatsapp") {
+      state.modal.test = ok ? "sent" : "failed";
+      state.modal.testErr = ok ? "" : err.trim().slice(0, 200) || "The channel did not send it.";
+      push();
+    }
+  });
+}
+
 function collectLogs() {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const downloads = path.join(os.homedir(), "Downloads");
@@ -1189,6 +1222,8 @@ function handleCommand(cmd) {
       state.modal.page = "code";
       state.modal.outcome = "";
       state.modal.err = "";
+      state.modal.test = "";
+      state.modal.testErr = "";
     }
     launchStep("whatsapp", cmd.v || "");
     return;
@@ -1211,6 +1246,10 @@ function handleCommand(cmd) {
   }
   if (cmd.cmd === "claude-signin") {
     openClaudeSignin();
+    return;
+  }
+  if (cmd.cmd === "wa-test") {
+    sendWhatsAppTest();
     return;
   }
   if (cmd.cmd === "reveal-logs") {

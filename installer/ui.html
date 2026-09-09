@@ -510,6 +510,7 @@ var waNumber = "";      // kept across redraws: a push while someone is typing m
 // it back. Whatever ends that step, the page keeps showing what it showed.
 var waCode = "";
 var waOutcome = "";     // "" while waiting, then "ok" or "fail" -- drawn under the code, not over it
+var waTest = "";        // "" | "sending" | "sent" | "failed" -- the test message's own line
 
 function paneEl(cls) { return el("div", "pane " + cls); }
 
@@ -565,6 +566,7 @@ function buildWaPane(st, page, dir) {
       // somebody is copying onto a phone is not a screen to replace.
       if (m.outcome === "ok") {
         pane.appendChild(el("p", "good", "Connected. The morning digest will reach that number."));
+        addTestLine(pane, m);
       } else if (m.outcome === "fail") {
         pane.appendChild(el("p", "bad", m.err || "It did not connect."));
         pane.appendChild(el("p", "hint", "Try again issues a new code."));
@@ -580,6 +582,7 @@ function buildWaPane(st, page, dir) {
     }
   } else if (page === "done") {
     pane.appendChild(el("p", null, "Connected. The morning digest will reach that number."));
+    addTestLine(pane, m);
   } else if (page === "fail") {
     pane.appendChild(el("p", null, m.err || "It did not connect."));
     if (waCode) {
@@ -596,6 +599,21 @@ function buildWaPane(st, page, dir) {
       + "from the dashboard."));
   }
   return pane;
+}
+
+// What became of the test message, if one was asked for. Nothing at all until it is.
+function addTestLine(pane, m) {
+  if (!m.test) return;
+  if (m.test === "sending") {
+    var w = el("p", "hint");
+    w.appendChild(el("span", "spin"));
+    w.appendChild(document.createTextNode("Sending a test message\u2026"));
+    pane.appendChild(w);
+  } else if (m.test === "sent") {
+    pane.appendChild(el("p", "good", "Test message sent \u2014 check your phone."));
+  } else {
+    pane.appendChild(el("p", "bad", m.testErr || "The test message did not go."));
+  }
 }
 
 function waSend() {
@@ -636,6 +654,14 @@ function renderModalFoot(st) {
     b("Back", "ghost", function () { send("wa-page", "intro"); });
     b("Send me a code", "primary", waSend);
     waCode = "";
+  } else if (m.page === "done" || (m.page === "code" && m.outcome === "ok")) {
+    // Only here: a link this window watched succeed. Never offered on a page that is still waiting,
+    // and never on one that failed -- there would be nothing for it to send through.
+    b("Close", "ghost", close);
+    var t = b(m.test === "sent" ? "Send another" : "Send test message", "primary", function () {
+      send("wa-test");
+    });
+    t.disabled = m.test === "sending";
   } else if (m.page === "fail" || (m.page === "code" && m.outcome === "fail")) {
     b("Close", "ghost", close);
     // The failure text used to tell people to press Collect logs, and there was no Collect logs to
@@ -665,6 +691,8 @@ function renderModalStage(st) {
   // The outcome lands on a page that is already drawn, so the "same page" shortcut has to let it
   // through -- otherwise the answer never appears under the code.
   if (page === "code" && (m.outcome || "") !== waOutcome) { waOutcome = m.outcome || ""; codeArrived = true; }
+  // The test message's result lands on a page that is already drawn, the same way the outcome does.
+  if ((m.test || "") !== waTest) { waTest = m.test || ""; codeArrived = true; }
   if (same && !codeArrived) return;
   var dir = ORDER.indexOf(page) < ORDER.indexOf(waPage) ? "back" : "fwd";
   if (same) dir = "";
