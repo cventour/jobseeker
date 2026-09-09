@@ -651,21 +651,31 @@ do_whatsapp() {
   local server_pid=$!
   log "channel server pid $server_pid"
 
+  # Both places it could appear, for two minutes. Reading one file for sixty seconds assumed the
+  # plugin still writes that file, still writes that sentence, and that WhatsApp answers within a
+  # minute of a cold start -- three assumptions about a third party's program.
   local code="" i
-  for i in $(seq 1 60); do
+  for i in $(seq 1 240); do
     if [ -f "$WA_DIR/pairing.log" ]; then
       code="$(tail -n +$((before + 1)) "$WA_DIR/pairing.log" 2>/dev/null \
               | sed -n 's/.*PAIRING CODE: \([A-Z0-9-]*\).*/\1/p' | tail -1)"
-      [ -n "$code" ] && break
     fi
+    if [ -z "$code" ]; then
+      code="$(sed -n 's/.*PAIRING CODE: \([A-Z0-9-]*\).*/\1/p' "$WORK/whatsapp-server.log" 2>/dev/null | tail -1)"
+    fi
+    [ -n "$code" ] && break
     kill -0 "$server_pid" 2>/dev/null || { log "the channel server exited early"; break; }
-    pct $(( 65 + i / 4 )); sleep 1
+    pct $(( 65 + i / 15 )); sleep 0.5
   done
 
   if [ -z "$code" ]; then
     kill "$server_pid" 2>/dev/null
-    log "no pairing code appeared within 60s"
-    detail whatsapp "WhatsApp did not send a code. Check the number and try again."
+    log "no pairing code appeared within 120s - here is what the logs say"
+    for f in "$WA_DIR/pairing.log" "$WORK/whatsapp-server.log"; do
+      log "--- $f"
+      if [ -f "$f" ]; then tail -25 "$f" | sed 's/^/    /'; else log "  (absent)"; fi
+    done
+    detail whatsapp "No code arrived — press Collect logs and check the number"
     step whatsapp fail; finish fail
   fi
   log "pairing code issued"
@@ -674,16 +684,36 @@ do_whatsapp() {
   pct 85
 
   # ---- wait for the phone ----
+  # ---- wait for the phone, and take nobody's word for it but the channel's ----
+  #
+  # Reading the credential file was the wrong question twice over. Baileys writes creds.json while
+  # the pairing is being REQUESTED, so `registered` was true within a second and `me` shortly after
+  # -- the step reported "Connected" to people whose phones had never been touched.
+  #
+  # The plugin knows the answer and says so. Baileys raises connection 'open' only once the device
+  # is actually registered, and the plugin's handler writes to stderr:
+  #
+  #     whatsapp channel: connected as 971XXXXXXXXX@s.whatsapp.net
+  #
+  # That line is the confirmation. Nothing else is accepted as one, except a credential file that
+  # still looks complete twenty seconds later -- a fallback for the day that wording changes, long
+  # enough that it can never fire on a fresh request.
   say "Waiting for your phone"
-  # Nobody types an eight-character code into a phone in four seconds. A "paired" verdict that fast
-  # is the credential file describing the REQUEST, not the phone -- and acting on it is what made
-  # the code flash on screen and be replaced by "Connected" before anyone could write it down.
-  sleep 4
+  local jid=""
   for i in $(seq 1 150); do
-    if wa_paired; then
+    jid="$(grep -ho 'connected as [^ ]*' "$WORK/whatsapp-server.log" 2>/dev/null | tail -1 | sed 's/^connected as //')"
+    if [ -n "$jid" ]; then
       kill "$server_pid" 2>/dev/null
-      log "paired"
-      detail whatsapp "Connected"
+      log "the channel reports it is connected as $jid"
+      local n; n="$(wa_number)"
+      if [ -n "$n" ]; then detail whatsapp "connected as +$n"; else detail whatsapp "Connected"; fi
+      step whatsapp ok; pct 100; finish ok
+    fi
+    if [ "$i" -ge 10 ] && wa_paired; then
+      kill "$server_pid" 2>/dev/null
+      log "no 'connected as' line, but the credentials have looked complete for 20s"
+      local n2; n2="$(wa_number)"
+      if [ -n "$n2" ]; then detail whatsapp "connected as +$n2"; else detail whatsapp "Connected"; fi
       step whatsapp ok; pct 100; finish ok
     fi
     sleep 2

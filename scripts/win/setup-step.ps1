@@ -1642,18 +1642,51 @@ function Do-Whatsapp([string]$Phone) {
   Write-Pct 85
 
   # ---- wait for the phone ----
+  # ---- wait for the phone, and take nobody's word for it but the channel's ----
+  #
+  # Reading the credential file was the wrong question twice over. Baileys writes creds.json while
+  # the pairing is being REQUESTED, so `registered` was true within a second and `me` shortly after
+  # -- the step reported "Connected" to people whose phones had never been touched.
+  #
+  # The plugin knows the answer and says so. Baileys raises connection 'open' only once the device
+  # is actually registered, and the plugin's handler writes to stderr:
+  #
+  #     whatsapp channel: connected as 971XXXXXXXXX@s.whatsapp.net
+  #
+  # That line is the confirmation. Nothing else is accepted as one, except a credential file that
+  # still looks complete twenty seconds later -- a fallback for the day that wording changes, long
+  # enough that it can never fire on a fresh request.
   Write-Say "Waiting for your phone"
-  # Nobody types an eight-character code into a phone in four seconds. A "paired" verdict that fast
-  # is the credential file describing the REQUEST, not the phone -- and acting on it is what made
-  # the code flash on screen and be replaced by "Connected" before anyone could write it down.
-  # Four seconds of deliberate deafness costs nothing and makes that impossible.
   $issued = Get-Date
+  $jid = ""
   for ($i = 1; $i -le 150; $i++) {
-    if (((Get-Date) - $issued).TotalSeconds -ge 4 -and (Test-WaPaired)) {
+    foreach ($src in @($waErr, $waLog)) {
+      if ($jid) { break }
+      if (-not (Test-Path -LiteralPath $src)) { continue }
+      try { $all = @([IO.File]::ReadAllLines($src)) } catch { continue }
+      for ($j = $all.Count - 1; $j -ge 0; $j--) {
+        if ($all[$j] -match 'connected as\s+(\S+)') { $jid = $Matches[1]; break }
+      }
+    }
+    if ($jid) {
       Stop-ProcessTree $server
-      Write-Log "paired"
-      Write-Detail "whatsapp" "Connected"
+      Write-Log ("the channel reports it is connected as " + $jid)
+      $num = Get-WaNumber
+      if ($num) { Write-Detail "whatsapp" ("connected as +{0}" -f $num) } else { Write-Detail "whatsapp" "Connected" }
       Write-Step "whatsapp" "ok"; Write-Pct 100; Finish "ok"
+    }
+    if (((Get-Date) - $issued).TotalSeconds -ge 20 -and (Test-WaPaired)) {
+      Stop-ProcessTree $server
+      Write-Log "no 'connected as' line, but the credentials have looked complete for 20s"
+      $num = Get-WaNumber
+      if ($num) { Write-Detail "whatsapp" ("connected as +{0}" -f $num) } else { Write-Detail "whatsapp" "Connected" }
+      Write-Step "whatsapp" "ok"; Write-Pct 100; Finish "ok"
+    }
+    if ($server.HasExited) {
+      Stop-ProcessTree $server
+      Write-Log "the channel server exited while waiting for the phone"
+      Write-Detail "whatsapp" "The WhatsApp channel stopped before the phone answered"
+      Write-Step "whatsapp" "fail"; Finish "fail"
     }
     Start-Sleep -Seconds 2
   }

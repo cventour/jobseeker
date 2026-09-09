@@ -372,6 +372,7 @@ function drainStepLog() {
       // Which step's code this is. Two steps mint one, they look alike, and only one of them wants
       // the bar at the top of the window -- so the page is told rather than left to guess.
       state.codeFor = running || "";
+      if (running === "whatsapp") waCodeShown = true;
     } else if (verb === "pct") {
       state.pct = parseInt(rest, 10) || 0;
     } else if (verb === "say") {
@@ -407,6 +408,9 @@ let wantBegin = false;
 let waOffered = false;
 // True while a WhatsApp run was started from the modal on the row, not from the WhatsApp screen.
 let waFromModal = false;
+// True once a code has actually been shown to the user in this attempt. A screen carrying a code
+// is never replaced by an outcome screen; the outcome is added to it.
+let waCodeShown = false;
 let queuedTotal = 0;
 let queuedDone = 0;
 let flowDone = false;
@@ -487,7 +491,16 @@ function afterStep(ok) {
       waFromModal = false;
       const ws = stepById("whatsapp");
       if (state.modal && state.modal.flow === "whatsapp") {
-        state.modal.page = ok ? "done" : "fail";
+        // A screen showing a pairing code is never taken away. Whatever happened -- linked, timed
+        // out, or the step deciding it was already done -- is reported UNDER the code, on the same
+        // page, and the page stays until the user closes it. Replacing it is how the one number
+        // somebody had to carry to their phone kept vanishing after a few seconds.
+        if (waCodeShown) {
+          state.modal.page = "code";
+          state.modal.outcome = ok ? "ok" : "fail";
+        } else {
+          state.modal.page = ok ? "done" : "fail";
+        }
         state.modal.err = ok ? "" : (ws && ws.detail) || "The phone did not answer in time.";
       }
       // Closing this modal used to leave the window sitting on the checklist with no action on it
@@ -973,7 +986,9 @@ function handleCommand(cmd) {
     queuedDone = 0;
     if (state.modal && state.modal.flow === "whatsapp") {
       waFromModal = true;
+      waCodeShown = false;
       state.modal.page = "code";
+      state.modal.outcome = "";
       state.modal.err = "";
     }
     launchStep("whatsapp", cmd.v || "");

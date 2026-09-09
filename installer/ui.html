@@ -114,6 +114,7 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .pane input:focus{outline:2px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
 .pane .hint{font-size:12.5px;margin-top:8px}
 .pane .bad{color:var(--bad)}
+.pane .good{color:var(--good)}
 @keyframes paneFromRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
 @keyframes paneFromLeft{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:none}}
 .pane.fwd{animation:paneFromRight .26s cubic-bezier(.22,.61,.36,1) both}
@@ -506,8 +507,18 @@ var waNumber = "";      // kept across redraws: a push while someone is typing m
 // the one number the user had to copy onto a phone appeared and then vanished, with no way to get
 // it back. Whatever ends that step, the page keeps showing what it showed.
 var waCode = "";
+var waOutcome = "";     // "" while waiting, then "ok" or "fail" -- drawn under the code, not over it
 
 function paneEl(cls) { return el("div", "pane " + cls); }
+
+// WhatsApp's own screen shows the code as two groups of four, so this shows it the same way. The
+// plugin emits it either with the hyphen or without; a code copied off a screen in one grouping and
+// typed into a phone expecting another is a mistake nobody should have to make.
+function formatWaCode(c) {
+  var raw = String(c || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (raw.length === 8) return raw.slice(0, 4) + "-" + raw.slice(4);
+  return String(c || "");
+}
 
 function buildWaPane(st, page, dir) {
   var m = st.modal;
@@ -543,13 +554,22 @@ function buildWaPane(st, page, dir) {
     var mine = waCode;
     if (mine) {
       var box = el("div", "panecode");
-      box.appendChild(el("b", null, mine));
+      box.appendChild(el("b", null, formatWaCode(mine)));
       pane.appendChild(box);
       pane.appendChild(el("p", null,
         "On the phone: WhatsApp \u25b8 Settings \u25b8 Linked Devices \u25b8 Link a Device \u25b8 " +
         "Link with phone number instead \u2014 then type this code."));
-      pane.appendChild(el("p", "hint", "It expires in a couple of minutes. This window notices by "
-        + "itself when the phone answers."));
+      // The outcome is added UNDER the code, never in place of it. A screen showing a number
+      // somebody is copying onto a phone is not a screen to replace.
+      if (m.outcome === "ok") {
+        pane.appendChild(el("p", "good", "Connected. The morning digest will reach that number."));
+      } else if (m.outcome === "fail") {
+        pane.appendChild(el("p", "bad", m.err || "It did not connect."));
+        pane.appendChild(el("p", "hint", "Try again issues a new code."));
+      } else {
+        pane.appendChild(el("p", "hint", "It expires in a couple of minutes. This window notices by "
+          + "itself when the phone answers, and says so here."));
+      }
     } else {
       var w = el("div", "panewait");
       w.appendChild(el("span", "spin"));
@@ -565,7 +585,7 @@ function buildWaPane(st, page, dir) {
       // page shows -- but a user who was mid-way through typing it deserves to see what they were
       // typing, rather than a blank where the number was.
       var was = el("div", "panecode");
-      was.appendChild(el("b", null, waCode));
+      was.appendChild(el("b", null, formatWaCode(waCode)));
       pane.appendChild(was);
       pane.appendChild(el("p", "hint", "That was the code. It expires after a couple of minutes, so "
         + "Try again will issue a new one."));
@@ -607,7 +627,7 @@ function renderModalFoot(st) {
     b("Back", "ghost", function () { send("wa-page", "intro"); });
     b("Send me a code", "primary", waSend);
     waCode = "";
-  } else if (m.page === "fail") {
+  } else if (m.page === "fail" || (m.page === "code" && m.outcome === "fail")) {
     b("Close", "ghost", close);
     b("Try again", "primary", function () { send("wa-page", "number"); });
   } else {
@@ -630,6 +650,9 @@ function renderModalStage(st) {
   // would replace the input under the user's hands.
   var same = page === waPage;
   var codeArrived = page === "code" && ((st.code && st.codeFor === "whatsapp") || waCode) && !stage.querySelector(".panecode");
+  // The outcome lands on a page that is already drawn, so the "same page" shortcut has to let it
+  // through -- otherwise the answer never appears under the code.
+  if (page === "code" && (m.outcome || "") !== waOutcome) { waOutcome = m.outcome || ""; codeArrived = true; }
   if (same && !codeArrived) return;
   var dir = ORDER.indexOf(page) < ORDER.indexOf(waPage) ? "back" : "fwd";
   if (same) dir = "";
