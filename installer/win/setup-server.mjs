@@ -879,36 +879,140 @@ function openClaudeSignin() {
   push();
 }
 
+/**
+ * Everything that might explain a failure, in one zip, in Downloads, with a button that opens the
+ * folder it is in.
+ *
+ * A path printed on screen is not a deliverable. The person reading it is already stuck, and asking
+ * them to find a folder by transcribing a path is asking for one more thing to go wrong -- so the
+ * window opens it for them, with the file selected.
+ *
+ * Two kinds of thing go in: the redacted summary diagnose.mjs writes, and the raw logs themselves,
+ * which is what actually gets read when the summary is not enough. The zip is made by the OS's own
+ * tool: Compress-Archive on Windows, ditto on macOS. Nothing here ships a zip library.
+ */
+let lastLogZip = "";
+
 function collectLogs() {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const dir = path.join(os.homedir(), "Downloads");
-  const out = path.join(dir, `jobseeker-logs-${stamp}.txt`);
-  state.modal = { title: "Collecting…", body: "Reading the logs.", path: "" };
+  const downloads = path.join(os.homedir(), "Downloads");
+  const stage = path.join(os.tmpdir(), `jobseeker-logs-${stamp}`);
+  const zip = path.join(downloads, `jobseeker-logs-${stamp}.zip`);
+  state.modal = { title: "Collecting\u2026", body: "Reading the logs.", path: "" };
   push();
-  const c = platform.nodeCommand("scripts/diagnose.mjs", ["--out", out]);
+
+  const fail = (why) => {
+    log(`collecting logs failed: ${String(why).trim().slice(0, 200)}`);
+    state.modal = {
+      title: "Could not collect the logs",
+      body: String(why).trim().slice(0, 300) || "The collector did not finish.",
+      path: "",
+    };
+    push();
+  };
+
+  try {
+    fs.mkdirSync(stage, { recursive: true });
+    fs.mkdirSync(downloads, { recursive: true });
+  } catch (e) {
+    return fail(e.message);
+  }
+
+  // The raw logs, alongside the summary. Names are flattened so the zip is a flat, readable list.
+  const copies = [
+    [path.join(WORK, "setup.log"), "setup.log"],
+    [path.join(WORK, "step.log"), "step.log"],
+    [path.join(WORK, "server.log"), "dashboard-stdout.log"],
+    [path.join(WORK, "server.err.log"), "dashboard-stderr.log"],
+    [path.join(WORK, "whatsapp-server.log"), "whatsapp-server.log"],
+    [path.join(WORK, "whatsapp-server.err.log"), "whatsapp-server.err.log"],
+    [path.join(WORK, "bridge.err.log"), "bridge.err.log"],
+    [path.join(os.tmpdir(), "jobseeker-install.log"), "installer.log"],
+    [path.join(os.homedir(), ".whatsapp-channel", "pairing.log"), "whatsapp-pairing.log"],
+  ];
+
+  const c = platform.nodeCommand("scripts/diagnose.mjs", ["--out", path.join(stage, "diagnostics.txt")]);
   const p = spawn(c.cmd, c.args, { cwd: REPO, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let err = "";
   p.stderr.on("data", (d) => (err += d));
-  p.on("exit", (code) => {
-    if (code === 0 && fs.existsSync(out)) {
-      log(`logs collected to ${out}`);
+  p.on("exit", () => {
+    // A diagnose that failed is not a reason to hand over nothing: the raw logs are the half that
+    // usually answers the question anyway.
+    for (const [from, to] of copies) {
+      try {
+        // Shared read: these files are being written by processes that are still running, and a
+        // plain copy of a live log fails on Windows.
+        const fd = fs.openSync(from, "r");
+        try {
+          fs.writeFileSync(path.join(stage, to), fs.readFileSync(fd));
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch {
+        /* absent or unreadable; its absence from the zip is itself informative */
+      }
+    }
+    zipUp(stage, zip, (why) => {
+      if (why) return fail(why);
+      lastLogZip = zip;
+      log(`logs collected to ${zip}`);
       state.modal = {
         title: "Logs saved",
         body:
-          "Everything that might explain this is in one file, in your Downloads folder. " +
-          "Tokens, keys and phone numbers have been replaced. Send it on to whoever is helping.",
-        path: out,
+          "Everything that might explain this is in one zip in your Downloads folder. Tokens, keys " +
+          "and phone numbers are replaced in the summary. Send it on to whoever is helping.",
+        path: zip,
+        reveal: true,
       };
-    } else {
-      log(`collecting logs failed: ${(err || "").trim().slice(0, 200)}`);
-      state.modal = {
-        title: "Could not collect the logs",
-        body: (err || "").trim().slice(0, 300) || "The collector did not finish.",
-        path: "",
-      };
-    }
-    push();
+      push();
+    });
   });
+}
+
+/** The OS's own zip tool. Windows: Compress-Archive. macOS: ditto. */
+function zipUp(dir, out, done) {
+  try {
+    fs.rmSync(out, { force: true });
+  } catch {
+    /* nothing there */
+  }
+  const cmd = platform.IS_WIN
+    ? {
+        file: platform.resolveBin("powershell"),
+        args: [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          `Compress-Archive -Path '${dir.replace(/'/g, "''")}\\*' -DestinationPath '${out.replace(/'/g, "''")}' -Force`,
+        ],
+      }
+    : { file: "ditto", args: ["-c", "-k", "--sequesterRsrc", dir, out] };
+  let err = "";
+  const p = spawn(cmd.file, cmd.args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  p.stderr.on("data", (d) => (err += d));
+  p.on("error", (e) => done(e.message));
+  p.on("exit", (code) => {
+    if (code === 0 && fs.existsSync(out)) return done("");
+    done(err.trim() || `the zip tool exited ${code}`);
+  });
+}
+
+/** Open the folder holding a file, with the file selected. */
+function revealInFolder(target) {
+  if (!target) return;
+  log(`opening the folder holding ${target}`);
+  try {
+    if (platform.IS_WIN) {
+      // explorer returns a non-zero exit code even when it works; nothing here reads it.
+      spawn("explorer.exe", [`/select,${target}`], { windowsHide: false, detached: true, stdio: "ignore" }).unref();
+    } else {
+      spawn("open", ["-R", target], { stdio: "ignore", detached: true }).unref();
+    }
+  } catch (e) {
+    log(`could not open the folder: ${e.message}`);
+  }
 }
 
 function showPlan() {
@@ -1107,6 +1211,10 @@ function handleCommand(cmd) {
   }
   if (cmd.cmd === "claude-signin") {
     openClaudeSignin();
+    return;
+  }
+  if (cmd.cmd === "reveal-logs") {
+    revealInFolder(lastLogZip);
     return;
   }
   if (cmd.cmd === "collect-logs") {

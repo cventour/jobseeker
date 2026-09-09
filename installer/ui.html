@@ -616,6 +616,13 @@ function renderModalFoot(st) {
   }
   var close = function () { send("dismiss-modal"); };
   var m = st.modal;
+  // Any modal that saved a file offers the way to it. Naming a path and leaving someone to find it
+  // is asking for one more thing to go wrong, to a person who is already stuck.
+  if (m && m.reveal) {
+    b("Close", "ghost", close);
+    b("Open folder", "primary", function () { send("reveal-logs"); });
+    return;
+  }
   if (m && m.help === "claude" && m.steps && m.steps.length) {
     b("Close", "ghost", close);
     b("Open sign-in", "primary", function () { send("claude-signin"); });
@@ -631,6 +638,9 @@ function renderModalFoot(st) {
     waCode = "";
   } else if (m.page === "fail" || (m.page === "code" && m.outcome === "fail")) {
     b("Close", "ghost", close);
+    // The failure text used to tell people to press Collect logs, and there was no Collect logs to
+    // press: it lives on the checklist behind this window, which a failed step never reaches.
+    b("Collect logs", "", function () { send("collect-logs"); });
     b("Try again", "primary", function () { send("wa-page", "number"); });
   } else {
     b("Close", "primary", close);

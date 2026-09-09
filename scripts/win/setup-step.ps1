@@ -1744,7 +1744,7 @@ function Do-Whatsapp([string]$Phone) {
         Write-Log "  (absent)"
       }
     }
-    Write-Detail "whatsapp" "No code arrived — press Collect logs and check the number"
+    Write-Detail "whatsapp" "WhatsApp did not send a code. Check the number, or collect the logs below."
     Write-Step "whatsapp" "fail"; Finish "fail"
   }
   Write-Log "pairing code issued"

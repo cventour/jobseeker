@@ -730,7 +730,7 @@ do_whatsapp() {
       log "--- $f"
       if [ -f "$f" ]; then tail -25 "$f" | sed 's/^/    /'; else log "  (absent)"; fi
     done
-    detail whatsapp "No code arrived — press Collect logs and check the number"
+    detail whatsapp "WhatsApp did not send a code. Check the number, or collect the logs below."
     step whatsapp fail; finish fail
   fi
   log "pairing code issued"
