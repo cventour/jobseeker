@@ -542,7 +542,9 @@ function afterStep(ok) {
     if (ok) {
       onQueueEmpty();
     } else {
-      state.view = "whatsapp";
+      // A failure stays on the list too. The screen that used to appear here is the same one that
+      // arrived unasked at the end of the queue, and the row already says what happened.
+      state.view = "work";
       push();
     }
     return;
@@ -586,21 +588,24 @@ function onQueueEmpty() {
     return;
   }
 
-  if (((startStep && startStep.state === "ok") || state.started) && waStep && !skipped.whatsapp && !waOffered) {
-    waOffered = true; // shown once per run, never nagged
-    state.view = "whatsapp";
+  // WhatsApp used to take over the window here: a screen of its own, arriving unasked the moment
+  // the extension went green, in the middle of a list the user was reading. It made sense when the
+  // row had no buttons and that screen was the only way in. The row now carries Start connection
+  // and Skip, so the list stays on screen and the choice stays where the user was already looking.
+  if (((startStep && startStep.state === "ok") || state.started) && waStep && !skipped.whatsapp &&
+      waStep.state !== "ok" && !waOffered) {
+    waOffered = true; // said once per run, never nagged
+    state.view = "work";
     state.busy = false;
+    state.say = "";
     state.code = "";
     state.codeFor = "";
-    if (waStep.state === "ok") {
-      // Already linked. Say so and name the number: a listed step that silently disappears reads
-      // as a step that failed.
-      state.waKnown = waStep.detail || "connected";
-      state.status = "Already connected.|Nothing to do here.";
-    } else {
-      state.waKnown = "";
-      state.status = "Everything else is set up.|WhatsApp is optional.";
-    }
+    state.title = "Everything else is set up";
+    state.subtitle =
+      "WhatsApp is optional: connect it on the row below, or skip it and add it later from the " +
+      "dashboard.";
+    state.status = "Ready|— nothing else will run on its own.";
+    flowDone = true;
     push();
     return;
   }
