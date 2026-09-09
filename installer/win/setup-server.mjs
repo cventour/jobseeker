@@ -145,6 +145,7 @@ const STEPS = [
     // extension, so this is the one step where the person has to do something themselves -- and
     // "Connect the Chrome extension" on its own tells them nothing about what.
     help: "extension",
+    helpLabel: "Install instructions",
   },
   // Listed so "everything that will happen" is true, but `interactive` keeps it out of the queue:
   // it needs a phone number and a phone, so it gets its own screen after the rest is done.
@@ -158,6 +159,9 @@ const STEPS = [
     // Same reason as the extension: "Connect WhatsApp" names a thing, not an action. This one also
     // needs a phone in your hand, so what it has to say cannot wait until the screen appears.
     help: "whatsapp",
+    // Not "instructions": nothing is installed and there is nothing to read up on. Pressing it
+    // starts the connection, in the window, and the label should say so.
+    helpLabel: "Start connection",
   },
 ];
 
@@ -175,6 +179,7 @@ const state = {
   log: "",
   need: "",
   code: "",
+  codeFor: "",
   waKnown: "",
   status: "Looking…",
   busy: false,
@@ -202,6 +207,7 @@ function syncSteps() {
     password: !!s.password,
     optional: !!s.optional,
     help: s.help || "",
+    helpLabel: s.helpLabel || "",
     state: s.state || "todo",
     detail: s.detail || "",
   }));
@@ -309,6 +315,7 @@ function launchStep(id, extraArg) {
   // leaves the page asking for something nobody is waiting on any more.
   state.need = "";
   state.code = "";
+  state.codeFor = "";
   push();
   return true;
 }
@@ -330,6 +337,9 @@ function drainStepLog() {
     const rest = sp === -1 ? "" : L.slice(sp + 1);
     if (verb === "code") {
       state.code = rest.trim();
+      // Which step's code this is. Two steps mint one, they look alike, and only one of them wants
+      // the bar at the top of the window -- so the page is told rather than left to guess.
+      state.codeFor = running || "";
     } else if (verb === "pct") {
       state.pct = parseInt(rest, 10) || 0;
     } else if (verb === "say") {
@@ -361,6 +371,8 @@ let phase = "boot";
 // there is one to show.
 let wantPlan = false;
 let waOffered = false;
+// True while a WhatsApp run was started from the modal on the row, not from the WhatsApp screen.
+let waFromModal = false;
 let queuedTotal = 0;
 let queuedDone = 0;
 let flowDone = false;
@@ -434,6 +446,19 @@ function afterStep(ok) {
     running = null;
     child = null;
     state.code = "";
+    state.codeFor = "";
+    // Started from the row rather than from the WhatsApp screen: the answer belongs in the window
+    // the user is looking at, and the install queue is not waiting on it.
+    if (waFromModal) {
+      waFromModal = false;
+      const ws = stepById("whatsapp");
+      if (state.modal && state.modal.flow === "whatsapp") {
+        state.modal.page = ok ? "done" : "fail";
+        state.modal.err = ok ? "" : (ws && ws.detail) || "The phone did not answer in time.";
+      }
+      push();
+      return;
+    }
     if (ok) {
       onQueueEmpty();
     } else {
@@ -446,6 +471,7 @@ function afterStep(ok) {
     // Its code is single-use and five minutes old at most; leaving it on screen for the rest of the
     // run would be showing a number that no longer works.
     state.code = "";
+    state.codeFor = "";
     state.need = "";
   }
   if (!ok) {
@@ -485,6 +511,7 @@ function onQueueEmpty() {
     state.view = "whatsapp";
     state.busy = false;
     state.code = "";
+    state.codeFor = "";
     if (waStep.state === "ok") {
       // Already linked. Say so and name the number: a listed step that silently disappears reads
       // as a step that failed.
@@ -625,30 +652,32 @@ function showExtensionHelp() {
 }
 
 /**
- * What WhatsApp is for here, and what the person will be asked to do.
+ * Connecting WhatsApp, as a small flow inside the modal rather than a page of advice.
  *
- * The extension's help exists because Chrome will not let a program do the work. This one exists
- * for a different reason: the step is optional, it asks for a phone number, and a row that says
- * only "Connect WhatsApp" gives no way to decide whether to. So this says what it buys, what it
- * costs, and that the phone has to be in reach -- before the screen that asks for the number.
+ * The first version of this described a "next screen" that only existed at the end of the install
+ * queue: read from the row, it named a place the user could not get to. So the screen is here now.
+ * Page one says what the step is and what it costs, page two takes the number, page three shows the
+ * code to type into the phone. Each is a page of the same window, and the buttons at the foot are
+ * whatever that page needs.
  */
 function showWhatsAppHelp() {
   state.modal = {
+    flow: "whatsapp",
+    page: "intro",
     title: "Connect WhatsApp",
     body:
       "Optional. It links this computer to your WhatsApp so JobSeeker can send you the daily " +
-      "digest there, and read job-related chats you point it at. Nothing is sent to anyone else, " +
-      "and you can skip this and add it later from the dashboard.",
+      "digest there, and read job-related chats you point it at. It only ever sends \u2014 you " +
+      "cannot give JobSeeker instructions over WhatsApp. You can skip this and add it later.",
     steps: [
-      "Have your phone to hand — you finish this on the phone, not here.",
-      "On the next screen, type your WhatsApp number with its country code (for example +971…).",
-      "Press Send me a code. This window then shows an eight-character code.",
-      "On the phone: WhatsApp ▸ Settings ▸ Linked Devices ▸ Link a Device ▸ Link with phone " +
-        "number instead.",
+      "Have your phone to hand \u2014 you finish this on the phone, not here.",
+      "Press Start connection below and type your WhatsApp number.",
+      "This window then shows a code.",
+      "On the phone: WhatsApp \u25b8 Settings \u25b8 Linked Devices \u25b8 Link a Device \u25b8 " +
+        "Link with phone number instead.",
       "Type the code into the phone. The row here turns green once the phone answers.",
     ],
-    images: [],
-    path: "",
+    err: "",
   };
   push();
 }
@@ -740,14 +769,32 @@ function handleCommand(cmd) {
       ws.detail = "Skipped — you can set this up later.";
     }
     state.code = "";
+    state.codeFor = "";
     onQueueEmpty();
+    return;
+  }
+  // Turning the pages of the WhatsApp flow. It goes through the server rather than staying in the
+  // page because the page is redrawn from this state on every push; a page number the server did
+  // not know about would be undone by the next log line.
+  if (cmd.cmd === "wa-page") {
+    if (state.modal && state.modal.flow === "whatsapp") {
+      state.modal.page = cmd.id || "intro";
+      if (cmd.id === "number") state.modal.err = "";
+      push();
+    }
     return;
   }
   if (cmd.cmd === "wa-start") {
     state.code = "";
+    state.codeFor = "";
     state.failed = false;
     queuedTotal = 1;
     queuedDone = 0;
+    if (state.modal && state.modal.flow === "whatsapp") {
+      waFromModal = true;
+      state.modal.page = "code";
+      state.modal.err = "";
+    }
     launchStep("whatsapp", cmd.v || "");
     return;
   }

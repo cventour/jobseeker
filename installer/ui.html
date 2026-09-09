@@ -94,6 +94,37 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 body.has-pin .modal{top:var(--pinh,0px)}
 body.has-pin .modal-box{max-height:calc(86vh - var(--pinh,0px))}
 
+/* ---- a modal that turns pages ----
+   Connecting WhatsApp is three short screens, not one long instruction. Each replaces the last,
+   sliding in from the right so it is obvious that this is a step forward and not a redraw; Back
+   sends the next one in from the left, for the same reason in reverse. The window is small and the
+   pages are short, so nothing here scrolls. */
+.modal-stage{overflow:hidden}
+.pane{font-size:14px;line-height:1.6;color:var(--mut)}
+.pane p{margin:0 0 10px}
+.pane ol{margin:0 0 4px;padding-left:22px;line-height:1.7}
+.pane ol li{margin-bottom:7px}
+.pane label{display:block;margin:2px 0 6px;font-size:13px;color:var(--fg);font-weight:600}
+.pane input{width:100%;padding:11px 13px;border-radius:9px;border:1px solid var(--line);
+  background:var(--card);color:var(--fg);font:inherit;font-size:17px;letter-spacing:.02em;
+  -webkit-user-select:text;user-select:text}
+.pane input:focus{outline:2px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
+.pane .hint{font-size:12.5px;margin-top:8px}
+.pane .bad{color:var(--bad)}
+@keyframes paneFromRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
+@keyframes paneFromLeft{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:none}}
+.pane.fwd{animation:paneFromRight .26s cubic-bezier(.22,.61,.36,1) both}
+.pane.back{animation:paneFromLeft .26s cubic-bezier(.22,.61,.36,1) both}
+@media (prefers-reduced-motion: reduce){.pane.fwd,.pane.back{animation:none}}
+/* The code, on the page that shows it: the same treatment as the bar at the top, because it is the
+   same kind of thing -- a number to be typed into something that is not this window. */
+.panecode{display:flex;align-items:center;justify-content:center;gap:14px;margin:4px 0 12px;
+  padding:14px;border:1px solid var(--acc);border-radius:12px;background:var(--card)}
+.panecode b{font:700 30px/1 ui-monospace,Menlo,monospace;letter-spacing:.22em;padding-left:.22em;
+  color:var(--fg)}
+.panecode i{font-style:normal;font-size:12px;color:var(--acc)}
+.panewait{display:flex;align-items:center;gap:10px;justify-content:center;padding:20px 0}
+
 /* ---- the same code, on the row it belongs to ---- */
 .rowpin{display:inline-flex;align-items:center;gap:10px;padding:3px 10px;margin-right:8px;
   border:1px solid var(--acc);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;
@@ -267,11 +298,12 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
   <div class="modal" id="modal" hidden>
     <div class="modal-box">
       <h2 id="modal-title"></h2>
+      <div id="modal-stage" hidden></div>
       <p id="modal-body"></p>
       <ol id="modal-steps" hidden></ol>
       <div id="modal-figs" hidden></div>
       <p class="modal-path"><code id="modal-path"></code></p>
-      <div class="modal-foot"><button class="primary" id="modal-ok">Close</button></div>
+      <div class="modal-foot" id="modal-foot"></div>
     </div>
   </div>
 
@@ -427,9 +459,10 @@ var pinCode = "";
 document.getElementById("pin").onclick = function () { copyCode(pinCode, pinCopy); };
 
 function renderPin(st) {
-  // The WhatsApp screen shows its own code, full width, as the only thing on the page; a second
-  // copy of a different number above it would be two codes and no way to tell them apart.
-  var show = !!st.code && st.view === "work";
+  // Only the extension's code. WhatsApp mints one that looks just like it, and shows it on the
+  // page the user is already reading -- two codes at once, alike and unlabelled, is how the wrong
+  // one gets typed.
+  var show = !!st.code && st.codeFor === "extension" && st.view === "work";
   pinCode = show ? st.code : "";
   if (show && pinDigits.textContent !== st.code) pinDigits.textContent = st.code;
   pinBar.hidden = !show;
@@ -438,8 +471,121 @@ function renderPin(st) {
   document.body.style.setProperty("--pinh", show ? pinBar.offsetHeight + "px" : "0px");
 }
 
-var modalOk = document.getElementById("modal-ok");
-if (modalOk) { modalOk.onclick = function () { send("dismiss-modal"); }; }
+// ---- the modal's pages ---------------------------------------------------------------------
+// An ordinary modal has one page and a Close button. The WhatsApp one has several, and each needs
+// its own buttons, so the foot is built from the page rather than written into the markup.
+var ORDER = ["intro", "number", "code", "done", "fail"];
+var waPage = "";        // the page currently drawn, so a redraw does not re-animate or wipe typing
+var waNumber = "";      // kept across redraws: a push while someone is typing must not eat it
+
+function paneEl(cls) { return el("div", "pane " + cls); }
+
+function buildWaPane(st, page, dir) {
+  var m = st.modal;
+  var pane = paneEl(dir);
+  if (page === "intro") {
+    pane.appendChild(el("p", null, m.body || ""));
+    var ol = document.createElement("ol");
+    (m.steps || []).forEach(function (t) { ol.appendChild(el("li", null, t)); });
+    pane.appendChild(ol);
+  } else if (page === "number") {
+    var lab = el("label", null, "Your WhatsApp number");
+    lab.setAttribute("for", "wanum2");
+    pane.appendChild(lab);
+    var inp = document.createElement("input");
+    inp.id = "wanum2";
+    inp.type = "text";
+    inp.inputMode = "numeric";
+    inp.placeholder = "971551234567";
+    inp.spellcheck = false;
+    inp.value = waNumber;
+    inp.oninput = function () { waNumber = inp.value; };
+    // Enter is what anyone types after a phone number.
+    inp.onkeydown = function (e) { if (e.key === "Enter") waSend(); };
+    pane.appendChild(inp);
+    pane.appendChild(el("p", "hint", "Country code first, digits only \u2014 no plus sign, no spaces."));
+    if (m.err) pane.appendChild(el("p", "hint bad", m.err));
+    setTimeout(function () { try { inp.focus(); } catch (e) { /* not visible yet */ } }, 30);
+  } else if (page === "code") {
+    if (st.code) {
+      var box = el("div", "panecode");
+      box.appendChild(el("b", null, st.code));
+      pane.appendChild(box);
+      pane.appendChild(el("p", null,
+        "On the phone: WhatsApp \u25b8 Settings \u25b8 Linked Devices \u25b8 Link a Device \u25b8 " +
+        "Link with phone number instead \u2014 then type this code."));
+      pane.appendChild(el("p", "hint", "It expires in a couple of minutes. This window notices by "
+        + "itself when the phone answers."));
+    } else {
+      var w = el("div", "panewait");
+      w.appendChild(el("span", "spin"));
+      w.appendChild(document.createTextNode(st.say || "Asking WhatsApp for a code\u2026"));
+      pane.appendChild(w);
+    }
+  } else if (page === "done") {
+    pane.appendChild(el("p", null, "Connected. The morning digest will reach that number."));
+  } else if (page === "fail") {
+    pane.appendChild(el("p", null, m.err || "It did not connect."));
+    pane.appendChild(el("p", "hint", "Nothing was changed. You can try again, or set this up later "
+      + "from the dashboard."));
+  }
+  return pane;
+}
+
+function waSend() {
+  var v = (waNumber || "").replace(/[^0-9]/g, "");
+  var inp = document.getElementById("wanum2");
+  if (!v) { if (inp) inp.focus(); return; }
+  send("wa-start", "", v);
+}
+
+function renderModalFoot(st) {
+  var foot = document.getElementById("modal-foot");
+  foot.textContent = "";
+  function b(label, cls, fn) {
+    var x = el("button", cls, label);
+    x.onclick = fn;
+    foot.appendChild(x);
+    return x;
+  }
+  var close = function () { send("dismiss-modal"); };
+  var m = st.modal;
+  if (!m || m.flow !== "whatsapp") { b("Close", "primary", close); return; }
+  if (m.page === "intro") {
+    b("Not now", "ghost", close);
+    b("Start connection", "primary", function () { send("wa-page", "number"); });
+  } else if (m.page === "number") {
+    b("Back", "ghost", function () { send("wa-page", "intro"); });
+    b("Send me a code", "primary", waSend);
+  } else if (m.page === "fail") {
+    b("Close", "ghost", close);
+    b("Try again", "primary", function () { send("wa-page", "number"); });
+  } else {
+    b("Close", "primary", close);
+  }
+}
+
+function renderModalStage(st) {
+  var stage = document.getElementById("modal-stage");
+  var m = st.modal;
+  var flow = m && m.flow === "whatsapp";
+  stage.hidden = !flow;
+  // The plain modal keeps the layout it has always had; only the flow uses the stage.
+  document.getElementById("modal-body").hidden = !!flow;
+  document.getElementById("modal-steps").hidden = !!flow ||
+    !(m && m.steps && m.steps.length);
+  if (!flow) { waPage = ""; return; }
+  var page = m.page || "intro";
+  // The code page redraws when the code arrives, and only then -- otherwise a redraw mid-typing
+  // would replace the input under the user's hands.
+  var same = page === waPage;
+  if (same && !(page === "code" && st.code && !stage.querySelector(".panecode"))) return;
+  var dir = ORDER.indexOf(page) < ORDER.indexOf(waPage) ? "back" : "fwd";
+  if (same) dir = "";
+  stage.textContent = "";
+  stage.appendChild(buildWaPane(st, page, dir));
+  waPage = page;
+}
 
 // ---- appearance: Auto / Light / Dark -------------------------------------------------------
 // One silhouette at three fill levels rather than three unrelated icons: empty is light, half is
@@ -530,7 +676,7 @@ function renderChecklist(st) {
     if (s.help) {
       // Between the row and its instructions, where the eye already is: the code, then the button
       // that explains where to type it.
-      if (s.id === "extension" && st.code && st.view === "work") {
+      if (s.id === "extension" && st.code && st.codeFor === "extension" && st.view === "work") {
         var chip = el("button", "rowpin");
         chip.type = "button";
         chip.setAttribute("aria-label", "Copy the pairing code");
@@ -540,7 +686,8 @@ function renderChecklist(st) {
         chip.onclick = function () { copyCode(st.code, badge); };
         slot.appendChild(chip);
       }
-      var howto = el("button", s.state === "running" ? "primary" : "", "Install instructions");
+      var howto = el("button", s.state === "running" ? "primary" : "",
+                     s.helpLabel || "Install instructions");
       howto.onclick = function () { send("help", s.help); };
       slot.appendChild(howto);
     }
@@ -598,6 +745,8 @@ function renderActions(st) {
       ol.appendChild(li);
     });
     ol.hidden = !(st.modal.steps && st.modal.steps.length);
+    renderModalStage(st);
+    renderModalFoot(st);
     var figs = document.getElementById("modal-figs");
     figs.textContent = "";
     (st.modal.images || []).forEach(function (src) {
@@ -610,6 +759,7 @@ function renderActions(st) {
     mod.hidden = false;
   } else {
     mod.hidden = true;
+    waPage = "";
   }
 
   if (st.view === "welcome") {
