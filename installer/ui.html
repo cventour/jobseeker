@@ -299,16 +299,21 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 // only channel is location.hash, which the app polls. On Windows the same page is served over
 // http:// by installer/win/setup-server.mjs, where a POST is available and a fragment poll is not
 // -- so the protocol is identical and only the pipe differs.
+var es = null;
 var HOSTED = location.protocol === "http:" || location.protocol === "https:";
 var seq = 0;
 function send(cmd, id, val) {
   seq++;
   var msg = { n: seq, cmd: cmd, id: id || "", v: val || "" };
-  var modalOk = document.getElementById("modal-ok");
-if (modalOk) { modalOk.onclick = function () { send("dismiss-modal"); }; }
-
-if (HOSTED) {
+  if (HOSTED) {
     try {
+      // Quit is followed immediately by closing the window, and a closing window may abandon an
+      // XHR in flight -- leaving the server running with nobody to talk to, and the next install
+      // told JobSeeker is already up. A beacon is the one request the browser promises to finish.
+      if (cmd === "quit" && navigator.sendBeacon) {
+        navigator.sendBeacon("/cmd", new Blob([JSON.stringify(msg)], { type: "application/json" }));
+        return;
+      }
       var x = new XMLHttpRequest();
       x.open("POST", "/cmd", true);
       x.setRequestHeader("Content-Type", "application/json");
@@ -318,6 +323,28 @@ if (HOSTED) {
   }
   location.hash = "#" + encodeURIComponent(JSON.stringify(msg));
 }
+
+// The last thing this page ever does. Quit shuts the setup server down, so once it is sent there is
+// nothing behind this page: no events, no replies. Close the window; if the browser will not let a
+// page close itself, say plainly that setup is over rather than leaving a live-looking page.
+function farewell() {
+  setTimeout(function () {
+    try { window.close(); } catch (e) { /* not permitted here */ }
+    setTimeout(function () {
+      try {
+        if (es) { es.close(); }
+      } catch (e) { /* already gone */ }
+      document.body.setAttribute("data-view", "bye");
+      document.body.innerHTML =
+        '<div class="wel"><h1>JobSeeker setup closed</h1>' +
+        "<p>You can close this window. JobSeeker itself is unaffected \u2014 open it any time from the " +
+        "Start Menu.</p></div>";
+    }, 400);
+  }, 120);
+}
+
+var modalOk = document.getElementById("modal-ok");
+if (modalOk) { modalOk.onclick = function () { send("dismiss-modal"); }; }
 
 // ---- appearance: Auto / Light / Dark -------------------------------------------------------
 // One silhouette at three fill levels rather than three unrelated icons: empty is light, half is
@@ -432,7 +459,14 @@ function renderActions(st) {
   function add(label, cls, cmd, disabled) {
     var b = el("button", cls, label);
     b.disabled = !!disabled;
-    b.onclick = function () { send(cmd); };
+    b.onclick = function () {
+      send(cmd);
+      // Quit shuts the server down, which leaves this page sitting there with nothing behind it --
+      // pressing Quit and watching nothing happen. Close the window ourselves. A window the browser
+      // opened for an app is usually allowed to close itself; when it is not, say so plainly rather
+      // than leaving a dead page that still looks live.
+      if (cmd === "quit") { farewell(); }
+    };
     acts.appendChild(b);
     return b;
   }
@@ -588,7 +622,7 @@ window.__render = function (st) {
 // above this line is unaware of which host it is talking to.
 if (HOSTED) {
   try {
-    var es = new EventSource("/events");
+    es = new EventSource("/events");
     es.onmessage = function (ev) {
       var st;
       try { st = JSON.parse(ev.data); } catch (e) { return; }
