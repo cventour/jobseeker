@@ -449,6 +449,35 @@ $WaPluginRepo = "Rich627/whatsapp-claude-plugin"
 $WaPluginFallback = "whatsapp-claude-channel"
 $WaMarketplace = "whatsapp-claude-plugin"
 
+# Read a file SOMEONE ELSE IS STILL WRITING.
+#
+# [IO.File]::ReadAllLines opens with FileShare.Read, which Windows refuses while another process
+# holds the file open for writing -- it throws "the process cannot access the file because it is
+# being used by another process". Every read of the channel's live log threw, the catch swallowed
+# it, and the step concluded no pairing code had appeared. It had: the code was in the file the
+# whole time, and the dump printed it perfectly two minutes later, once the writer had been killed
+# and the file was free.
+#
+# Measured on Windows 11 against a file a live child was writing:
+#   [IO.File]::ReadAllLines  -> THREW
+#   FileShare::ReadWrite     -> OK, 7 lines
+function Read-LiveLines([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return @() }
+  $fs = $null
+  $sr = $null
+  try {
+    $fs = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    $sr = New-Object IO.StreamReader($fs)
+    $text = $sr.ReadToEnd()
+    return @($text -split "`r?`n")
+  } catch {
+    return @()
+  } finally {
+    if ($sr) { try { $sr.Close() } catch { } }
+    if ($fs) { try { $fs.Close() } catch { } }
+  }
+}
+
 # Did WE watch this link succeed?
 #
 # The only claim worth making about a connection is one we saw made. When the channel reports
@@ -1634,7 +1663,7 @@ function Do-Whatsapp([string]$Phone) {
   $pairingLog = Join-Path $WaDir "pairing.log"
   $before = 0
   if (Test-Path -LiteralPath $pairingLog) {
-    try { $before = @([IO.File]::ReadAllLines($pairingLog)).Count } catch { $before = 0 }
+    $before = (Read-LiveLines $pairingLog).Count
   }
   Write-Say "Asking WhatsApp for a pairing code"
   # Same command the bash runs. Its `nohup ... >>` appends; Start-Process can only truncate, so the
@@ -1685,7 +1714,7 @@ function Do-Whatsapp([string]$Phone) {
       # Old codes in the plugin's own log are still there and still look valid. Only lines written
       # since this attempt began count; the server logs are fresh each run, so they start at 0.
       if ($src -eq $pairingLog) { $skip = $before }
-      try { $all = @([IO.File]::ReadAllLines($src)) } catch { continue }
+      $all = Read-LiveLines $src
       for ($j = $all.Count - 1; $j -ge $skip; $j--) {
         $line = $all[$j]
         if ($line -match 'PAIRING CODE:\s*([A-Z0-9]{4}-?[A-Z0-9]{4})') { $code = $Matches[1]; break }
@@ -1710,8 +1739,7 @@ function Do-Whatsapp([string]$Phone) {
     foreach ($src in @($pairingLog, $waLog, $waErr)) {
       Write-Log ("--- " + $src)
       if (Test-Path -LiteralPath $src) {
-        try { Write-Indented ((@([IO.File]::ReadAllLines($src)) | Select-Object -Last 25) -join "`n") }
-        catch { Write-Log "  (unreadable)" }
+        Write-Indented (((Read-LiveLines $src) | Select-Object -Last 25) -join "`n")
       } else {
         Write-Log "  (absent)"
       }
@@ -1747,7 +1775,7 @@ function Do-Whatsapp([string]$Phone) {
     foreach ($src in @($waErr, $waLog)) {
       if ($jid) { break }
       if (-not (Test-Path -LiteralPath $src)) { continue }
-      try { $all = @([IO.File]::ReadAllLines($src)) } catch { continue }
+      $all = Read-LiveLines $src
       for ($j = $all.Count - 1; $j -ge 0; $j--) {
         if ($all[$j] -match 'connected as\s+(\S+)') { $jid = $Matches[1]; break }
       }
