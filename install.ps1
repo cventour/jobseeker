@@ -34,6 +34,11 @@
 #   JOBSEEKER_ALLOW_NONWINDOWS=1   TEST ONLY: skip the Windows check so the download/unpack/update
 #                                  path can be exercised from a Mac or Linux CI box with pwsh
 
+# Everything this script prints also goes to a file. An install that fails in a window the user
+# then closes leaves nothing to look at, and "it did not work" is not something anyone can act on.
+$JobSeekerInstallLog = Join-Path $env:TEMP "jobseeker-install.log"
+try { Start-Transcript -Path $JobSeekerInstallLog -Force | Out-Null } catch { }
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Off
 
@@ -340,7 +345,13 @@ try {
     Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
+# Close the transcript and, when something went wrong, say where to find it. A user who has to be
+# asked "what did it print?" has usually already closed the window.
+try { Stop-Transcript | Out-Null } catch { }
 if ($failed) {
+  Write-Host ""
+  Write-Host "  The full log of this attempt is at:" -ForegroundColor DarkGray
+  Write-Host "  $JobSeekerInstallLog"
   # $PSCommandPath is set when run as a file (CI, `pwsh -File install.ps1`) and empty under iex,
   # where `exit` would take the user's whole PowerShell window with it.
   if ($PSCommandPath) { exit 1 }

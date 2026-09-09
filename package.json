@@ -51,6 +51,7 @@
     "mock:wizard": "node scripts/mock-wizard.mjs",
     "test:platform": "node scripts/test-platform.mjs",
     "bridge": "node server/bridge.mjs --serve",
-    "test:bridge": "node scripts/test-bridge.mjs"
+    "test:bridge": "node scripts/test-bridge.mjs",
+    "diagnose": "node scripts/diagnose.mjs"
   }
 }

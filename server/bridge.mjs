@@ -40,7 +40,7 @@
 // or standalone: `node server/bridge.mjs --serve [--port N]`.
 
 import crypto from "crypto";
-import { promises as fs } from "fs";
+import { promises as fs, statSync, renameSync, appendFileSync } from "fs";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -219,6 +219,25 @@ export function createBridge({
   }
 
   const connected = () => lastSeen > 0 && Date.now() - lastSeen < connectedWindowMs;
+
+  // Appends a line, and keeps the file from growing without bound: a poll every 20s is ~4k lines a
+  // day. Failure to log is never allowed to fail a request.
+  const LOG_CAP = 512 * 1024;
+  function logLine(text) {
+    try {
+      const file = path.join(dataDir, ".bridge.log");
+      try {
+        if (statSync(file).size > LOG_CAP) {
+          renameSync(file, file + ".1");
+        }
+      } catch {
+        /* no file yet, or a rename someone else won */
+      }
+      appendFileSync(file, `${new Date().toISOString()} ${text}\n`);
+    } catch {
+      /* logging must never be why a request fails */
+    }
+  }
 
   /**
    * The bearer token is the authentication. The pinned origin is a second opinion, and it is only
@@ -406,6 +425,21 @@ export function createBridge({
     const pathname = (req.url || "/").split("?")[0];
     if (!pathname.startsWith("/bridge/")) return false;
     res.setHeader("cache-control", "no-store");
+
+    // Every request is written to data/.bridge.log, in every mode. This used to happen only in
+    // --serve mode, which is not the mode anyone actually runs: mounted in the dashboard the bridge
+    // was silent, so "the extension says it is connected but nothing happens" left no trace at all
+    // and could only be investigated by stopping the dashboard and standing up a second bridge.
+    // The log is the difference between diagnosing that over SSH and asking the user to reproduce.
+    const startedAt = Date.now();
+    res.once("finish", () => {
+      const q = String(req.url || "").split("?")[1] || "";
+      const p = new URLSearchParams(q);
+      // The extension reports its own state on each poll (see background.js). It is the only way
+      // its view of the world reaches disk; everything else it knows dies with the service worker.
+      const said = p.get("s") ? ` ext=${p.get("s")}${p.get("e") ? ` err=${String(p.get("e")).slice(0, 160)}` : ""}` : "";
+      logLine(`${req.method} ${pathname} ${res.statusCode} ${Date.now() - startedAt}ms${said}`);
+    });
 
     (async () => {
       if (!isLoopback(req)) throw new HttpError(403, "loopback only");

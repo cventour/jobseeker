@@ -305,8 +305,14 @@ async function runLoop() {
       while (mine === generation) {
         let res, body;
         try {
+          // The poll carries this worker's own view of the world, so it lands in the bridge's log
+          // on disk. Nothing else the service worker knows survives it being torn down, and its
+          // options page is not reachable from a terminal -- which is exactly where someone
+          // debugging "it says connected but nothing happens" is sitting.
+          const said = new URLSearchParams({ s: status.state || "?" });
+          if (status.lastError) said.set("e", String(status.lastError).slice(0, 160));
           ({ res, body } = await fetchJson(
-            `${base(port)}/bridge/poll`,
+            `${base(port)}/bridge/poll?${said}`,
             { headers: { authorization: `Bearer ${token}` } },
             POLL_CAP_MS
           ));

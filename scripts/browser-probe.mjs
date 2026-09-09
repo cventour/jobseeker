@@ -63,7 +63,10 @@ async function main() {
   let launched = false;
   let launchReason = "";
   if (!process.argv.includes("--no-launch")) {
-    const c = await ensureChrome();
+    // A diagnostic must not block. Its whole job is to report the state, so it waits a bounded
+    // moment for a cold Chrome and then says what it found -- rather than the three minutes the
+    // work paths allow, which reads as a hang when nothing is ever going to connect.
+    const c = await ensureChrome({ timeoutMs: 45_000 });
     launched = Boolean(c.launched);
     if (!c.running && c.reason) launchReason = c.reason;
   }

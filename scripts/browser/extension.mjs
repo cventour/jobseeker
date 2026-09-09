@@ -212,21 +212,46 @@ export async function findChromeExe() {
   return null;
 }
 
+/**
+ * Wait for the extension to answer, but only when waiting could possibly help, and never in silence.
+ *
+ * Both halves of that matter. An install where nothing has ever paired has no extension to wait for:
+ * sitting here for three minutes cannot change the outcome, it only hides it, and what the user sees
+ * is a Chrome window opening and then nothing at all. And even when waiting IS reasonable, a command
+ * that prints nothing for minutes is indistinguishable from one that has hung -- which is exactly
+ * how this was first reported.
+ */
 async function waitForConnected(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
   let last = "";
+  let announced = false;
   while (Date.now() < deadline) {
     try {
       const s = await getStatus(await bridgeBase());
-      if (s.connected === true) return { ok: true };
+      if (s.connected === true) {
+        if (announced) process.stderr.write(` connected after ${Math.round((Date.now() - started) / 1000)}s\n`);
+        return { ok: true };
+      }
+      if (s.reachable && s.paired === false) {
+        // Nothing has ever paired with this bridge, so no extension is coming. Say so now.
+        return { ok: false, last: "no extension has paired with this dashboard yet", hopeless: true };
+      }
       last = s.reachable
         ? "bridge is up but the extension has not connected"
         : `bridge unreachable (${s.reason})`;
     } catch (e) {
       last = String(e?.message || e);
     }
+    if (!announced && Date.now() - started > 3000) {
+      announced = true;
+      process.stderr.write(`browser: waiting up to ${Math.round(timeoutMs / 1000)}s for the JobSeeker Bridge extension to connect...`);
+    } else if (announced) {
+      process.stderr.write(".");
+    }
     await sleep(2000);
   }
+  if (announced) process.stderr.write("\n");
   return { ok: false, last };
 }
 
@@ -247,7 +272,16 @@ export async function ensureChrome({ timeoutMs = 180_000 } = {}) {
   if (await chromeRunning()) {
     // Already up. Give a freshly started bridge a moment to be found by the extension, but do not
     // fail here — listTabs() reports "not connected" precisely if it still is not.
-    await waitForConnected(Math.min(timeoutMs, 15_000));
+    const w = await waitForConnected(Math.min(timeoutMs, 15_000));
+    if (!w.ok && w.hopeless) {
+      return {
+        running: true,
+        launched: false,
+        reason:
+          "Chrome is running, but the JobSeeker Bridge extension has never been connected to this " +
+          "dashboard. Open Settings ▸ Browser and follow the two steps there.",
+      };
+    }
     return { running: true, launched: false };
   }
   if (process.env.JOBSEEKER_CHROME_AUTOLAUNCH === "0") {
@@ -273,14 +307,18 @@ export async function ensureChrome({ timeoutMs = 180_000 } = {}) {
 
   const w = await waitForConnected(timeoutMs);
   if (w.ok) return { running: true, launched: true };
-  // Carry the REASON out, exactly as the macOS driver does.
+  // Carry the REASON out, exactly as the macOS driver does. A pairing that has never happened is a
+  // different sentence from one that timed out: the first is answered in Settings, the second by
+  // opening Chrome.
   return {
     running: false,
     launched: true,
-    reason:
-      `Chrome was launched but the JobSeeker Bridge extension never connected within ${Math.round(timeoutMs / 1000)}s` +
-      (w.last ? ` — last state: ${w.last}` : "") +
-      ". Load the JobSeeker Bridge extension and connect it from Settings ▸ Browser.",
+    reason: w.hopeless
+      ? "Chrome is running, but the JobSeeker Bridge extension has never been connected to this " +
+        "dashboard. Open Settings ▸ Browser and follow the two steps there."
+      : `Chrome was launched but the JobSeeker Bridge extension never connected within ${Math.round(timeoutMs / 1000)}s` +
+        (w.last ? ` — last state: ${w.last}` : "") +
+        ". Load the JobSeeker Bridge extension and connect it from Settings ▸ Browser.",
   };
 }
 
