@@ -92,6 +92,11 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .pin b{font:700 27px/1 ui-monospace,Menlo,monospace;letter-spacing:.32em;padding-left:.32em}
 .pin i{font-style:normal;font-size:12px;color:var(--acc);white-space:nowrap}
 
+.whereitlives{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;margin:4px 0 14px}
+.whereitlives b{font-size:13.5px}
+.whereitlives p{margin:6px 0 0;font-size:13px;line-height:1.6;color:var(--mut)}
+
 /* ---- a modal that turns pages ----
    Connecting WhatsApp is three short screens, not one long instruction. Each replaces the last,
    sliding in from the right so it is obvious that this is a step forward and not a redraw; Back
@@ -343,6 +348,15 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     </div>
   </div>
 
+  <!-- Only on the closing screen. The shortcuts were made while nobody was watching, so this is
+       the one moment anyone is told how to open JobSeeker again tomorrow. -->
+  <div class="whereitlives" id="whereitlives" hidden>
+    <b>Opening it again</b>
+    <p>JobSeeker is in your <b>Start Menu</b>, and there is a <b>JobSeeker</b> shortcut on your
+      Desktop. Either one opens this same window. Quit JobSeeker from the Start Menu folder when
+      you want it closed.</p>
+  </div>
+
   <ul class="plan" id="plan" hidden></ul>
   <ul class="chk" id="chk" hidden></ul>
 
@@ -486,6 +500,12 @@ document.addEventListener("keydown", function (e) {
 var ORDER = ["intro", "number", "code", "done", "fail"];
 var waPage = "";        // the page currently drawn, so a redraw does not re-animate or wipe typing
 var waNumber = "";      // kept across redraws: a push while someone is typing must not eat it
+// The code, once seen, is remembered here until the window is closed.
+//
+// It used to be read straight from st.code, which the server clears the moment the step ends -- so
+// the one number the user had to copy onto a phone appeared and then vanished, with no way to get
+// it back. Whatever ends that step, the page keeps showing what it showed.
+var waCode = "";
 
 function paneEl(cls) { return el("div", "pane " + cls); }
 
@@ -518,8 +538,9 @@ function buildWaPane(st, page, dir) {
   } else if (page === "code") {
     // st.code alone is not enough. The extension step can still be waiting -- for fifteen minutes,
     // by design -- and its six digits would sit here under a heading about a phone. Only a code
-    // this step minted is this step's code.
-    var mine = st.code && st.codeFor === "whatsapp" ? st.code : "";
+    // this step minted is this step's code, and once seen it is kept.
+    if (st.code && st.codeFor === "whatsapp") { waCode = st.code; }
+    var mine = waCode;
     if (mine) {
       var box = el("div", "panecode");
       box.appendChild(el("b", null, mine));
@@ -539,6 +560,16 @@ function buildWaPane(st, page, dir) {
     pane.appendChild(el("p", null, "Connected. The morning digest will reach that number."));
   } else if (page === "fail") {
     pane.appendChild(el("p", null, m.err || "It did not connect."));
+    if (waCode) {
+      // The code that was issued, still on screen. It is almost certainly expired by the time this
+      // page shows -- but a user who was mid-way through typing it deserves to see what they were
+      // typing, rather than a blank where the number was.
+      var was = el("div", "panecode");
+      was.appendChild(el("b", null, waCode));
+      pane.appendChild(was);
+      pane.appendChild(el("p", "hint", "That was the code. It expires after a couple of minutes, so "
+        + "Try again will issue a new one."));
+    }
     pane.appendChild(el("p", "hint", "Nothing was changed. You can try again, or set this up later "
       + "from the dashboard."));
   }
@@ -575,6 +606,7 @@ function renderModalFoot(st) {
   } else if (m.page === "number") {
     b("Back", "ghost", function () { send("wa-page", "intro"); });
     b("Send me a code", "primary", waSend);
+    waCode = "";
   } else if (m.page === "fail") {
     b("Close", "ghost", close);
     b("Try again", "primary", function () { send("wa-page", "number"); });
@@ -597,7 +629,7 @@ function renderModalStage(st) {
   // The code page redraws when the code arrives, and only then -- otherwise a redraw mid-typing
   // would replace the input under the user's hands.
   var same = page === waPage;
-  var codeArrived = page === "code" && st.code && st.codeFor === "whatsapp" && !stage.querySelector(".panecode");
+  var codeArrived = page === "code" && ((st.code && st.codeFor === "whatsapp") || waCode) && !stage.querySelector(".panecode");
   if (same && !codeArrived) return;
   var dir = ORDER.indexOf(page) < ORDER.indexOf(waPage) ? "back" : "fwd";
   if (same) dir = "";
@@ -796,6 +828,7 @@ function renderActions(st) {
   } else {
     mod.hidden = true;
     waPage = "";
+    waCode = "";
     renderPin(st);
   }
 
@@ -815,6 +848,14 @@ function renderActions(st) {
     else if (st.failed) {
       add("Collect logs", "primary", "collect-logs");
       add("Try again", "", "begin");
+      // Even a failed row is not a reason to be trapped here. If JobSeeker is up, the way out of
+      // this screen is the same as anyone else's.
+      if (st.started) add("Open JobSeeker", "", "open");
+    } else if (st.started) {
+      // The checklist with nothing running on it used to have no action at all: setup done, or a
+      // step finished from a row, and the window just sat there. Whenever JobSeeker is answering,
+      // the button that leads to it is on screen.
+      add("Open JobSeeker", "primary", "open");
     }
   } else if (st.view === "whatsapp") {
     if (st.waKnown) { add("Continue", "primary", "wa-skip"); }
@@ -834,6 +875,8 @@ function renderActions(st) {
   } else if (st.view === "done") {
     add("Take me to the dashboard", "primary", "open");
   }
+  var where = document.getElementById("whereitlives");
+  where.hidden = !st.whereItLives;
 }
 
 window.__render = function (st) {

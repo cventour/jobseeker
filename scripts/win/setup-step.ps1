@@ -1643,8 +1643,13 @@ function Do-Whatsapp([string]$Phone) {
 
   # ---- wait for the phone ----
   Write-Say "Waiting for your phone"
+  # Nobody types an eight-character code into a phone in four seconds. A "paired" verdict that fast
+  # is the credential file describing the REQUEST, not the phone -- and acting on it is what made
+  # the code flash on screen and be replaced by "Connected" before anyone could write it down.
+  # Four seconds of deliberate deafness costs nothing and makes that impossible.
+  $issued = Get-Date
   for ($i = 1; $i -le 150; $i++) {
-    if (Test-WaPaired) {
+    if (((Get-Date) - $issued).TotalSeconds -ge 4 -and (Test-WaPaired)) {
       Stop-ProcessTree $server
       Write-Log "paired"
       Write-Detail "whatsapp" "Connected"

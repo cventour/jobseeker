@@ -195,6 +195,8 @@ const state = {
   // Is the dashboard actually answering? Asked of the dashboard itself, not inferred from a step
   // that may have been skipped, retried, or already green before this window opened.
   started: false,
+  // Set on the closing screen: name the two shortcuts the installer made.
+  whereItLives: false,
 };
 
 function stepById(id) {
@@ -488,6 +490,12 @@ function afterStep(ok) {
         state.modal.page = ok ? "done" : "fail";
         state.modal.err = ok ? "" : (ws && ws.detail) || "The phone did not answer in time.";
       }
+      // Closing this modal used to leave the window sitting on the checklist with no action on it
+      // at all -- setup finished, nothing running, and nothing to press. The flow is over either
+      // way: say so, so the last screen has a way out of itself.
+      state.busy = false;
+      state.say = "";
+      flowDone = true;
       push();
       return;
     }
@@ -564,6 +572,9 @@ function onQueueEmpty() {
       ? `Set up, without ${Object.keys(skipped).join(" and ")}. You can add that later.`
       : `Everything is installed and running on ${HOST_NOUN}.`;
     state.status = "Done|— nothing has run yet, and nothing will without your say-so.";
+    // Where it lives from now on. The window is about to close and the shortcuts were made without
+    // anyone watching, so this is the only moment anyone is told how to open it again.
+    state.whereItLives = true;
     // Wait for the user. Setup used to hand the window over on a timer, which meant the one screen
     // saying what had just been done to their PC was gone before it could be read.
     flowDone = true;

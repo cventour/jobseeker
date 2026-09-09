@@ -675,6 +675,10 @@ do_whatsapp() {
 
   # ---- wait for the phone ----
   say "Waiting for your phone"
+  # Nobody types an eight-character code into a phone in four seconds. A "paired" verdict that fast
+  # is the credential file describing the REQUEST, not the phone -- and acting on it is what made
+  # the code flash on screen and be replaced by "Connected" before anyone could write it down.
+  sleep 4
   for i in $(seq 1 150); do
     if wa_paired; then
       kill "$server_pid" 2>/dev/null
