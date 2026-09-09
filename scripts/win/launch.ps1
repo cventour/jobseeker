@@ -37,6 +37,21 @@ if ($OnWindows) { $Hidden["WindowStyle"] = "Hidden" }
 
 function Write-Err([string]$msg) { [Console]::Error.WriteLine($msg) }
 
+# This script is started by a shortcut, hidden, with no console anyone will ever look at. A failure
+# written only to stderr means the user double-clicks JobSeeker and NOTHING happens -- no window, no
+# message, nothing to act on. So anything fatal is also shown, in the plainest words available, with
+# what to do next. Falls back to stderr if the dialog itself cannot be raised.
+function Stop-Visibly([string]$Message) {
+  Write-Err $Message
+  try {
+    $sh = New-Object -ComObject WScript.Shell
+    [void]$sh.Popup($Message, 0, "JobSeeker", 0x10)  # 0x10 = the stop icon
+  } catch {
+    # No shell to raise a dialog with; the stderr line above is all there is.
+  }
+  exit 1
+}
+
 # Join a Windows-style relative path onto a base, splitting on the backslash so the same code also
 # runs under pwsh on macOS/Linux, where "\" is not a separator. Same helper, same reason, as
 # install.ps1: the tests exercise this script off Windows.
@@ -144,20 +159,17 @@ $Who = Get-Whoami $Port
 
 if ($null -ne $Who) {
   if ((Normalize-Path $Who) -ieq $Mine) {
-    Write-Host "JobSeeker is already running on port $Port."
+    Write-Host "JobSeeker is already running; opening it."
   } elseif ($Who) {
-    Write-Err "Another JobSeeker is running from $Who — quit it first."
-    exit 1
+    Stop-Visibly "JobSeeker is already running from a different folder:`n`n$Who`n`nQuit that one first, then open JobSeeker again."
   } else {
-    Write-Err "Something else is already using port $Port."
-    exit 1
+    Stop-Visibly "Another program on this PC is using the connection JobSeeker needs.`n`nClose it and open JobSeeker again. If it keeps happening, open Settings and change the dashboard port."
   }
 } else {
   # If the port is taken by something that is not a JobSeeker at all, ours cannot bind and the
   # failure would read as "JobSeeker stopped while starting up". Name the real problem instead.
   if (Test-AnythingOnPort $Port) {
-    Write-Err "Something else is already using port $Port."
-    exit 1
+    Stop-Visibly "Another program on this PC is using the connection JobSeeker needs.`n`nClose it and open JobSeeker again. If it keeps happening, open Settings and change the dashboard port."
   }
 
   $DataDir = Sub $Repo "data"
@@ -189,10 +201,9 @@ if ($null -ne $Who) {
     Start-Sleep -Milliseconds 400
   }
   if (-not $up) {
-    Write-Err "JobSeeker started, but never answered on port $Port — see data\.dashboard.err.log"
-    exit 1
+    Stop-Visibly "JobSeeker started but did not finish opening.`n`nOpen it again. If it keeps happening, run `"npm run diagnose`" in the JobSeeker folder and send the file it saves to your Downloads."
   }
-  Write-Host "JobSeeker is running on port $Port."
+  Write-Host "JobSeeker is running."
 }
 
 # ---------------------------------------------------------------- 4. the window

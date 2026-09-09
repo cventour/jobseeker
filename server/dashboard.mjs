@@ -7627,9 +7627,11 @@ server.on("error", async (e) => {
     }
     console.error(
       mine
-        ? `JobSeeker is already running on port ${PORT}. Open http://127.0.0.1:${PORT}/ — there is nothing to start.`
-        : `Port ${PORT} is already in use by another program. Close it, or set dashboard_port in ` +
-          `config/job-seeker.config.md to a free port.`
+        ? // Nothing for the user to do, and nothing for them to open: whoever asked for JobSeeker
+          // is about to be shown the window that is already running. This line is for a terminal.
+          `JobSeeker is already running.`
+        : `Another program on this computer is using the connection JobSeeker needs (port ${PORT}). ` +
+          `Close it, or set dashboard_port in config/job-seeker.config.md.`
     );
     process.exit(mine ? 0 : 1);
   }

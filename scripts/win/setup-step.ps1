@@ -1042,7 +1042,7 @@ function Do-Start {
   $c = Check-Start
   if ($c.Ok) {
     Write-Log ("already answering on port " + $port)
-    Write-Detail "start" ("Already running on port {0}" -f $port)
+    Write-Detail "start" "JobSeeker is already running"
     Write-Step "start" "ok"; Write-Pct 100; Finish "ok"
   }
 
@@ -1059,7 +1059,7 @@ function Do-Start {
     if ($other) {
       Write-Detail "start" ("Another JobSeeker is running from {0} — quit it first." -f $other)
     } else {
-      Write-Detail "start" ("Something else is already using port {0}." -f $port)
+      Write-Detail "start" "Another program on this PC is using the connection JobSeeker needs"
     }
     Write-Step "start" "fail"; Finish "fail"
   }
@@ -1103,7 +1103,7 @@ function Do-Start {
     $c = Check-Start
     if ($c.Ok) {
       Write-Log ("answering on http://127.0.0.1:{0}" -f $port)
-      Write-Detail "start" ("Running on port {0}" -f $port)
+      Write-Detail "start" "JobSeeker is running"
       Write-Step "start" "ok"; Write-Pct 100; Finish "ok"
     }
     if ($proc.HasExited) {
@@ -1121,11 +1121,11 @@ function Do-Start {
         $again = Check-Start
         if ($again.Ok) {
           Write-Log ("port {0} was already serving this install; using the one that is running" -f $port)
-          Write-Detail "start" ("Already running on port {0}" -f $port)
+          Write-Detail "start" "JobSeeker is already running"
           Write-Step "start" "ok"; Write-Pct 100; Finish "ok"
         }
         Write-Log ("port {0} is in use by something else" -f $port)
-        Write-Detail "start" ("Port {0} is already taken by another program. Close it, or set dashboard_port in config\job-seeker.config.md." -f $port)
+        Write-Detail "start" "Another program on this PC is using the connection JobSeeker needs. Close it and press Try again."
         Write-Step "start" "fail"; Finish "fail"
       }
       Write-Log "the server exited while starting - see data\.setup\server.err.log"
@@ -1136,7 +1136,7 @@ function Do-Start {
     Start-Sleep -Milliseconds 300
   }
   Write-Log "timed out waiting for the server to answer"
-  Write-Detail "start" ("Started, but never answered on port {0}" -f $port)
+  Write-Detail "start" "JobSeeker started but did not finish opening"
   Write-Step "start" "fail"; Finish "fail"
 }
 

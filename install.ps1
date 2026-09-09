@@ -71,6 +71,73 @@ function Die([string]$msg)  { throw "JOBSEEKER_DIE: $msg" }
 # Join a Windows-style relative path onto a base. Split on the backslash so the same code also
 # runs under pwsh on macOS/Linux, where "\" is not a separator (that is what the dry run and the
 # CI update test use).
+# Two paths naming the same folder, comparably: Windows is case-insensitive and does not care about
+# a trailing separator, but string equality does.
+function Normalize-Path([string]$p) {
+  if (-not $p) { return "" }
+  try { $p = [IO.Path]::GetFullPath($p) } catch { }
+  return $p.TrimEnd('\', '/')
+}
+
+# Is a JobSeeker from THIS folder answering? If so, offer to close it before its code is replaced.
+# Answering on 127.0.0.1 and not localhost: the dashboard binds the IPv4 loopback only, and on
+# Windows localhost resolves to ::1 first, which would time out and report nothing was running.
+function Stop-RunningJobSeeker([string]$Target) {
+  $port = 4319
+  $cfg = Join-Path $Target "config\job-seeker.config.md"
+  if (Test-Path -LiteralPath $cfg) {
+    $m = [regex]::Match((Get-Content -LiteralPath $cfg -Raw), '(?m)^dashboard_port:\s*(\d+)')
+    if ($m.Success) { $port = [int]$m.Groups[1].Value }
+  }
+  $who = ""
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri ("http://127.0.0.1:{0}/_whoami" -f $port) -TimeoutSec 3
+    $who = ($r.Content | ConvertFrom-Json).root
+  } catch { return }
+  if (-not $who) { return }
+  if ((Normalize-Path $who) -ine (Normalize-Path $Target)) {
+    Write-Host ""
+    Write-Host "  Another JobSeeker is running from $who." -ForegroundColor Yellow
+    Write-Host "  Leaving it alone; this install will not touch it."
+    return
+  }
+
+  Write-Host ""
+  Write-Host "  JobSeeker is running." -ForegroundColor Yellow
+  Write-Host "  It is running the version about to be replaced, so it needs to close for the update"
+  Write-Host "  to take effect. Nothing you have saved is affected."
+  $answer = "y"
+  if (-not [Console]::IsInputRedirected -and $env:JOBSEEKER_YES -ne "1") {
+    $answer = Read-Host "  Close JobSeeker now? [Y/n]"
+    if (-not $answer) { $answer = "y" }
+  }
+  if ($answer -notmatch '^(y|yes)$') {
+    Write-Host "  Leaving it running. Quit it yourself and run this again to finish the update." -ForegroundColor Yellow
+    Die "update stopped so JobSeeker could stay running."
+  }
+  # Identified by the port it is actually serving, not by its command line: it is usually started
+  # from inside its own folder, so the path never appears in the arguments and matching on one finds
+  # nothing. We have already asked that port who it is and been told it is this install, so whatever
+  # holds it is the right process.
+  $stopped = 0
+  try {
+    $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop
+    foreach ($c in $conns) {
+      try { Stop-Process -Id $c.OwningProcess -Force -ErrorAction Stop; $stopped++ } catch { }
+    }
+  } catch {
+    # No Get-NetTCPConnection on very old builds; fall back to the command line, which is right
+    # whenever the dashboard was started with a full path.
+    Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -and $_.CommandLine -like "*dashboard.mjs*" } |
+      ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }
+      }
+  }
+  Start-Sleep -Milliseconds 700
+  if ($stopped -gt 0) { Ok "closed JobSeeker" } else { Write-Host "  Could not find its process; carrying on." }
+}
+
 function Sub([string]$base, [string]$rel) {
   $p = $base
   foreach ($part in ($rel -split '[\\/]')) { if ($part) { $p = Join-Path $p $part } }
@@ -265,6 +332,11 @@ function Main {
   # this is a job search someone may have been running for months.
   $keep = @("data", "config", "templates")
   if (Test-Path -LiteralPath $HomeDir) {
+    # A JobSeeker that is already running is running the code we are about to replace. Left alone it
+    # keeps serving the old version, so the update appears to have done nothing -- and on Windows it
+    # can also hold files open while they are being overwritten. Ask before closing it: it is the
+    # user's app and it may be mid-something.
+    Stop-RunningJobSeeker $HomeDir
     Step "Updating the copy already in $HomeDir"
     foreach ($k in $keep) {
       if ((Test-Path -LiteralPath (Sub $HomeDir $k)) -and (Test-Path -LiteralPath (Sub $src $k))) {
