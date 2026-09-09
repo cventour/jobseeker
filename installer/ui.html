@@ -94,10 +94,6 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .pin b{font:700 27px/1 ui-monospace,Menlo,monospace;letter-spacing:.32em;padding-left:.32em}
 .pin i{font-style:normal;font-size:12px;color:var(--acc);white-space:nowrap}
 
-.whereitlives{background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:14px 16px;margin:4px 0 14px}
-.whereitlives b{font-size:13.5px}
-.whereitlives p{margin:6px 0 0;font-size:13px;line-height:1.6;color:var(--mut)}
 
 /* ---- a modal that turns pages ----
    Connecting WhatsApp is three short screens, not one long instruction. Each replaces the last,
@@ -152,6 +148,15 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .modal-path code{display:block;word-break:break-all;background:var(--card);border:1px solid var(--line);
   border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--fg)}
 .modal-foot{display:flex;justify-content:flex-end;margin-top:14px}
+/* The closing modal darkens and blurs what is behind it. The other modal in this window interrupts
+   a step you are in the middle of, so the screen behind it stays legible on purpose; this one ends
+   setup, and there is nothing behind it left to read. Blur is progressive -- a browser without
+   backdrop-filter gets the darker scrim alone, which is the whole effect minus the polish. */
+.modal-blur{background:rgba(0,0,0,.55)}
+@supports (backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px)) {
+  .modal-blur{background:rgba(0,0,0,.42);
+    -webkit-backdrop-filter:blur(7px) saturate(.9);backdrop-filter:blur(7px) saturate(.9)}
+}
 .modal-box{max-height:86vh;overflow:auto}
 #modal-steps{margin:0 0 12px;padding-left:22px;font-size:14px;line-height:1.7}
 #modal-steps li{margin-bottom:7px}
@@ -318,6 +323,24 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     </div>
   </div>
 
+  <!-- Only on the closing screen. The shortcuts were made while nobody was watching, so this is
+       the one moment anyone is told how to open JobSeeker again tomorrow -- which is why it is a
+       modal now rather than a card further down a screen nobody scrolls: setup ends here, and the
+       last thing it says should be the only thing on the glass. Deliberately outside <main>: it is
+       position:fixed, and any transformed ancestor would silently make it position:absolute. -->
+  <div class="modal modal-blur" id="whereitlives" hidden
+       role="dialog" aria-modal="true" aria-labelledby="wil-title">
+    <div class="modal-box">
+      <h2 id="wil-title">JobSeeker is deployed</h2>
+      <p>You can find it in your <b>Start Menu</b>, and there is a <b>JobSeeker</b> shortcut on your
+        Desktop. Either one opens this same window. Quit JobSeeker from the Start Menu folder when
+        you want it closed.</p>
+      <div class="modal-foot">
+        <button class="primary" id="wil-go" type="button">Take me to the JobSeeker dashboard</button>
+      </div>
+    </div>
+  </div>
+
   <div class="wa" id="whatsapp" hidden>
     <h1>Connect WhatsApp</h1>
     <p class="lede">So the morning digest reaches your phone. It only ever sends: you cannot
@@ -351,15 +374,6 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
       <div class="wacode"><b id="wa-code">————</b>
         <span>Enter this on your phone.<br>It expires in a couple of minutes.</span></div>
     </div>
-  </div>
-
-  <!-- Only on the closing screen. The shortcuts were made while nobody was watching, so this is
-       the one moment anyone is told how to open JobSeeker again tomorrow. -->
-  <div class="whereitlives" id="whereitlives" hidden>
-    <b>Opening it again</b>
-    <p>JobSeeker is in your <b>Start Menu</b>, and there is a <b>JobSeeker</b> shortcut on your
-      Desktop. Either one opens this same window. Quit JobSeeker from the Start Menu folder when
-      you want it closed.</p>
   </div>
 
   <ul class="plan" id="plan" hidden></ul>
@@ -493,10 +507,21 @@ function renderPin(st) {
 // has no other way out of a page of instructions than finding the button at the foot of it.
 document.addEventListener("keydown", function (e) {
   if (e.key !== "Escape") return;
+  // The closing modal is drawn by this page rather than by the host, so it is dismissed here. It
+  // sits above the other one, so it answers Esc first. What is underneath is the finished screen,
+  // whose footer offers the same button -- Esc gets you a look at it, not out of setup.
+  var wil = document.getElementById("whereitlives");
+  if (wil && !wil.hidden) { e.preventDefault(); wil.hidden = true; return; }
   var mod = document.getElementById("modal");
   if (!mod || mod.hidden) return;
   e.preventDefault();
   send("dismiss-modal");
+});
+
+// Not a click on the backdrop: this is the last thing setup says, and dismissing it by missing the
+// button would be an accident every time. Esc is deliberate; a stray click is not.
+document.addEventListener("click", function (e) {
+  if (e.target && e.target.id === "wil-go") { send("open"); }
 });
 
 // ---- the modal's pages ---------------------------------------------------------------------
@@ -982,7 +1007,15 @@ function renderActions(st) {
     add("Take me to the dashboard", "primary", "open");
   }
   var where = document.getElementById("whereitlives");
+  var wasOpen = !where.hidden;
   where.hidden = !st.whereItLives;
+  // Focus lands on the one action the moment the modal appears, so Return finishes setup without
+  // reaching for the mouse -- but only on the transition, or every state push would yank focus
+  // back out from under someone tabbing around.
+  if (!where.hidden && !wasOpen) {
+    var go = document.getElementById("wil-go");
+    if (go) { try { go.focus(); } catch (e) {} }
+  }
 }
 
 window.__render = function (st) {
