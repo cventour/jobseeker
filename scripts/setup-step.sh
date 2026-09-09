@@ -123,7 +123,7 @@ wa_number() {
   sed -n 's/^WHATSAPP_PHONE_NUMBER=//p' "$WA_DIR/.env" | head -1
 }
 check_whatsapp() {
-  wa_paired || return 1
+  wa_linked || wa_paired || return 1
   local n; n="$(wa_number 2>/dev/null)"
   if [ -n "$n" ]; then printf 'connected as +%s' "$n"; else printf 'connected'; fi
 }
@@ -520,18 +520,44 @@ wa_plugin_name() {
   fi
 }
 
-# Linked, as opposed to half-way through linking.
+# Did WE watch this link succeed?
 #
-# `registered` alone is not proof: Baileys sets it when the pairing code is REQUESTED, before the
-# phone has confirmed anything. A run that asked for a code and was then abandoned leaves a file
-# that says registered, and the next run believed it -- reporting "connected as +971..." to someone
-# who had never received a code, let alone typed one. `me.id` is written only once the phone has
-# actually completed the link, so both are required.
+# The only claim worth making about a connection is one we saw made. When the channel reports
+# "connected as <jid>" this step writes that down here, and this file -- ours, written by us, at a
+# moment we witnessed -- is what "already connected" means from then on.
+#
+# It exists because every attempt to infer the answer from Baileys' own files has been wrong. The
+# worst was the retry: a first attempt that failed left a credential file the next run read as
+# proof, so pressing Try again reported success instantly to someone who had never linked anything.
+wa_linked() {
+  local m="$WA_DIR/.jobseeker-linked.json"
+  [ -f "$m" ] || return 1
+  # The marker records what we saw; the credentials are what the channel actually uses. If someone
+  # has cleared those, the link is gone whatever we remember about it.
+  [ -f "$WA_DIR/.baileys_auth/creds.json" ] || return 1
+  local n; n="$(node_bin)" || return 1
+  "$n" -e 'try{const c=require(process.argv[1]);process.exit((c.jid||c.number)?0:1)}catch{process.exit(1)}' \
+    "$m" 2>/dev/null
+}
+
+wa_write_linked() {
+  local jid="$1" number="$2"
+  local n; n="$(node_bin)" || return 0
+  "$n" -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({jid:process.argv[2],number:process.argv[3]}))' \
+    "$WA_DIR/.jobseeker-linked.json" "$jid" "$number" 2>/dev/null || log "could not record the link"
+}
+
+# A link that completed, read out of Baileys' own file.
+#
+# For installs that paired before the marker above existed, and as a second opinion. `registered`
+# alone is worthless -- Baileys sets it when the code is REQUESTED. `account` and `signalIdentities`
+# come from the server's pair-success payload, so they appear only after a phone has actually
+# accepted the code; all four together is the strongest statement this file can make.
 wa_paired() {
   local creds="$WA_DIR/.baileys_auth/creds.json"
   [ -f "$creds" ] || return 1
   local n; n="$(node_bin)" || return 1
-  "$n" -e 'try{const c=require(process.argv[1]);process.exit(c.registered&&c.me&&c.me.id?0:1)}catch{process.exit(1)}' \
+  "$n" -e 'try{const c=require(process.argv[1]);const ok=c.registered&&c.me&&c.me.id&&c.account&&Array.isArray(c.signalIdentities)&&c.signalIdentities.length;process.exit(ok?0:1)}catch{process.exit(1)}' \
     "$creds" 2>/dev/null
 }
 
@@ -550,8 +576,9 @@ do_whatsapp() {
   pct 5
 
   # Already linked? Do not touch it. Re-pairing a working channel to show a nicer screen would be
-  # the worst possible trade.
-  if wa_paired; then
+  # the worst possible trade. But "already linked" now means a link we watched succeed, or a
+  # credential file bearing the marks of a completed handshake -- not merely one that exists.
+  if wa_linked || wa_paired; then
     local n; n="$(wa_number 2>/dev/null)"
     log "already paired - leaving the existing link alone"
     if [ -n "$n" ]; then detail whatsapp "connected as +$n"; else detail whatsapp "connected"; fi
@@ -643,6 +670,16 @@ do_whatsapp() {
     rm -f "$WA_DIR/.server.lock"
   fi
 
+  # Nothing here is linked -- the check at the top of this function has already said so. Anything
+  # left in the auth folder is the wreckage of an attempt that did not finish: a wrong number, a
+  # code that was never typed, a code typed wrong. Baileys will not request a fresh code over the
+  # top of it, and it is exactly what the next run would misread as success. Clear it.
+  if [ -d "$WA_DIR/.baileys_auth" ]; then
+    log "clearing an unfinished pairing attempt before asking for a new code"
+    rm -rf "$WA_DIR/.baileys_auth"
+  fi
+  rm -f "$WA_DIR/.jobseeker-linked.json"
+
   local before=0
   [ -f "$WA_DIR/pairing.log" ] && before="$(wc -l < "$WA_DIR/pairing.log" 2>/dev/null | tr -d ' ')"
   say "Asking WhatsApp for a pairing code"
@@ -706,6 +743,7 @@ do_whatsapp() {
       kill "$server_pid" 2>/dev/null
       log "the channel reports it is connected as $jid"
       local n; n="$(wa_number)"
+      wa_write_linked "$jid" "$n"
       if [ -n "$n" ]; then detail whatsapp "connected as +$n"; else detail whatsapp "Connected"; fi
       step whatsapp ok; pct 100; finish ok
     fi
@@ -713,6 +751,7 @@ do_whatsapp() {
       kill "$server_pid" 2>/dev/null
       log "no 'connected as' line, but the credentials have looked complete for 20s"
       local n2; n2="$(wa_number)"
+      wa_write_linked "" "$n2"
       if [ -n "$n2" ]; then detail whatsapp "connected as +$n2"; else detail whatsapp "Connected"; fi
       step whatsapp ok; pct 100; finish ok
     fi

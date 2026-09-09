@@ -441,17 +441,43 @@ $WaPluginRepo = "Rich627/whatsapp-claude-plugin"
 $WaPluginFallback = "whatsapp-claude-channel"
 $WaMarketplace = "whatsapp-claude-plugin"
 
-# Linked, as opposed to half-way through linking.
+# Did WE watch this link succeed?
 #
-# `registered` alone is not proof: Baileys sets it when the pairing code is REQUESTED, before the
-# phone has confirmed anything. A run that asked for a code and was then abandoned leaves a file
-# that says registered, and the next run believed it -- reporting "connected as +971..." to someone
-# who had never received a code, let alone typed one. `me.id` is written only once the phone has
-# actually completed the link, so both are required.
+# The only claim worth making about a connection is one we saw made. When the channel reports
+# "connected as <jid>" this step writes that down here, and this file -- ours, written by us, at a
+# moment we witnessed -- is what "already connected" means from then on.
+#
+# It exists because every attempt to infer the answer from Baileys' own files has been wrong. The
+# worst was the retry: a first attempt that failed left a credential file the next run read as
+# proof, so pressing Try again reported success instantly to someone who had never linked anything.
+function Test-WaLinked {
+  $m = Join-Path $WaDir ".jobseeker-linked.json"
+  if (-not (Test-Path -LiteralPath $m)) { return $false }
+  # The marker records what we saw; the credentials are what the channel actually uses. If someone
+  # has cleared those, the link is gone whatever we remember about it.
+  if (-not (Test-Path -LiteralPath (Join-Path $WaDir ".baileys_auth\creds.json"))) { return $false }
+  $snippet = 'try{const c=require(process.argv[1]);process.exit((c.jid||c.number)?0:1)}catch{process.exit(1)}'
+  $r = Invoke-NodeSnippet -Snippet $snippet -ArgumentList @($m)
+  return ($r.ExitCode -eq 0)
+}
+
+function Write-WaLinked([string]$Jid, [string]$Number) {
+  $m = Join-Path $WaDir ".jobseeker-linked.json"
+  $o = @{ jid = $Jid; number = $Number }
+  try { [IO.File]::WriteAllText($m, (ConvertTo-Json $o -Compress), $Utf8NoBom) }
+  catch { Write-Log ("could not record the link: " + $_.Exception.Message) }
+}
+
+# A link that completed, read out of Baileys' own file.
+#
+# For installs that paired before the marker above existed, and as a second opinion. `registered`
+# alone is worthless -- Baileys sets it when the code is REQUESTED. `account` and `signalIdentities`
+# come from the server's pair-success payload, so they appear only after a phone has actually
+# accepted the code; all four together is the strongest statement this file can make.
 function Test-WaPaired {
   $creds = Join-Path $WaDir ".baileys_auth\creds.json"
   if (-not (Test-Path -LiteralPath $creds)) { return $false }
-  $snippet = 'try{const c=require(process.argv[1]);process.exit(c.registered&&c.me&&c.me.id?0:1)}catch{process.exit(1)}'
+  $snippet = 'try{const c=require(process.argv[1]);const ok=c.registered&&c.me&&c.me.id&&c.account&&Array.isArray(c.signalIdentities)&&c.signalIdentities.length;process.exit(ok?0:1)}catch{process.exit(1)}'
   $r = Invoke-NodeSnippet -Snippet $snippet -ArgumentList @($creds)
   return ($r.ExitCode -eq 0)
 }
@@ -466,7 +492,7 @@ function Get-WaNumber {
 }
 
 function Check-Whatsapp {
-  if (-not (Test-WaPaired)) { return Ck $false "" }
+  if (-not ((Test-WaLinked) -or (Test-WaPaired))) { return Ck $false "" }
   $n = Get-WaNumber
   if ($n) { return Ck $true ("connected as +{0}" -f $n) }
   return Ck $true "connected"
@@ -1422,8 +1448,9 @@ function Do-Whatsapp([string]$Phone) {
   Write-Pct 5
 
   # Already linked? Do not touch it. Re-pairing a working channel to show a nicer screen would be
-  # the worst possible trade.
-  if (Test-WaPaired) {
+  # the worst possible trade. But "already linked" now means a link we watched succeed, or a
+  # credential file bearing the marks of a completed handshake -- not merely one that exists.
+  if ((Test-WaLinked) -or (Test-WaPaired)) {
     $n = Get-WaNumber
     Write-Log "already paired - leaving the existing link alone"
     if ($n) { Write-Detail "whatsapp" ("connected as +{0}" -f $n) } else { Write-Detail "whatsapp" "connected" }
@@ -1554,6 +1581,18 @@ function Do-Whatsapp([string]$Phone) {
     Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
   }
 
+  # Nothing here is linked -- the check at the top of this function has already said so. Anything
+  # left in the auth folder is the wreckage of an attempt that did not finish: a wrong number, a
+  # code that was never typed, a code typed wrong. Baileys will not request a fresh code over the
+  # top of it, and it is exactly what the next run would misread as success. Clear it.
+  $auth = Join-Path $WaDir ".baileys_auth"
+  if (Test-Path -LiteralPath $auth) {
+    Write-Log "clearing an unfinished pairing attempt before asking for a new code"
+    Remove-Item -LiteralPath $auth -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  $marker = Join-Path $WaDir ".jobseeker-linked.json"
+  if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
+
   $pairingLog = Join-Path $WaDir "pairing.log"
   $before = 0
   if (Test-Path -LiteralPath $pairingLog) {
@@ -1672,6 +1711,7 @@ function Do-Whatsapp([string]$Phone) {
       Stop-ProcessTree $server
       Write-Log ("the channel reports it is connected as " + $jid)
       $num = Get-WaNumber
+      Write-WaLinked $jid $num
       if ($num) { Write-Detail "whatsapp" ("connected as +{0}" -f $num) } else { Write-Detail "whatsapp" "Connected" }
       Write-Step "whatsapp" "ok"; Write-Pct 100; Finish "ok"
     }
@@ -1679,6 +1719,7 @@ function Do-Whatsapp([string]$Phone) {
       Stop-ProcessTree $server
       Write-Log "no 'connected as' line, but the credentials have looked complete for 20s"
       $num = Get-WaNumber
+      Write-WaLinked "" $num   # no jid to record; the number is what we know
       if ($num) { Write-Detail "whatsapp" ("connected as +{0}" -f $num) } else { Write-Detail "whatsapp" "Connected" }
       Write-Step "whatsapp" "ok"; Write-Pct 100; Finish "ok"
     }
