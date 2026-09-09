@@ -157,11 +157,22 @@ function Invoke-Captured {
     }
     $cmdline = ConvertTo-CmdLine $ArgumentList
     if ($cmdline) { $sp["ArgumentList"] = $cmdline }
+    # Nothing here can answer a question, so make asking one hit end-of-input immediately rather
+    # than sit there until the timeout expires. An empty file, not "NUL": PowerShell resolves that
+    # name as a relative path and Start-Process fails outright (measured on Windows 11).
+    $inFile = [IO.Path]::GetTempFileName()
+    $sp["RedirectStandardInput"] = $inFile
     $code = 127
     $out = ""
     $err = ""
     try {
-      $p = Start-Process @sp
+      try {
+        $p = Start-Process @sp
+      } catch {
+        # Some programs refuse a redirected stdin. Losing the redirect is better than losing the step.
+        $sp.Remove("RedirectStandardInput") | Out-Null
+        $p = Start-Process @sp
+      }
       if ($p.WaitForExit($TimeoutSec * 1000)) {
         $code = [int]$p.ExitCode
       } else {
@@ -175,6 +186,7 @@ function Invoke-Captured {
     } catch {
       $err = $_.Exception.Message
     }
+    Remove-Item -LiteralPath $inFile -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $outFile) { $out = [IO.File]::ReadAllText($outFile).TrimEnd("`r", "`n") }
     if (Test-Path -LiteralPath $errFile) { $err = ($err + [IO.File]::ReadAllText($errFile)).TrimEnd("`r", "`n") }
     return @{ ExitCode = $code; Out = $out; Err = $err }
@@ -520,13 +532,37 @@ function Get-Check([string]$Id) {
 # Only ever called with an installer this script downloaded into data\.setup and verified the
 # signature of. Windows draws the UAC dialog; nothing here ever sees or stores a password.
 # Returns $true when the elevated program exited 0.
-function Invoke-Elevated([string]$FilePath, [string[]]$Arguments, [string]$What) {
+function Invoke-Elevated([string]$FilePath, [string[]]$Arguments, [string]$What, [int]$TimeoutSec = 900) {
   $cmdline = ConvertTo-CmdLine $Arguments
   Write-Log ("elevating: {0} {1}" -f $FilePath, $cmdline)
   try {
-    $sp = @{ FilePath = $FilePath; Verb = "RunAs"; Wait = $true; PassThru = $true }
+    # No -Wait, for the same reason Invoke-Captured drops it: that flag waits for the process and
+    # every descendant, and installers routinely leave one running. Node, Git and Chrome all come
+    # through here, so a single lingering helper would hang setup on exactly the machine that needed
+    # it most -- one where none of them were installed yet.
+    $sp = @{ FilePath = $FilePath; Verb = "RunAs"; PassThru = $true }
     if ($cmdline) { $sp["ArgumentList"] = $cmdline }
     $p = Start-Process @sp
+    if (-not $p) {
+      Write-Log ("{0} installer did not report a process; letting the step verify instead" -f $What)
+      return $true
+    }
+    # Poll rather than WaitForExit: a process started through ShellExecute does not always hand back
+    # a waitable handle, and Get-Process answers regardless of who owns it.
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $exited = $false
+    while ((Get-Date) -lt $deadline) {
+      if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { $exited = $true; break }
+      Start-Sleep -Milliseconds 500
+    }
+    if (-not $exited) {
+      # Deliberately NOT killed. Half-written registry and files are how an installer leaves a
+      # machine in a state neither installed nor absent, and this script cannot tell a slow install
+      # from a stuck one. Stop waiting, say so, and let the step's own check decide what is true.
+      Write-Log ("{0} installer is still running after {1}s; not waiting any longer, and not killing it" -f $What, $TimeoutSec)
+      Write-Log ("if it finishes later, run this step again and it will find it")
+      return $false
+    }
     # An elevated child is launched through ShellExecute, and its exit code is not always readable
     # afterwards. Unreadable is not "failed": the step's own verify is the judge either way, and
     # refusing to run it because a number was missing would report a successful install as a failure.
@@ -651,7 +687,7 @@ function Do-Node {
     Write-Say "Installing Node LTS with winget"
     Write-Detail "node" "Installing with winget"
     Write-Log "winget install --id OpenJS.NodeJS.LTS"
-    $r = Invoke-Captured -FilePath "winget" -ArgumentList @(
+    $r = Invoke-Captured -TimeoutSec 600 -FilePath "winget" -ArgumentList @(
       "install", "--id", "OpenJS.NodeJS.LTS", "--silent",
       "--accept-package-agreements", "--accept-source-agreements")
     Write-Indented $r.Out
@@ -744,7 +780,7 @@ function Do-Git {
     Write-Say "Installing Git for Windows with winget"
     Write-Detail "git" "Installing with winget"
     Write-Log "winget install --id Git.Git"
-    $r = Invoke-Captured -FilePath "winget" -ArgumentList @(
+    $r = Invoke-Captured -TimeoutSec 600 -FilePath "winget" -ArgumentList @(
       "install", "--id", "Git.Git", "--silent",
       "--accept-package-agreements", "--accept-source-agreements")
     Write-Indented $r.Out
@@ -873,7 +909,7 @@ function Do-Chrome {
     Write-Say "Installing Google Chrome with winget"
     Write-Detail "chrome" "Installing with winget"
     Write-Log "winget install --id Google.Chrome"
-    $r = Invoke-Captured -FilePath "winget" -ArgumentList @(
+    $r = Invoke-Captured -TimeoutSec 600 -FilePath "winget" -ArgumentList @(
       "install", "--id", "Google.Chrome", "--silent",
       "--accept-package-agreements", "--accept-source-agreements")
     Write-Indented $r.Out
