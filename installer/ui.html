@@ -72,12 +72,26 @@ main>#welcome{flex:1}
 h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .sub{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 18px;max-width:56ch}
 
+/* ---- the "here is where it went" modal ---- */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;
+  justify-content:center;z-index:50;padding:24px}
+.modal-box{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:22px 24px;
+  max-width:520px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.25)}
+.modal-box h2{margin:0 0 8px;font-size:19px;font-weight:600}
+.modal-box p{margin:0 0 10px;font-size:14px;line-height:1.6;color:var(--mut)}
+.modal-path code{display:block;word-break:break-all;background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--fg)}
+.modal-foot{display:flex;justify-content:flex-end;margin-top:14px}
+
 /* ---- the welcome (the very first thing anyone sees) ---- */
 /* Centred in the window, and deliberately almost empty: this screen exists to say where you are
    and give you one thing to press. The detail belongs on the next screen, where it is actionable. */
 .wel{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
   text-align:center;gap:2px;padding-bottom:28px}
-.wel img{width:152px;height:152px;display:block;margin-bottom:26px}
+/* Deliberately large: this is the first thing anyone sees, and at 152px it read as a favicon
+   stranded in the middle of an empty page. Capped against the viewport so a short window does not
+   push the heading off the bottom. */
+.wel img{width:min(380px,44vh);height:auto;display:block;margin-bottom:30px}
 .wel h1{font-size:30px;line-height:1.2;letter-spacing:-.02em;margin:0 0 12px;font-weight:600}
 .wel p{margin:0;font-size:16px;line-height:1.65;color:var(--mut);max-width:46ch}
 
@@ -203,6 +217,17 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
       to your cloud. Click <b>Get started</b> to begin.</p>
   </div>
 
+  <!-- Only ever used to report where something was written. Kept deliberately dumb: one message,
+       one button, no state of its own. -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-box">
+      <h2 id="modal-title"></h2>
+      <p id="modal-body"></p>
+      <p class="modal-path"><code id="modal-path"></code></p>
+      <div class="modal-foot"><button class="primary" id="modal-ok">Close</button></div>
+    </div>
+  </div>
+
   <div class="wa" id="whatsapp" hidden>
     <h1>Connect WhatsApp</h1>
     <p class="lede">So the morning digest reaches your phone. It only ever sends: you cannot
@@ -271,7 +296,10 @@ var seq = 0;
 function send(cmd, id, val) {
   seq++;
   var msg = { n: seq, cmd: cmd, id: id || "", v: val || "" };
-  if (HOSTED) {
+  var modalOk = document.getElementById("modal-ok");
+if (modalOk) { modalOk.onclick = function () { send("dismiss-modal"); }; }
+
+if (HOSTED) {
     try {
       var x = new XMLHttpRequest();
       x.open("POST", "/cmd", true);
@@ -392,6 +420,18 @@ function renderActions(st) {
     acts.appendChild(b);
     return b;
   }
+  // The modal rides alongside whatever view is showing; it is not a view of its own.
+  var mod = document.getElementById("modal");
+  if (st.modal && st.modal.title) {
+    document.getElementById("modal-title").textContent = st.modal.title;
+    document.getElementById("modal-body").textContent = st.modal.body || "";
+    document.getElementById("modal-path").textContent = st.modal.path || "";
+    document.querySelector(".modal-path").hidden = !st.modal.path;
+    mod.hidden = false;
+  } else {
+    mod.hidden = true;
+  }
+
   if (st.view === "welcome") {
     add("Quit", "ghost", "quit");
     add("Get started", "primary", "continue");
@@ -400,7 +440,10 @@ function renderActions(st) {
     add(st.allInstalled ? "Start JobSeeker" : "Begin", "primary", "begin");
   } else if (st.view === "work") {
     if (st.busy) add("Stop", "ghost", "stop");
-    else if (st.failed) add("Try the rest anyway", "", "begin");
+    else if (st.failed) {
+      add("Collect logs", "primary", "collect-logs");
+      add("Try again", "", "begin");
+    }
   } else if (st.view === "whatsapp") {
     if (st.waKnown) { add("Continue", "primary", "wa-skip"); }
     else {

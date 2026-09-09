@@ -39,6 +39,7 @@
 import { createServer } from "http";
 import { spawn } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -243,9 +244,18 @@ function launchStep(id, extraArg) {
     }
     return false;
   }
+  // PowerShell enumerates every filesystem drive when it starts, and complains on stderr about any
+  // that will not answer -- a disconnected network share, or the WebDAV drive a VM's shared-folder
+  // feature leaves behind. It has nothing to do with the step, but it lands before every one of
+  // them and makes a healthy log read like a broken one. Dropped here rather than suppressed in
+  // each script, because it is PowerShell talking, not us.
+  const NOISE = /^.*InitializeDefaultDrives operation on the '.*' provider failed.*$\r?\n?/gm;
+  let sawDone = false;
   const take = (buf) => {
-    const text = String(buf);
+    const text = String(buf).replace(NOISE, "");
+    if (!text) return;
     stepBuf += text;
+    if (/^::done\b/m.test(stepBuf)) sawDone = true;
     appendLog(STEPLOG, text);
     drainStepLog();
     push();
@@ -255,10 +265,33 @@ function launchStep(id, extraArg) {
   child.on("error", (e) => {
     log(`step ${id} could not run: ${e.message}`);
   });
-  child.on("close", (code) => {
+  // 'exit' says the step is over. 'close' says that AND every pipe it held is shut, which is a
+  // different and much later event when the step deliberately leaves something running: the `start`
+  // step launches the dashboard, the dashboard inherits this pipe, and it is meant to outlive the
+  // installer. Waiting for 'close' there meant waiting forever -- the step wrote "ok", exited, the
+  // dashboard answered on its port, and the wizard sat on "Starting JobSeeker" for good.
+  //
+  // So finish on 'exit', after a beat to collect anything still in flight, and let whichever event
+  // arrives first do the work exactly once.
+  let settled = false;
+  const settle = (code) => {
+    if (settled) return;
+    settled = true;
     drainStepLog();
     onStepClosed(code === 0);
-  });
+  };
+  // Every step ends by printing `::done`. Waiting for that, rather than for the process or its
+  // pipes, is the only signal that the output has actually been READ -- a step can exit with its
+  // last lines still in the pipe, and settling then means acting on a step whose result has not
+  // been parsed yet. That is what marked the Chrome extension "Needs Start JobSeeker first" a
+  // moment before Start JobSeeker was recorded as ok.
+  const waitForDone = (code, tries) => {
+    if (settled) return;
+    if (sawDone || tries <= 0) return settle(code);
+    setTimeout(() => waitForDone(code, tries - 1), 100);
+  };
+  child.on("exit", (code) => waitForDone(code, 30)); // up to ~3s for the tail to arrive
+  child.on("close", (code) => settle(code));
   running = id;
   state.busy = true;
   state.pct = 0;
@@ -555,6 +588,45 @@ function decideWhatToDo() {
   push();
 }
 
+/**
+ * Write everything worth reading into the user's Downloads folder, and say where it went.
+ *
+ * Downloads rather than the install directory: it is the one folder every Windows user can find
+ * without being told a path, and the point of this button is that the person pressing it is already
+ * stuck and about to send the file to someone.
+ */
+function collectLogs() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const dir = path.join(os.homedir(), "Downloads");
+  const out = path.join(dir, `jobseeker-logs-${stamp}.txt`);
+  state.modal = { title: "Collecting…", body: "Reading the logs.", path: "" };
+  push();
+  const c = platform.nodeCommand("scripts/diagnose.mjs", ["--out", out]);
+  const p = spawn(c.cmd, c.args, { cwd: REPO, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let err = "";
+  p.stderr.on("data", (d) => (err += d));
+  p.on("exit", (code) => {
+    if (code === 0 && fs.existsSync(out)) {
+      log(`logs collected to ${out}`);
+      state.modal = {
+        title: "Logs saved",
+        body:
+          "Everything that might explain this is in one file, in your Downloads folder. " +
+          "Tokens, keys and phone numbers have been replaced. Send it on to whoever is helping.",
+        path: out,
+      };
+    } else {
+      log(`collecting logs failed: ${(err || "").trim().slice(0, 200)}`);
+      state.modal = {
+        title: "Could not collect the logs",
+        body: (err || "").trim().slice(0, 300) || "The collector did not finish.",
+        path: "",
+      };
+    }
+    push();
+  });
+}
+
 function showPlan() {
   const missing = STEPS.filter((s) => s.state !== "ok");
   state.view = "plan";
@@ -634,6 +706,15 @@ function handleCommand(cmd) {
       return;
     }
     showPlan();
+    return;
+  }
+  if (cmd.cmd === "collect-logs") {
+    collectLogs();
+    return;
+  }
+  if (cmd.cmd === "dismiss-modal") {
+    state.modal = null;
+    push();
     return;
   }
   if (cmd.cmd === "back") {

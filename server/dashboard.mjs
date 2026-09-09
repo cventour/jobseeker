@@ -7613,8 +7613,32 @@ const PORT = Number(process.env.PORT || cfg.dashboard_port || 4319);
 const HOST = process.env.JOBSEEKER_DASHBOARD_HOST || "127.0.0.1";
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
+// A second copy on a port the first one holds is the commonest way this fails to start, and an
+// unhandled 'error' event turns that into a Node stack trace about EADDRINUSE -- which tells the
+// person reading it nothing about what to do. Say which case it is, and say it in one line.
+server.on("error", async (e) => {
+  if (e && e.code === "EADDRINUSE") {
+    let mine = false;
+    try {
+      const r = await fetch(`http://127.0.0.1:${PORT}/_whoami`, { signal: AbortSignal.timeout(2000) });
+      mine = r.ok && (await r.json())?.root === ROOT;
+    } catch {
+      /* whatever is there is not answering as us */
+    }
+    console.error(
+      mine
+        ? `JobSeeker is already running on port ${PORT}. Open http://127.0.0.1:${PORT}/ — there is nothing to start.`
+        : `Port ${PORT} is already in use by another program. Close it, or set dashboard_port in ` +
+          `config/job-seeker.config.md to a free port.`
+    );
+    process.exit(mine ? 0 : 1);
+  }
+  console.error(`The dashboard could not start: ${e?.message || e}`);
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
-  console.log(`Job-seeker dashboard on http://localhost:${PORT}`);
+  console.log(`Job-seeker dashboard on http://127.0.0.1:${PORT}`);
   if (!LOOPBACK.has(HOST)) {
     console.warn(
       `\n!! WARNING: bound to ${HOST}, not loopback. The dashboard has NO authentication, so your\n` +

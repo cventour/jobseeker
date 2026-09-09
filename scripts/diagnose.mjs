@@ -18,7 +18,9 @@ import * as platform from "../server/platform.mjs";
 
 const ROOT = platform.ROOT;
 const DATA = process.env.JOBSEEKER_DATA_DIR ? path.resolve(process.env.JOBSEEKER_DATA_DIR) : path.join(ROOT, "data");
-const OUT = path.join(DATA, "diagnostics.txt");
+// --out lets the setup window drop the file somewhere the user will actually find it.
+const outArg = process.argv.indexOf("--out");
+const OUT = outArg > -1 && process.argv[outArg + 1] ? path.resolve(process.argv[outArg + 1]) : path.join(DATA, "diagnostics.txt");
 const TAIL = 60;
 
 const lines = [];
@@ -159,7 +161,7 @@ async function main() {
   head("Config (redacted)");
   say(await tail(path.join(ROOT, "config", "job-seeker.config.md"), 80));
 
-  await fs.mkdir(DATA, { recursive: true });
+  await fs.mkdir(path.dirname(OUT), { recursive: true });
   await fs.writeFile(OUT, lines.join("\n") + "\n", "utf8");
   console.log(`Wrote ${OUT}`);
   console.log("Tokens, keys and phone numbers are replaced; read it before sending it on.");
