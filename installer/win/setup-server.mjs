@@ -806,8 +806,37 @@ function decideWhatToDo() {
  * stuck and about to send the file to someone.
  */
 /** The five things to do, in order, with the two that are hard to find shown as pictures. */
-async function showExtensionHelp() {
+async function showExtensionHelp(force) {
   const folder = path.join(REPO, "extension");
+
+  // Already paired? Then say so, and do not mint anything.
+  //
+  // Minting first and finding out afterwards is what put a fresh code on screen and took it away a
+  // second later, when the probe came back saying the extension had been connected all along. Ask
+  // before acting: the bridge knows, and the answer takes a moment.
+  if (!force) {
+    await checkStarted();
+    const es = stepById("extension");
+    if (state.extensionConnected || (es && es.state === "ok")) {
+      // Any code left over from an earlier visit goes with it; it pairs nothing now.
+      state.code = "";
+      state.codeFor = "";
+      state.modal = {
+        help: "extension",
+        connected: true,
+        title: "The Chrome extension is connected",
+        body:
+          "Chrome is already paired with JobSeeker on this computer, so there is nothing to do " +
+          "here. Pair again only if you have removed the extension from Chrome, or loaded it into " +
+          "a different Chrome.",
+        steps: [],
+        images: [],
+        path: "",
+      };
+      push();
+      return;
+    }
+  }
   // A code, whether or not the step happens to be running.
   //
   // The instructions say "type the pairing code shown at the top of this window", and the code was
@@ -1327,13 +1356,18 @@ function handleCommand(cmd) {
     return;
   }
   if (cmd.cmd === "help") {
-    if (cmd.id === "extension") showExtensionHelp();
+    if (cmd.id === "extension") showExtensionHelp(false);
     if (cmd.id === "whatsapp") showWhatsAppHelp();
     if (cmd.id === "claude") showClaudeHelp();
     return;
   }
   if (cmd.cmd === "claude-signin") {
     openClaudeSignin();
+    return;
+  }
+  if (cmd.cmd === "ext-repair") {
+    // Deliberate: the user has been told it is connected and asked for a new code anyway.
+    showExtensionHelp(true);
     return;
   }
   if (cmd.cmd === "wa-test") {

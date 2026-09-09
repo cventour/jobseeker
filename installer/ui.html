@@ -497,7 +497,9 @@ function renderPin(st) {
   // that looks just like it and shows it on the page it belongs to; two codes at once, alike and
   // unlabelled, is how the wrong one gets typed.
   var m = st.modal;
-  var show = !!st.code && st.codeFor === "extension" && !!m && m.help === "extension";
+  // Never on the "already connected" page: a code there is an invitation to type something that
+  // does not need typing.
+  var show = !!st.code && st.codeFor === "extension" && !!m && m.help === "extension" && !m.connected;
   pinCode = show ? st.code : "";
   if (show && pinDigits.textContent !== st.code) pinDigits.textContent = st.code;
   pinBar.hidden = !show;
@@ -680,6 +682,11 @@ function renderModalFoot(st) {
   if (m && m.reveal) {
     b("Close", "ghost", close);
     b("Open folder", "primary", function () { send("reveal-logs"); });
+    return;
+  }
+  if (m && m.help === "extension" && m.connected) {
+    b("Close", "primary", close);
+    b("Pair again", "ghost", function () { send("ext-repair"); });
     return;
   }
   if (m && m.help === "claude" && m.steps && m.steps.length) {
