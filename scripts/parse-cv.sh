@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Read the newest uploaded CV into data/profile.md, by running /parse-cv headlessly.
+# Windows twin: scripts/win/parse-cv.ps1 — change both together.
 #
 #   bash scripts/parse-cv.sh
 #

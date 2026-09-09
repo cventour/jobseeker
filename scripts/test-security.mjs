@@ -171,18 +171,63 @@ async function main() {
   }
   check("inline dashboard JS parses", scriptOk, scriptErr);
 
-  // browser.mjs flattens each injected page script to a single line before handing it to
-  // AppleScript, so a `//` comment inside one comments out everything that follows it. That failed
-  // silently — openConversation returned "no error" and simply never clicked — which is the worst
-  // possible shape for a bug in a script that touches someone's real messages.
-  const browserSrc = await fs.readFile(new URL("./browser.mjs", import.meta.url), "utf8");
-  const flattened = browserSrc.match(/`\n\(function\(\)\{[\s\S]*?`\.replace\(\/\\n\/g, " "\)/g) || [];
-  const withLineComments = flattened.filter((b) => b.split("\n").some((l) => /^\s*\/\//.test(l)));
-  check(
-    "injected browser scripts use block comments only",
-    flattened.length > 0 && withLineComments.length === 0,
-    flattened.length === 0 ? "found no injected scripts to check — the matcher has drifted" : `${withLineComments.length} script(s) contain a line comment`
-  );
+  // Every page snippet is flattened to ONE LINE before it is sent (AppleScript string literals
+  // cannot carry a raw newline), so a `//` comment inside one comments out everything after it.
+  // That failed SILENTLY once already — openConversation returned "no error" and simply never
+  // clicked, on a script that touches someone's real messages — which is why it is a test.
+  //
+  // What changed: the snippets are no longer JS text built in Node. They are real named functions in
+  // extension/snippets.js (Manifest V3 refuses string evaluation outright, so the extension is handed
+  // the function itself). The constraint survives the move, because the macOS driver still stringifies
+  // and flattens those same functions. So this now asserts BOTH halves against the real objects:
+  // block comments only, AND that the production flattener really does produce one parseable line.
+  {
+    const { SNIPPETS } = (await import("../extension/snippets.js")).default;
+    const { flattenSnippet } = await import("../scripts/browser/applescript.mjs");
+
+    // A line whose first non-space characters are `//` — the shape that eats the rest of the line.
+    const lineComments = (fn) => String(fn).split("\n").filter((l) => /^\s*\/\//.test(l)).length;
+
+    const names = Object.keys(SNIPPETS);
+    check("snippets file exports snippets to check", names.length > 0, names.join(", "));
+
+    const commented = names.filter((n) => lineComments(SNIPPETS[n]) > 0);
+    check("page snippets use block comments only", commented.length === 0, commented.join(", "));
+
+    const notFlat = names.filter((n) => /[\r\n]/.test(flattenSnippet(SNIPPETS[n])));
+    check("the driver flattens every snippet to a single line", notFlat.length === 0, notFlat.join(", "));
+
+    // The flattened source is what Chrome actually parses, so parse it — a swallowed body usually
+    // shows up here as a SyntaxError even when the line-comment scan is what names the cause.
+    let parsed = "";
+    for (const n of names) {
+      try {
+        new Function("return (" + flattenSnippet(SNIPPETS[n]) + ")");
+      } catch (e) {
+        parsed = `${n}: ${String(e?.message || e).slice(0, 80)}`;
+        break;
+      }
+    }
+    check("every flattened snippet still parses", parsed === "", parsed);
+
+    // The checks must be able to FAIL, or they prove nothing. Plant a snippet with a line comment
+    // whose body is swallowed by flattening, and assert both checks catch it.
+    function planted(args) {
+      // a planted line comment
+      return JSON.stringify({ ok: !!args });
+    }
+    let plantedParses = true;
+    try {
+      new Function("return (" + flattenSnippet(planted) + ")");
+    } catch {
+      plantedParses = false;
+    }
+    check(
+      "the comment check catches a planted line comment (self-check)",
+      lineComments(planted) === 1 && !plantedParses,
+      `lineComments=${lineComments(planted)} parses=${plantedParses}`
+    );
+  }
 
   child.kill();
   await fs.rm(tmp, { recursive: true, force: true });

@@ -1,5 +1,8 @@
-# The suites run on macOS because that is the only platform JobSeeker supports, and because the
-# security suite asserts real socket binding behaviour that a Linux runner would not reproduce.
+# The suites run on macOS and Windows — the two platforms JobSeeker supports. The macOS job is the
+# regression guard it has always been; the Windows job exists because server/platform.mjs is now the
+# only OS-aware module and scripts/win/*.ps1 are twins of the bash scripts, and a twin that has
+# drifted is invisible until something runs it. The security suite asserts real socket binding
+# behaviour, which is why neither job runs on Linux.
 name: Tests
 
 on:
@@ -21,6 +24,10 @@ jobs:
       - run: npm run test:concurrency
       - run: npm run test:sweep
       - run: npm run test:security
+      # Asserts BOTH platform mappings (JOBSEEKER_FORCE_PLATFORM), so a wrong Windows mapping is
+      # caught here too rather than only on the Windows runner.
+      - run: npm run test:platform
+      - run: npm run test:bridge
       # The wizard suite builds a throwaway copy of the repo with a fake HOME and stubbed
       # launchctl/claude, because the steps it exercises write to config/ and templates/ (resolved
       # from the repo root, NOT from JOBSEEKER_DATA_DIR) and install a launch agent.
@@ -29,3 +36,142 @@ jobs:
       # osascript, caffeinate and pgrep — job-run.sh kills WhatsApp processes and writes launch
       # agents, neither of which may touch the machine running the tests.
       - run: npm run test:runstate
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Still no install step — zero dependencies is a property of the project, not of the OS.
+      - run: npm run test:concurrency
+      - run: npm run test:sweep
+      - run: npm run test:security
+      - run: npm run test:platform
+      - run: npm run test:bridge
+      # These two build a sandbox with a fake HOME *and* USERPROFILE, .cmd stubs instead of bash
+      # ones, and drive every script through platform.scriptCommand() — so on this runner they
+      # exercise scripts\win\*.ps1 rather than the bash originals. test:runstate registers a real
+      # Task Scheduler task, isolated to JobSeeker\JobRunTest and unregistered in its own cleanup.
+      - run: npm run test:welcome
+      - run: npm run test:runstate
+
+      # PowerShell 5.1 and 7 do not share a parser, and 5.1 is the only host a stock Windows 10/11
+      # is guaranteed to have — the one the installer and the scheduled task actually run under. A
+      # file that parses under pwsh can still be a syntax error there, so parse every .ps1 with both.
+      - name: PowerShell syntax — install.ps1 and scripts\win\**\*.ps1, under 5.1 and 7
+        shell: pwsh
+        run: |
+          $checker = Join-Path $env:RUNNER_TEMP "ps-parse.ps1"
+          # Single-quoted here-string: nothing in it is expanded by the shell writing the file.
+          @'
+          $ErrorActionPreference = "Stop"
+          $files = @(Get-Item -LiteralPath "install.ps1") +
+                   @(Get-ChildItem -LiteralPath "scripts\win" -Recurse -Filter "*.ps1")
+          $bad = 0
+          foreach ($f in $files) {
+            $errors = $null
+            $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              $bad++
+              foreach ($e in $errors) {
+                Write-Host ("::error file={0},line={1}::{2}" -f $f.FullName, $e.Extent.StartLineNumber, $e.Message)
+              }
+            }
+          }
+          Write-Host ("$($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion): $($files.Count) file(s) parsed, $bad with errors")
+          if ($bad -gt 0) { exit 1 }
+          '@ | Set-Content -LiteralPath $checker -Encoding utf8
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $checker
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell 5.1 could not parse one or more .ps1 files" }
+          & pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $checker
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell 7 could not parse one or more .ps1 files" }
+
+      # Encoding is load-bearing, not cosmetic. Windows PowerShell 5.1 reads a BOM-less file as ANSI,
+      # so the em dashes in the user-facing messages come out as mojibake in the setup window. And the
+      # Windows Script Host wants CRLF in .vbs. .gitattributes enforces the line endings; this checks
+      # the checkout that CI actually got, which is the thing users' installers unpack.
+      - name: Encoding — UTF-8 BOM on every .ps1, CRLF in every .vbs
+        shell: pwsh
+        run: |
+          $bad = @()
+          $ps1 = @(Get-Item -LiteralPath "install.ps1") +
+                 @(Get-ChildItem -LiteralPath "scripts\win" -Recurse -Filter "*.ps1")
+          foreach ($f in $ps1) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            if ($b.Length -lt 3 -or $b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) {
+              $bad += "missing UTF-8 BOM: $($f.FullName)"
+            }
+          }
+          # -Force so nothing hides; .git is skipped because its contents are not ours to police.
+          $vbs = Get-ChildItem -LiteralPath "." -Recurse -Force -Filter "*.vbs" |
+                 Where-Object { $_.FullName -notmatch "\\\.git\\" }
+          foreach ($f in $vbs) {
+            $t = [System.IO.File]::ReadAllText($f.FullName)
+            if ($t -match "(?<!`r)`n") { $bad += "not CRLF: $($f.FullName)" }
+          }
+          if ($bad.Count -gt 0) { $bad | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host "$($ps1.Count) .ps1 with a BOM, $($vbs.Count) .vbs in CRLF"
+
+      # install.ps1 end to end, against a local zip instead of GitHub. Two runs, because the second
+      # one is the interesting one: an update must replace code wholesale (so a file deleted upstream
+      # really goes) while leaving data\, config\ and templates\ alone — this is a job search someone
+      # may have been running for months.
+      - name: install.ps1 smoke test — fresh install, then update in place
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:RUNNER_TEMP "stage"
+          $zip = Join-Path $env:RUNNER_TEMP "src.zip"
+          $target = Join-Path $env:RUNNER_TEMP "JobSeeker"
+
+          # A source zip is what the installer downloads, so build one from the checkout. .git is
+          # left out: it is not in the real zip either, and it is large.
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Force |
+            Where-Object { $_.Name -ne ".git" } |
+            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $stage -Recurse -Force }
+          # A file that exists in the zip and belongs to no preserved directory: the update must
+          # delete it from the install once it stops being in the zip.
+          Set-Content -LiteralPath (Join-Path $stage "ci-delete-me.txt") -Value "in the first zip only"
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -Force
+
+          # JOBSEEKER_ALLOW_ELEVATED: the hosted runner's shell is an administrator one, which the
+          # installer refuses by design (an elevated install lands in the wrong profile). That
+          # refusal is not what this test is about, so it is waived here and only here.
+          $env:JOBSEEKER_URL = ([Uri](Get-Item -LiteralPath $zip).FullName).AbsoluteUri
+          $env:JOBSEEKER_HOME = $target
+          $env:JOBSEEKER_SKIP_PREREQS = "1"
+          $env:JOBSEEKER_NO_LAUNCH = "1"
+          $env:JOBSEEKER_ALLOW_ELEVATED = "1"
+
+          # Run it the way a user's machine will: Windows PowerShell 5.1, as a file, so a non-zero
+          # exit is a failed step.
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "install.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE on the first run" }
+
+          $dash = Join-Path $target "server\dashboard.mjs"
+          if (-not (Test-Path -LiteralPath $dash)) { throw "install.ps1 did not land server\dashboard.mjs in $target" }
+          $marker = Join-Path $target "ci-delete-me.txt"
+          if (-not (Test-Path -LiteralPath $marker)) { throw "the file that was in the zip is not in the install" }
+          Write-Host "fresh install ok"
+
+          # The user's own file. data\ is one of the three directories an update must not touch.
+          $seed = Join-Path $target "data\seed.md"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $seed) | Out-Null
+          Set-Content -LiteralPath $seed -Value "months of job search"
+
+          # Second zip, one file lighter.
+          Remove-Item -LiteralPath (Join-Path $stage "ci-delete-me.txt") -Force
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -Force
+
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "install.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE on the update run" }
+
+          if (-not (Test-Path -LiteralPath $seed)) { throw "the update deleted data\seed.md — data\ must be preserved" }
+          if ((Get-Content -LiteralPath $seed -Raw).Trim() -ne "months of job search") { throw "data\seed.md was overwritten by the update" }
+          if (Test-Path -LiteralPath $marker) { throw "a file removed from the zip survived the update — code is not replaced wholesale" }
+          if (-not (Test-Path -LiteralPath $dash)) { throw "the update lost server\dashboard.mjs" }
+          Write-Host "update ok: data\ preserved, deleted-upstream file gone"

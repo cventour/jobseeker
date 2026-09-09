@@ -10,16 +10,27 @@
 //   node scripts/test-welcome.mjs
 //
 // `claude` is stubbed as well: the CV step spends money, and a test must not.
+//
+// Windows: the same sandbox, with the OS-shaped bits swapped rather than skipped. The stubs are
+// `.cmd` batch files (PATHEXT makes `claude` resolve to claude.cmd), HOME *and* USERPROFILE are
+// redirected, PATH is joined with path.delimiter, and every script is invoked through
+// platform.scriptCommand() — which is imported FROM THE SANDBOX COPY, so its ROOT is the sandbox
+// and the PowerShell twin under scripts\win\ is what actually runs. The schedule the wizard
+// installs is a real Task Scheduler task, so JOBSEEKER_TASK_NAME isolates it to
+// JobSeeker\WelcomeTest and the cleanup below unregisters it.
 
 import { promises as fs } from "fs";
 import { spawn, execFile } from "child_process";
 import path from "path";
 import os from "os";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const IS_WIN = process.platform === "win32";
+// One Task Scheduler task name for the whole suite, never the real \JobSeeker\JobRun.
+const WIN_TASK = "JobSeeker\\WelcomeTest";
 const PORT = 4400 + Math.floor(Math.random() * 80);
-let sandbox, server;
+let sandbox, server, plat;
 let pass = 0, fail = 0;
 
 const ok = (name, extra = "") => { pass++; console.log(`  ok    ${name}${extra ? " — " + extra : ""}`); };
@@ -43,29 +54,61 @@ async function makeSandbox() {
   await fs.writeFile(path.join(dir, "data", "activity.md"), "# Activity\n\n| timestamp | type | detail |\n|-----------|------|--------|\n");
 
   // Stubs. launchctl must never address the real domain; claude must never be called for real.
-  await fs.writeFile(path.join(dir, "bin", "launchctl"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
-  await fs.writeFile(
-    path.join(dir, "bin", "claude"),
+  await writeStub(dir, "launchctl", "#!/bin/bash\nexit 0\n", "@echo off\r\nexit /b 0\r\n");
+  await writeStub(
+    dir,
+    "claude",
     `#!/bin/bash
 cat > data/profile.md <<'PROF'
----
-titles: Solution Architect, Pre-sales Manager
-seniority: Senior
-skills: Cybersecurity, Pre-sales
-domains: Cybersecurity
-locations: Dubai, UAE; Remote
----
-
-# Summary
-
-Stubbed parse.
+${PROFILE_LINES.join("\n")}
 PROF
 printf '{"result":"stub","total_cost_usd":0}\\n'
 `,
-    { mode: 0o755 }
+    // The batch twin writes the same profile.md, byte for byte, and echoes the same JSON.
+    // %~dp0 is bin\, so ..\data\profile.md is the sandbox's own copy whatever the cwd is.
+    ["@echo off", ...PROFILE_LINES.map((l, i) => cmdWrite("%~dp0..\\data\\profile.md", l, i === 0)),
+     'echo {"result":"stub","total_cost_usd":0}'].join("\r\n") + "\r\n"
   );
   return dir;
 }
+
+// The profile the stubbed `claude` parse writes. Shared so the bash and batch stubs cannot drift.
+const PROFILE_LINES = [
+  "---",
+  "titles: Solution Architect, Pre-sales Manager",
+  "seniority: Senior",
+  "skills: Cybersecurity, Pre-sales",
+  "domains: Cybersecurity",
+  "locations: Dubai, UAE; Remote",
+  "---",
+  "",
+  "# Summary",
+  "",
+  "Stubbed parse.",
+];
+
+// One line of a here-doc, as batch. The redirect goes FIRST so no trailing space is echoed, and an
+// empty line is `echo(` — plain `echo` with nothing after it prints the echo state instead.
+const cmdWrite = (file, line, first) =>
+  `${first ? ">" : ">>"} "${file}" echo${line === "" ? "(" : " " + line}`;
+
+// A stub executable: a bash script on macOS, a .cmd batch file on Windows (cmd is ahead of the
+// extensionless file in PATHEXT, and an extensionless file is not executable there at all).
+async function writeStub(dir, name, bash, cmd) {
+  if (IS_WIN) await fs.writeFile(path.join(dir, "bin", `${name}.cmd`), cmd);
+  else await fs.writeFile(path.join(dir, "bin", name), bash, { mode: 0o755 });
+}
+
+// HOME is what the launchd path reads; USERPROFILE is what Windows reads. Both point at the
+// sandbox so neither OS can touch the developer's real home.
+const sandboxEnv = (extra = {}) => ({
+  ...process.env,
+  HOME: path.join(sandbox, "home"),
+  USERPROFILE: path.join(sandbox, "home"),
+  PATH: `${path.join(sandbox, "bin")}${path.delimiter}${process.env.PATH}`,
+  ...(IS_WIN ? { JOBSEEKER_TASK_NAME: WIN_TASK } : {}),
+  ...extra,
+});
 
 const url = (p) => `http://127.0.0.1:${PORT}${p}`;
 
@@ -89,9 +132,11 @@ const read = (rel) => fs.readFile(path.join(sandbox, rel), "utf8").catch(() => "
 
 async function main() {
   sandbox = await makeSandbox();
-  server = spawn("node", [path.join(sandbox, "server", "dashboard.mjs")], {
+  // platform.mjs from the SANDBOX, so scriptCommand() resolves scripts inside the throwaway copy.
+  plat = await import(pathToFileURL(path.join(sandbox, "server", "platform.mjs")).href);
+  server = spawn(process.execPath, [path.join(sandbox, "server", "dashboard.mjs")], {
     cwd: sandbox,
-    env: { ...process.env, PORT: String(PORT), HOME: path.join(sandbox, "home"), PATH: `${path.join(sandbox, "bin")}:${process.env.PATH}` },
+    env: { ...sandboxEnv(), PORT: String(PORT) },
     stdio: "ignore",
   });
   for (let i = 0; i < 60; i++) {
@@ -180,11 +225,11 @@ async function main() {
   check(/ignored_chats: Family, Football/.test(cfg), "the never-log list is saved");
 
   // --- a schedule that could never fire is refused ---
-  const showSched = () =>
-    run("bash", [path.join(sandbox, "scripts", "set-schedule.sh"), "--show"], {
-      cwd: sandbox,
-      env: { ...process.env, HOME: path.join(sandbox, "home"), PATH: `${path.join(sandbox, "bin")}:${process.env.PATH}` },
-    }).then((x) => x.trim());
+  // set-schedule.sh on macOS, scripts\win\set-schedule.ps1 on Windows — same command, same output.
+  const showSched = () => {
+    const c = plat.scriptCommand("set-schedule", ["--show"]);
+    return run(c.cmd, c.args, { cwd: sandbox, env: sandboxEnv() }).then((x) => x.trim());
+  };
 
   let r = await post("/welcome-step", { step: "finish", action: "next", cadence: "custom", time: "07:30" });
   check(decodeURIComponent(r.location).includes("Pick at least one day"), "a schedule with no days is refused");
@@ -277,10 +322,60 @@ async function main() {
     "---\nsource_cv: templates/cv/old.pdf\ntitles: Pre-sales Engineer\nseniority: Mid\ndomains: Networking\n---\n\n# Summary\n\nOld.\n");
   await fs.writeFile(path.join(sandbox, "templates", "cv", "old.pdf"), "%PDF-1.4\n");
   await fetch(url("/welcome-parse"), { method: "POST", headers: { origin: `http://127.0.0.1:${PORT}` } });
-  await new Promise((r) => setTimeout(r, 2500));
-  const changed = await get("/setup-step?step=cv&back=settings");
+  // Poll rather than sleep a fixed span. The parse is detached, and starting PowerShell costs far
+  // more than starting bash -- a 2.5s wait passed on macOS and expired on Windows before the twin
+  // had written profile.md. The assertion below is unchanged: if the re-read never lands, the last
+  // body polled still has no "What changed" and the check fails as it always would.
+  let changed = await get("/setup-step?step=cv&back=settings");
+  for (let i = 0; i < 60 && !changed.body.includes("What changed"); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    changed = await get("/setup-step?step=cv&back=settings");
+  }
+  // When this fails there is nothing on screen to explain why, and the work happened in a detached
+  // process on another machine. Say what the parse itself reported.
+  let why = "";
+  if (!changed.body.includes("What changed")) {
+    for (const f of [".cv-parse.status.json", ".cv-parse.log"]) {
+      try {
+        why += ` | ${f}: ${(await fs.readFile(path.join(sandbox, "data", f), "utf8")).trim().replace(/\s+/g, " ").slice(0, 400)}`;
+      } catch {
+        why += ` | ${f}: absent`;
+      }
+    }
+    // Nothing written at all means the script never started, which the detached spawn cannot
+    // report. Run the same command in the foreground and quote whatever it says.
+    try {
+      const c = plat.scriptCommand("parse-cv");
+      const scriptPath = c.args[c.args.length - (c.cmd === "bash" ? 1 : 1)];
+      const present = await fs.access(c.args.find((a) => /\.(sh|ps1)$/.test(a)) || scriptPath)
+        .then(() => "present").catch(() => "MISSING");
+      const out = await new Promise((res) =>
+        execFile(c.cmd, c.args, { cwd: sandbox, timeout: 60_000, env: sandboxEnv() }, (e, so, se) =>
+          res(`exit ${e ? e.code : 0}; stderr=${JSON.stringify(String(se || "").trim().slice(0, 300))}; stdout=${JSON.stringify(String(so || "").trim().slice(0, 300))}`)
+        )
+      );
+      // Decisive split: if this probe also comes back silent with exit 0, the host itself is not
+      // running anything and the script is innocent.
+      const sp = c.args.find((a) => /\.ps1$/.test(a)) || scriptPath;
+      const probe = await new Promise((res) =>
+        execFile(c.cmd, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+          `$ErrorActionPreference='Continue'; ` +
+          `$r = (Resolve-Path (Join-Path (Split-Path '${sp}') '..\\..')).Path; ` +
+          `Write-Output ('repo=' + $r); ` +
+          `Write-Output ('pdfs=' + ((Get-ChildItem (Join-Path $r 'templates\\cv\\*.pdf') -File -ErrorAction SilentlyContinue).Count)); ` +
+          `& '${sp}'; Write-Output ('rc=' + $LASTEXITCODE); ` +
+          `Write-Output ('status_at_repo=' + (Test-Path (Join-Path $r 'data\\.cv-parse.status.json'))); ` +
+          `$Error | ForEach-Object { Write-Output ('ERR: ' + $_.ToString()) }`],
+          { cwd: sandbox, timeout: 60_000, env: sandboxEnv() },
+          (e, so, se) => res(`exit ${e ? e.code : 0}; out=${JSON.stringify(String(so || "").trim().slice(0, 600))}; err=${JSON.stringify(String(se || "").trim().slice(0, 400))}`))
+      );
+      why += ` | cmd=${c.cmd} script=${present} | ${out.replace(/\s+/g, " ")} | invoked with -Command: ${probe}`;
+    } catch (e) {
+      why += ` | could not run it directly: ${e.message}`;
+    }
+  }
   check(changed.body.includes("What changed") && changed.body.includes("Pre-sales Engineer"),
-    "a re-read shows the old values beside the new ones");
+    "a re-read shows the old values beside the new ones", why);
   check(changed.body.includes("keep the score they were given") || changed.body.includes("only future hunts"),
     "…and says what a re-read does not change");
   await post("/welcome-step", { step: "cv", action: "next", return: "standalone", back: "settings" });
@@ -297,6 +392,12 @@ try {
   fail++;
 } finally {
   server?.kill();
+  // The wizard's last act installs a schedule. On macOS that is a plist inside the sandbox HOME and
+  // goes with the directory; on Windows it is a real Task Scheduler task, which has to be removed.
+  if (IS_WIN && sandbox && plat) {
+    const c = plat.scriptCommand("set-schedule", ["--remove"]);
+    await run(c.cmd, c.args, { cwd: sandbox, env: sandboxEnv() }).catch(() => {});
+  }
   if (sandbox) await fs.rm(sandbox, { recursive: true, force: true });
   process.exit(fail ? 1 : 0);
 }

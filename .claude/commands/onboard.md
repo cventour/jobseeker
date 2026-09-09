@@ -76,8 +76,9 @@ preserving the rest: `approval_channels`, `whatsapp_owner_jid`, `apply_stop_befo
 `linkedin_enabled`.
 
 **Do NOT write a `schedule_job_run` key.** It used to exist and nothing read it — the real
-schedule lives in the launchd plist. Set the time with `scripts/set-schedule.sh HH:MM`, or point me
-at the dashboard's Setup page, which does the same thing.
+schedule lives in the OS scheduler — the launchd plist on macOS, the `\JobSeeker\JobRun` task on
+Windows. Set the time with `npm run schedule -- HH:MM`, or point me at the dashboard's Setup page,
+which does the same thing.
 
 **`templates/answers.md`** (overwrite; this file is gitignored):
 ```

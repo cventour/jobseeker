@@ -125,7 +125,7 @@ ${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
   </section>
 </main>
 <footer class="foot">
-  <p>JobSeeker runs on your own Mac. <a href="privacy.html">Privacy</a> ·
+  <p>JobSeeker runs on your own computer. <a href="privacy.html">Privacy</a> ·
     <a href="https://github.com/cventour/jobseeker">Source</a></p>
 </footer>
 <script src="reveal.js"></script>
@@ -144,7 +144,13 @@ ${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
     process.exit(1);
   }
   // Exactly what goes in the GitHub release body.
-  process.stdout.write(`${r.body}\n\n---\n\nInstall or upgrade — paste this into Terminal:\n\n\`\`\`\ncurl -fsSL https://myjobseeker.ai/install.sh | bash\n\`\`\`\n\nIt builds JobSeeker.app on your Mac, so there is no security warning to click through. Your existing data and settings are untouched.\n`);
+  process.stdout.write(
+    `${r.body}\n\n---\n\n` +
+      `**Windows** — paste this into PowerShell:\n\n\`\`\`\nirm https://myjobseeker.ai/install.ps1 | iex\n\`\`\`\n\n` +
+      `**macOS** — paste this into Terminal:\n\n\`\`\`\ncurl -fsSL https://myjobseeker.ai/install.sh | bash\n\`\`\`\n\n` +
+      `Neither is a browser download, so there is no SmartScreen or Gatekeeper warning to click ` +
+      `through. Re-running either upgrades in place; your existing data and settings are untouched.\n`
+  );
 }
 
 main().catch((e) => {

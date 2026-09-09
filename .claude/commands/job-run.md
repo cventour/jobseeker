@@ -209,13 +209,20 @@ Rules for the content:
 - **Escalate it into Highlights when it has persisted.** If `browser_debt.worst_days` is 2 or more,
   or `any_never_swept` is true, the browser problem is one of the most important things in the run
   and belongs at the top, not buried under Coverage.
-- **Never propose enabling Chrome remote debugging, and never call Apple Events a fallback.**
-  `cdp: down` is the intended state (AGENT-RULES §13). A run that reports it as a defect, or suggests
+- **Never propose enabling Chrome remote debugging, and never call the designed transport a
+  fallback.** That transport is Apple Events on macOS and the Bridge extension on Windows, and
+  `cdp: down` is the intended state on both (AGENT-RULES §13). A run that reports it as a defect, or suggests
   restarting Chrome to "restore the faster path", is recommending the one action that would show a
   WhatsApp QR code and lose the linked device.
-- **Report a permission problem as a permission problem.** `apple_events: "denied"` or
-  `"prompt-pending"` means a macOS Automation grant needs a click; say exactly that and name
+- **Report a permission problem as a permission problem.** On macOS, `apple_events: "denied"` or
+  `"prompt-pending"` means an Automation grant needs a click; say exactly that and name
   System Settings > Privacy & Security > Automation. Do not describe it as "Chrome not working".
+  On Windows there is no such grant and `apple_events` reads `not-applicable`; the equivalent
+  blocker is the Bridge extension being unpaired or not connected —
+  `Load the JobSeeker Bridge extension and connect it from Settings ▸ Browser`, or
+  `JobSeeker Bridge extension is not connected`. The fix is in the dashboard, at
+  **Settings ▸ Browser ▸ Connect**, and the extension's own options page takes the code. Say that,
+  and name it as a setup step rather than a failure.
 - **Never assert browser state from context — read `data/.browser-status.json`.** You do not know
   whether this run has a browser; the file does, because it measured. The assumption "interactive
   means Chrome is available" is empirically false (a 1 Aug interactive run reported no Chrome), and
@@ -242,7 +249,9 @@ holding. Three scheduled runs in a row printed their digest into a log nobody re
    If the tool is not available, do **not** treat that as "no digest today" — record
    `not-delivered: whatsapp MCP tool unavailable this session` on the delivery line.
 3. **Never leave delivery failure buried in prose.** The status file and the log must both say it, so
-   `scripts/job-run.sh` can raise a macOS notification and `audit.mjs` can report it next run.
+   the run entrypoint can raise a desktop notification — a macOS notification from
+   `scripts/job-run.sh`, a Windows toast from `scripts/win/job-run.ps1` — and `audit.mjs` can report
+   it next run.
 
 Do NOT try to send the digest by email: the Gmail connector can create drafts but has **no send
 tool**, so an "emailed digest" would sit unsent in Drafts. Verified, not assumed.
@@ -270,7 +279,8 @@ tool**, so an "emailed digest" would sit unsent in Drafts. Verified, not assumed
 
 - **Do NOT apply** to anything (no application-agent here) and **do NOT send** follow-ups. Applying
   is `/apply` and sending is `/followup`, both with my approval, done when I'm present.
-- **Stay inside the 3-agent cap.** Scheduled runs are guarded by `scripts/rss-guard.sh`, which
+- **Stay inside the 3-agent cap.** Scheduled runs are guarded by `scripts/rss-guard.sh` (and its
+  Windows twin `scripts/win/rss-guard.ps1`), which
   kills any process over 4 GB and aborts the run past 12 GB — but the cap is what keeps you from
   getting there. If the log shows `[rss-guard] KILL`, say so in the digest: an agent was killed and
   its coverage is missing.

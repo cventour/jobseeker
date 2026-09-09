@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Run one of the job-search commands right now, from the dashboard's "Run now" buttons.
+# Windows twin: scripts/win/run-now.ps1 — change both together.
 #
 #   bash scripts/run-now.sh track
 #

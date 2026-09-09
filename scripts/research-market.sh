@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Research one market: find and rank vendors for it, filling data/markets/<slug>.md.
+# Windows twin: scripts/win/research-market.ps1 — change both together.
 #
 #   bash scripts/research-market.sh "Healthtech"
 #

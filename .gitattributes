@@ -1,0 +1,20 @@
+# Line endings. The data layer, the bash scripts and every Markdown file are written and parsed
+# with LF; a Windows checkout must not turn them into CRLF. Windows-native script types are the
+# one exception: cmd.exe and the Windows Script Host expect CRLF.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.vbs text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary

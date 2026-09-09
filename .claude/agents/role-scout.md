@@ -77,10 +77,13 @@ You are **role-scout**. You turn the prioritized company lists into concrete, ra
   an answer for, and do not re-investigate a `none` company** — that is the single biggest waste of a
   scouting run. See AGENT-RULES §14.
 - **`blocked` and `browser` are a WORK QUEUE, not a write-off.** An HTTP 401/402/403/429/5xx or a TLS
-  failure proves a board is there and refusing your script. **Use the Apple Events browser, not the
+  failure proves a board is there and refusing your script. **Use `browser-do.mjs`, not the
   Chrome MCP tools** — `mcp__claude-in-chrome__*` exists only in an interactive session and is absent
   from the scheduled `claude -p` run, which is why this queue went 45 boards deep without ever being
-  worked. The mechanism that works in both:
+  worked. `browser-do.mjs` reads the user's own Chrome over Apple Events on macOS and over the
+  JobSeeker Bridge extension on Windows; on Windows a careers page also needs the extension's
+  optional "Also let it read careers pages" permission, and the read fails with a message saying so
+  if it is missing. The mechanism that works in both:
 
   ```bash
   node scripts/browser-do.mjs read-url https://careers.example.com/jobs   # one page

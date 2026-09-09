@@ -3,9 +3,12 @@
 <meta charset="utf-8">
 <title>JobSeeker Setup</title>
 <!--
-  The setup window's UI. Rendered inside a WKWebView owned by JobSeeker.app.
+  The setup window's UI. Rendered inside a WKWebView owned by JobSeeker.app on macOS, and inside an
+  Edge app window served by installer/win/setup-server.mjs on Windows. ONE page, two hosts: the
+  state object and the command envelope are identical, and only the transport differs (see send()
+  and the EventSource at the bottom). Anything changed here must keep working on both.
 
-  The bridge, in both directions:
+  The bridge, in both directions -- the macOS half, which is the one with the sharp edges:
 
   * app -> page : the app calls __render(state) directly, via evaluateJavaScript. Nothing is
     fetched from here -- this is a file:// page, where XHR and fetch to a sibling file are blocked
@@ -53,10 +56,12 @@ body{margin:0;background:var(--bg);color:var(--fg);
 main{flex:1;overflow-y:auto;padding:26px 34px 22px;display:flex;flex-direction:column}
 main>*{flex:none}
 main>#welcome{flex:1}
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-.mark{width:24px;height:24px;flex:none;display:block}
-.brand b{font-size:14px;letter-spacing:-.01em}
-.brand span{color:var(--mut);font-size:12.5px}
+/* The mark is the app's face, and on every screen after the welcome it was a 24px afterthought
+   beside its own name. Three times the size, with the wordmark grown to sit against it. */
+.brand{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+.mark{width:72px;height:72px;flex:none;display:block;border-radius:16px}
+.brand b{font-size:20px;letter-spacing:-.015em}
+.brand span{color:var(--mut);font-size:13px}
 /* Same shell as the dashboard's .gearlink -- 8px radius, 1px --line border, 13px accent -- so the
    two windows share one control. margin-left:auto parks it opposite the wordmark; the traffic
    lights are top-LEFT, so the top-right corner is free. */
@@ -69,14 +74,111 @@ main>#welcome{flex:1}
 h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .sub{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 18px;max-width:56ch}
 
+/* ---- the pairing code, pinned to the top of the instructions ----
+   A number you have to retype into a different program must not scroll away while you are reading
+   how to use it. The instructions box is what scrolls, so the code is a sticky header inside it:
+   still there at step five, whatever the pictures have pushed off screen. Negative margins and the
+   box's own padding put its background edge to edge. */
+.pinbar{position:sticky;top:-22px;z-index:2;display:flex;align-items:center;gap:14px;
+  margin:-22px -24px 12px;padding:12px 24px;background:var(--card);
+  border-bottom:1px solid var(--acc)}
+.pinbar-lab{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);
+  flex:none}
+.pin{display:inline-flex;align-items:center;gap:14px;padding:7px 16px;border-radius:10px;
+  border:1px solid var(--acc);background:var(--bg);color:var(--fg);font:inherit;cursor:default;
+  flex:none}
+.pin:hover{background:var(--line)}
+.pin:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+/* letter-spacing pads the right of the last glyph too, so the same amount is added on the left
+   to keep the digits optically centred in their box. */
+.pin b{font:700 27px/1 ui-monospace,Menlo,monospace;letter-spacing:.32em;padding-left:.32em}
+.pin i{font-style:normal;font-size:12px;color:var(--acc);white-space:nowrap}
+
+
+/* ---- a modal that turns pages ----
+   Connecting WhatsApp is three short screens, not one long instruction. Each replaces the last,
+   sliding in from the right so it is obvious that this is a step forward and not a redraw; Back
+   sends the next one in from the left, for the same reason in reverse. The window is small and the
+   pages are short, so nothing here scrolls. */
+.modal-stage{overflow:hidden}
+.pane{font-size:14px;line-height:1.6;color:var(--mut)}
+.pane p{margin:0 0 10px}
+.pane ol{margin:0 0 4px;padding-left:22px;line-height:1.7}
+.pane ol li{margin-bottom:7px}
+.pane label{display:block;margin:2px 0 6px;font-size:13px;color:var(--fg);font-weight:600}
+.pane input{width:100%;padding:11px 13px;border-radius:9px;border:1px solid var(--line);
+  background:var(--card);color:var(--fg);font:inherit;font-size:17px;letter-spacing:.02em;
+  -webkit-user-select:text;user-select:text}
+.pane input:focus{outline:2px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
+.pane .hint{font-size:12.5px;margin-top:8px}
+.pane .bad{color:var(--bad)}
+.pane .good{color:var(--good)}
+@keyframes paneFromRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
+@keyframes paneFromLeft{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:none}}
+.pane.fwd{animation:paneFromRight .26s cubic-bezier(.22,.61,.36,1) both}
+.pane.back{animation:paneFromLeft .26s cubic-bezier(.22,.61,.36,1) both}
+@media (prefers-reduced-motion: reduce){.pane.fwd,.pane.back{animation:none}}
+/* The code, on the page that shows it: the same treatment as the bar at the top, because it is the
+   same kind of thing -- a number to be typed into something that is not this window. */
+.panecode{display:flex;align-items:center;justify-content:center;gap:14px;margin:4px 0 12px;
+  padding:14px;border:1px solid var(--acc);border-radius:12px;background:var(--card)}
+.panecode b{font:700 30px/1 ui-monospace,Menlo,monospace;letter-spacing:.22em;padding-left:.22em;
+  color:var(--fg)}
+/* A phone number is read, not typed into another program, so it does not want a code's spacing. */
+.pane .panecode b.num{font-size:24px;letter-spacing:.02em;padding-left:0}
+.panecode i{font-style:normal;font-size:12px;color:var(--acc)}
+.panewait{display:flex;align-items:center;gap:10px;justify-content:center;padding:20px 0}
+
+/* ---- the same code, on the row it belongs to ---- */
+.rowpin{display:inline-flex;align-items:center;gap:10px;padding:3px 10px;margin-right:8px;
+  border:1px solid var(--acc);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;
+  cursor:default;vertical-align:middle}
+.rowpin:hover{background:var(--line)}
+.rowpin:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.rowpin b{font:700 17px/1 ui-monospace,Menlo,monospace;letter-spacing:.22em;padding-left:.22em}
+.rowpin i{font-style:normal;font-size:11.5px;color:var(--acc)}
+
+/* ---- the "here is where it went" modal ---- */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;
+  justify-content:center;z-index:50;padding:24px}
+.modal-box{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:22px 24px;
+  max-width:520px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.25)}
+.modal-box h2{margin:0 0 8px;font-size:19px;font-weight:600}
+.modal-box p{margin:0 0 10px;font-size:14px;line-height:1.6;color:var(--mut)}
+.modal-path code{display:block;word-break:break-all;background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--fg)}
+.modal-foot{display:flex;justify-content:flex-end;margin-top:14px}
+/* The closing modal darkens and blurs what is behind it. The other modal in this window interrupts
+   a step you are in the middle of, so the screen behind it stays legible on purpose; this one ends
+   setup, and there is nothing behind it left to read. Blur is progressive -- a browser without
+   backdrop-filter gets the darker scrim alone, which is the whole effect minus the polish. */
+.modal-blur{background:rgba(0,0,0,.55)}
+@supports (backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px)) {
+  .modal-blur{background:rgba(0,0,0,.42);
+    -webkit-backdrop-filter:blur(7px) saturate(.9);backdrop-filter:blur(7px) saturate(.9)}
+}
+.modal-box{max-height:86vh;overflow:auto}
+#modal-steps{margin:0 0 12px;padding-left:22px;font-size:14px;line-height:1.7}
+#modal-steps li{margin-bottom:7px}
+.modal-inline-path{display:block;margin-top:4px;background:var(--card);border:1px solid var(--line);
+  border-radius:6px;padding:6px 8px;font-size:12.5px;word-break:break-all}
+#modal-figs img{display:block;width:100%;margin-top:10px;border:1px solid var(--line);border-radius:8px}
+
 /* ---- the welcome (the very first thing anyone sees) ---- */
 /* Centred in the window, and deliberately almost empty: this screen exists to say where you are
    and give you one thing to press. The detail belongs on the next screen, where it is actionable. */
 .wel{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
   text-align:center;gap:2px;padding-bottom:28px}
-.wel img{width:152px;height:152px;display:block;margin-bottom:26px}
+/* Deliberately large: this is the first thing anyone sees, and at 152px it read as a favicon
+   stranded in the middle of an empty page. Capped against the viewport so a short window does not
+   push the heading off the bottom. */
+.wel img{width:min(380px,44vh);height:auto;display:block;margin-bottom:30px}
 .wel h1{font-size:30px;line-height:1.2;letter-spacing:-.02em;margin:0 0 12px;font-weight:600}
 .wel p{margin:0;font-size:16px;line-height:1.65;color:var(--mut);max-width:46ch}
+/* Get started belongs to the sentence that invites it, not to the strip at the foot of the window
+   twenty lines away. Quit stays down there: leaving is always available and never the offer. */
+#wel-acts{margin-top:26px}
+#wel-acts button{font-size:15px;padding:11px 22px}
 
 /* ---- WhatsApp ---- */
 .wa h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
@@ -197,7 +299,46 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     <img src="logo-128.png" alt="">
     <h1>Welcome to JobSeeker</h1>
     <p>This wizard will walk you through installing JobSeeker on your device and connecting it
-      to your cloud. Click <b>Get started</b> to begin.</p>
+      to your cloud.</p>
+    <span class="acts" id="wel-acts"></span>
+  </div>
+
+  <!-- Only ever used to report where something was written. Kept deliberately dumb: one message,
+       one button, no state of its own. -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-box">
+      <div class="pinbar" id="pinbar" hidden>
+        <span class="pinbar-lab">Pairing code</span>
+        <button class="pin" id="pin" type="button" aria-label="Copy the pairing code">
+          <b id="pin-digits">------</b><i id="pin-copy">Copy</i>
+        </button>
+      </div>
+      <h2 id="modal-title"></h2>
+      <div id="modal-stage" hidden></div>
+      <p id="modal-body"></p>
+      <ol id="modal-steps" hidden></ol>
+      <div id="modal-figs" hidden></div>
+      <p class="modal-path"><code id="modal-path"></code></p>
+      <div class="modal-foot" id="modal-foot"></div>
+    </div>
+  </div>
+
+  <!-- Only on the closing screen. The shortcuts were made while nobody was watching, so this is
+       the one moment anyone is told how to open JobSeeker again tomorrow -- which is why it is a
+       modal now rather than a card further down a screen nobody scrolls: setup ends here, and the
+       last thing it says should be the only thing on the glass. Deliberately outside <main>: it is
+       position:fixed, and any transformed ancestor would silently make it position:absolute. -->
+  <div class="modal modal-blur" id="whereitlives" hidden
+       role="dialog" aria-modal="true" aria-labelledby="wil-title">
+    <div class="modal-box">
+      <h2 id="wil-title">JobSeeker is deployed</h2>
+      <p>You can find it in your <b>Start Menu</b>, and there is a <b>JobSeeker</b> shortcut on your
+        Desktop. Either one opens this same window. Quit JobSeeker from the Start Menu folder when
+        you want it closed.</p>
+      <div class="modal-foot">
+        <button class="primary" id="wil-go" type="button">Take me to the JobSeeker dashboard</button>
+      </div>
+    </div>
   </div>
 
   <div class="wa" id="whatsapp" hidden>
@@ -219,7 +360,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 
     <div id="wa-known" class="waknown" hidden>
       <b id="wa-known-num">connected</b>
-      <span>Already linked to this Mac. Nothing to do — the digest will reach this number.</span>
+      <span>Already linked to this computer. Nothing to do — the digest will reach this number.</span>
     </div>
 
     <div id="wa-pair" hidden>
@@ -259,11 +400,353 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 "use strict";
 
 // ---- outbound: the only way this page talks to the app ------------------------------------
+// Two hosts, one page, one envelope. On the Mac this is a file:// page inside a WKWebView and the
+// only channel is location.hash, which the app polls. On Windows the same page is served over
+// http:// by installer/win/setup-server.mjs, where a POST is available and a fragment poll is not
+// -- so the protocol is identical and only the pipe differs.
+var es = null;
+var HOSTED = location.protocol === "http:" || location.protocol === "https:";
 var seq = 0;
 function send(cmd, id, val) {
   seq++;
-  location.hash = "#" + encodeURIComponent(
-    JSON.stringify({ n: seq, cmd: cmd, id: id || "", v: val || "" }));
+  var msg = { n: seq, cmd: cmd, id: id || "", v: val || "" };
+  if (HOSTED) {
+    try {
+      // Quit is followed immediately by closing the window, and a closing window may abandon an
+      // XHR in flight -- leaving the server running with nobody to talk to, and the next install
+      // told JobSeeker is already up. A beacon is the one request the browser promises to finish.
+      if (cmd === "quit" && navigator.sendBeacon) {
+        navigator.sendBeacon("/cmd", new Blob([JSON.stringify(msg)], { type: "application/json" }));
+        return;
+      }
+      var x = new XMLHttpRequest();
+      x.open("POST", "/cmd", true);
+      x.setRequestHeader("Content-Type", "application/json");
+      x.send(JSON.stringify(msg));
+    } catch (e) { /* the server has gone; the window is on its way out anyway */ }
+    return;
+  }
+  location.hash = "#" + encodeURIComponent(JSON.stringify(msg));
+}
+
+// The last thing this page ever does. Quit shuts the setup server down, so once it is sent there is
+// nothing behind this page: no events, no replies. Close the window; if the browser will not let a
+// page close itself, say plainly that setup is over rather than leaving a live-looking page.
+function farewell() {
+  setTimeout(function () {
+    try { window.close(); } catch (e) { /* not permitted here */ }
+    setTimeout(function () {
+      try {
+        if (es) { es.close(); }
+      } catch (e) { /* already gone */ }
+      document.body.setAttribute("data-view", "bye");
+      document.body.innerHTML =
+        '<div class="wel"><h1>JobSeeker setup closed</h1>' +
+        "<p>You can close this window. JobSeeker itself is unaffected \u2014 open it any time from the " +
+        "Start Menu.</p></div>";
+    }, 400);
+  }, 120);
+}
+
+// ---- the pairing code ----------------------------------------------------------------------
+// Six digits that have to be typed into a different program. Clicking either copy of it puts it on
+// the clipboard and says so on the button itself, because a copy that gives no sign it happened is
+// a copy the user does not trust and types by hand anyway.
+function copyCode(code, badge, done) {
+  var said = false;
+  function ok() {
+    if (said) return;
+    said = true;
+    var was = badge.textContent;
+    badge.textContent = done || "Copied";
+    setTimeout(function () { badge.textContent = was; }, 1600);
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(ok, fallback);
+      return;
+    }
+  } catch (e) { /* fall through */ }
+  fallback();
+  // execCommand is deprecated and still the only thing that works when the page is not a secure
+  // context -- which is exactly what a file:// setup window is.
+  function fallback() {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = code;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      ok();
+    } catch (e) { /* nothing left to try; the digits are on screen either way */ }
+  }
+}
+
+var pinBar = document.getElementById("pinbar");
+var pinDigits = document.getElementById("pin-digits");
+var pinCopy = document.getElementById("pin-copy");
+var pinCode = "";
+document.getElementById("pin").onclick = function () { copyCode(pinCode, pinCopy); };
+
+function renderPin(st) {
+  // Only the extension's code, and only above the extension's instructions. WhatsApp mints one
+  // that looks just like it and shows it on the page it belongs to; two codes at once, alike and
+  // unlabelled, is how the wrong one gets typed.
+  var m = st.modal;
+  // Never on the "already connected" page: a code there is an invitation to type something that
+  // does not need typing.
+  var show = !!st.code && st.codeFor === "extension" && !!m && m.help === "extension" && !m.connected;
+  pinCode = show ? st.code : "";
+  if (show && pinDigits.textContent !== st.code) pinDigits.textContent = st.code;
+  pinBar.hidden = !show;
+}
+
+// Esc closes whatever the modal is showing. It is what Esc does everywhere else, and this window
+// has no other way out of a page of instructions than finding the button at the foot of it.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  // The closing modal is drawn by this page rather than by the host, so it is dismissed here. It
+  // sits above the other one, so it answers Esc first. What is underneath is the finished screen,
+  // whose footer offers the same button -- Esc gets you a look at it, not out of setup.
+  var wil = document.getElementById("whereitlives");
+  if (wil && !wil.hidden) { e.preventDefault(); wil.hidden = true; return; }
+  var mod = document.getElementById("modal");
+  if (!mod || mod.hidden) return;
+  e.preventDefault();
+  send("dismiss-modal");
+});
+
+// Not a click on the backdrop: this is the last thing setup says, and dismissing it by missing the
+// button would be an accident every time. Esc is deliberate; a stray click is not.
+document.addEventListener("click", function (e) {
+  if (e.target && e.target.id === "wil-go") { send("open"); }
+});
+
+// ---- the modal's pages ---------------------------------------------------------------------
+// An ordinary modal has one page and a Close button. The WhatsApp one has several, and each needs
+// its own buttons, so the foot is built from the page rather than written into the markup.
+var ORDER = ["linked", "intro", "number", "code", "done", "fail"];
+var waPage = "";        // the page currently drawn, so a redraw does not re-animate or wipe typing
+var waNumber = "";      // kept across redraws: a push while someone is typing must not eat it
+// The code, once seen, is remembered here until the window is closed.
+//
+// It used to be read straight from st.code, which the server clears the moment the step ends -- so
+// the one number the user had to copy onto a phone appeared and then vanished, with no way to get
+// it back. Whatever ends that step, the page keeps showing what it showed.
+var waCode = "";
+var waOutcome = "";     // "" while waiting, then "ok" or "fail" -- drawn under the code, not over it
+var waTest = "";        // "" | "sending" | "sent" | "failed" -- the test message's own line
+
+function paneEl(cls) { return el("div", "pane " + cls); }
+
+// WhatsApp's own screen shows the code as two groups of four, so this shows it the same way. The
+// plugin emits it either with the hyphen or without; a code copied off a screen in one grouping and
+// typed into a phone expecting another is a mistake nobody should have to make.
+function formatWaCode(c) {
+  var raw = String(c || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (raw.length === 8) return raw.slice(0, 4) + "-" + raw.slice(4);
+  return String(c || "");
+}
+
+function buildWaPane(st, page, dir) {
+  var m = st.modal;
+  var pane = paneEl(dir);
+  if (page === "intro") {
+    pane.appendChild(el("p", null, m.body || ""));
+    var ol = document.createElement("ol");
+    (m.steps || []).forEach(function (t) { ol.appendChild(el("li", null, t)); });
+    pane.appendChild(ol);
+  } else if (page === "number") {
+    var lab = el("label", null, "Your WhatsApp number");
+    lab.setAttribute("for", "wanum2");
+    pane.appendChild(lab);
+    var inp = document.createElement("input");
+    inp.id = "wanum2";
+    inp.type = "text";
+    inp.inputMode = "numeric";
+    inp.placeholder = "971551234567";
+    inp.spellcheck = false;
+    inp.value = waNumber;
+    inp.oninput = function () { waNumber = inp.value; };
+    // Enter is what anyone types after a phone number.
+    inp.onkeydown = function (e) { if (e.key === "Enter") waSend(); };
+    pane.appendChild(inp);
+    pane.appendChild(el("p", "hint", "Country code first, digits only \u2014 no plus sign, no spaces."));
+    if (m.err) pane.appendChild(el("p", "hint bad", m.err));
+    setTimeout(function () { try { inp.focus(); } catch (e) { /* not visible yet */ } }, 30);
+  } else if (page === "code") {
+    // st.code alone is not enough. The extension step can still be waiting -- for fifteen minutes,
+    // by design -- and its six digits would sit here under a heading about a phone. Only a code
+    // this step minted is this step's code, and once seen it is kept.
+    if (st.code && st.codeFor === "whatsapp") { waCode = st.code; }
+    var mine = waCode;
+    if (mine) {
+      var box = el("div", "panecode");
+      box.appendChild(el("b", null, formatWaCode(mine)));
+      pane.appendChild(box);
+      pane.appendChild(el("p", null,
+        "On the phone: WhatsApp \u25b8 Settings \u25b8 Linked Devices \u25b8 Link a Device \u25b8 " +
+        "Link with phone number instead \u2014 then type this code."));
+      // The outcome is added UNDER the code, never in place of it. A screen showing a number
+      // somebody is copying onto a phone is not a screen to replace.
+      if (m.outcome === "ok") {
+        pane.appendChild(el("p", "good", "Connected. The morning digest will reach that number."));
+        addTestLine(pane, m);
+      } else if (m.outcome === "fail") {
+        pane.appendChild(el("p", "bad", m.err || "It did not connect."));
+        pane.appendChild(el("p", "hint", "Try again issues a new code."));
+      } else {
+        pane.appendChild(el("p", "hint", "It expires in a couple of minutes. This window notices by "
+          + "itself when the phone answers, and says so here."));
+      }
+    } else {
+      var w = el("div", "panewait");
+      w.appendChild(el("span", "spin"));
+      w.appendChild(document.createTextNode(st.say || "Asking WhatsApp for a code\u2026"));
+      pane.appendChild(w);
+    }
+  } else if (page === "linked") {
+    // The number, said plainly, and the one thing worth offering: proof it works.
+    var num = String(m.body || "").replace(/^connected as\s*/i, "");
+    var box = el("div", "panecode");
+    var nb = el("b", "num", num || "connected");
+    box.appendChild(nb);
+    pane.appendChild(box);
+    pane.appendChild(el("p", null,
+      "This computer is already linked to that number, and the morning digest will reach it. " +
+      "Nothing needs doing \u2014 but you can send yourself a message to be sure."));
+    addTestLine(pane, m);
+    pane.appendChild(el("p", "hint",
+      "To link a different number, unlink this one on your phone first: WhatsApp \u25b8 Settings " +
+      "\u25b8 Linked Devices."));
+  } else if (page === "done") {
+    pane.appendChild(el("p", null, "Connected. The morning digest will reach that number."));
+    addTestLine(pane, m);
+  } else if (page === "fail") {
+    pane.appendChild(el("p", null, m.err || "It did not connect."));
+    if (waCode) {
+      // The code that was issued, still on screen. It is almost certainly expired by the time this
+      // page shows -- but a user who was mid-way through typing it deserves to see what they were
+      // typing, rather than a blank where the number was.
+      var was = el("div", "panecode");
+      was.appendChild(el("b", null, formatWaCode(waCode)));
+      pane.appendChild(was);
+      pane.appendChild(el("p", "hint", "That was the code. It expires after a couple of minutes, so "
+        + "Try again will issue a new one."));
+    }
+    pane.appendChild(el("p", "hint", "Nothing was changed. You can try again, or set this up later "
+      + "from the dashboard."));
+  }
+  return pane;
+}
+
+// What became of the test message, if one was asked for. Nothing at all until it is.
+function addTestLine(pane, m) {
+  if (!m.test) return;
+  if (m.test === "sending") {
+    var w = el("p", "hint");
+    w.appendChild(el("span", "spin"));
+    w.appendChild(document.createTextNode("Sending a test message\u2026"));
+    pane.appendChild(w);
+  } else if (m.test === "sent") {
+    pane.appendChild(el("p", "good", "Test message sent \u2014 check your phone."));
+  } else {
+    pane.appendChild(el("p", "bad", m.testErr || "The test message did not go."));
+  }
+}
+
+function waSend() {
+  var v = (waNumber || "").replace(/[^0-9]/g, "");
+  var inp = document.getElementById("wanum2");
+  if (!v) { if (inp) inp.focus(); return; }
+  send("wa-start", "", v);
+}
+
+function renderModalFoot(st) {
+  var foot = document.getElementById("modal-foot");
+  foot.textContent = "";
+  function b(label, cls, fn) {
+    var x = el("button", cls, label);
+    x.onclick = fn;
+    foot.appendChild(x);
+    return x;
+  }
+  var close = function () { send("dismiss-modal"); };
+  var m = st.modal;
+  // Any modal that saved a file offers the way to it. Naming a path and leaving someone to find it
+  // is asking for one more thing to go wrong, to a person who is already stuck.
+  if (m && m.reveal) {
+    b("Close", "ghost", close);
+    b("Open folder", "primary", function () { send("reveal-logs"); });
+    return;
+  }
+  if (m && m.help === "extension" && m.connected) {
+    b("Close", "primary", close);
+    b("Pair again", "ghost", function () { send("ext-repair"); });
+    return;
+  }
+  if (m && m.help === "claude" && m.steps && m.steps.length) {
+    b("Close", "ghost", close);
+    b("Open sign-in", "primary", function () { send("claude-signin"); });
+    return;
+  }
+  if (!m || m.flow !== "whatsapp") { b("Close", "primary", close); return; }
+  if (m.page === "intro") {
+    b("Not now", "ghost", close);
+    b("Start connection", "primary", function () { send("wa-page", "number"); });
+  } else if (m.page === "number") {
+    b("Back", "ghost", function () { send("wa-page", "intro"); });
+    b("Send me a code", "primary", waSend);
+    waCode = "";
+  } else if (m.page === "linked" || m.page === "done" || (m.page === "code" && m.outcome === "ok")) {
+    // Only here: a link this window watched succeed. Never offered on a page that is still waiting,
+    // and never on one that failed -- there would be nothing for it to send through.
+    b("Close", "ghost", close);
+    var t = b(m.test === "sent" ? "Send another" : "Send test message", "primary", function () {
+      send("wa-test");
+    });
+    t.disabled = m.test === "sending";
+  } else if (m.page === "fail" || (m.page === "code" && m.outcome === "fail")) {
+    b("Close", "ghost", close);
+    // The failure text used to tell people to press Collect logs, and there was no Collect logs to
+    // press: it lives on the checklist behind this window, which a failed step never reaches.
+    b("Collect logs", "", function () { send("collect-logs"); });
+    b("Try again", "primary", function () { send("wa-page", "number"); });
+  } else {
+    b("Close", "primary", close);
+  }
+}
+
+function renderModalStage(st) {
+  var stage = document.getElementById("modal-stage");
+  var m = st.modal;
+  var flow = m && m.flow === "whatsapp";
+  stage.hidden = !flow;
+  // The plain modal keeps the layout it has always had; only the flow uses the stage.
+  document.getElementById("modal-body").hidden = !!flow;
+  document.getElementById("modal-steps").hidden = !!flow ||
+    !(m && m.steps && m.steps.length);
+  if (!flow) { waPage = ""; return; }
+  var page = m.page || "intro";
+  // The code page redraws when the code arrives, and only then -- otherwise a redraw mid-typing
+  // would replace the input under the user's hands.
+  var same = page === waPage;
+  var codeArrived = page === "code" && ((st.code && st.codeFor === "whatsapp") || waCode) && !stage.querySelector(".panecode");
+  // The outcome lands on a page that is already drawn, so the "same page" shortcut has to let it
+  // through -- otherwise the answer never appears under the code.
+  if (page === "code" && (m.outcome || "") !== waOutcome) { waOutcome = m.outcome || ""; codeArrived = true; }
+  // The test message's result lands on a page that is already drawn, the same way the outcome does.
+  if ((m.test || "") !== waTest) { waTest = m.test || ""; codeArrived = true; }
+  if (same && !codeArrived) return;
+  var dir = ORDER.indexOf(page) < ORDER.indexOf(waPage) ? "back" : "fwd";
+  if (same) dir = "";
+  stage.textContent = "";
+  stage.appendChild(buildWaPane(st, page, dir));
+  waPage = page;
 }
 
 // ---- appearance: Auto / Light / Dark -------------------------------------------------------
@@ -349,6 +832,70 @@ function renderChecklist(st) {
     li.appendChild(nm);
 
     var slot = el("span");
+    // The one step nobody can guess their way through: Chrome will not let us add the extension,
+    // so the person has to. The button sits on the row it belongs to, and is offered whether the
+    // step is waiting, finished or failed -- it is a reference, not an error message.
+    if (s.help) {
+      // Neither of these can work before JobSeeker is running: the extension pairs against the
+      // bridge the dashboard hosts, and the WhatsApp step writes into a configured install. Offered
+      // early they lead somewhere that fails for a reason the user cannot see, so they are offered
+      // late instead -- visible the whole time, so nothing appears out of nowhere, and live only
+      // once the row above them is green.
+      // st.started is the dashboard answering, asked of the dashboard. The step's own state is
+      // accepted too, for the moment between "the step said ok" and the next probe. And a minted
+      // pairing code settles it outright: nothing mints one unless the bridge is up.
+      var started = st.started
+        || st.steps.some(function (x) { return x.id === "start" && (x.state === "ok" || x.state === "skip"); })
+        || (st.code && st.codeFor === "extension");
+      var needsStart = s.id === "extension" || s.id === "whatsapp";
+      // WhatsApp waits for the extension. Not an arbitrary order: the extension is the step that
+      // proves the browser half works, and someone who reaches WhatsApp first tends to leave the
+      // harder one undone. A SKIPPED extension counts as settled -- refusing WhatsApp forever
+      // because the extension was declined would be a trap, not an order.
+      // The bridge's answer first, then the step's record. A machine whose extension was connected
+      // before this window opened has a record that says nothing, and the row would sit grey next
+      // to an extension that was plainly working.
+      var extDone = st.extensionConnected || st.steps.some(function (x) {
+        return x.id === "extension" && (x.state === "ok" || x.state === "skip");
+      });
+      var waLocked = s.id === "whatsapp" && !extDone;
+      // Between the row and its instructions, where the eye already is: the code, then the button
+      // that explains where to type it.
+      if (s.id === "extension" && st.code && st.codeFor === "extension" && st.view === "work") {
+        var chip = el("button", "rowpin");
+        chip.type = "button";
+        chip.setAttribute("aria-label", "Copy the pairing code");
+        chip.appendChild(el("b", null, st.code));
+        var badge = el("i", null, "Copy");
+        chip.appendChild(badge);
+        chip.onclick = function () { copyCode(st.code, badge); };
+        slot.appendChild(chip);
+      }
+      var howto = el("button", s.state === "running" ? "primary" : "",
+                     s.helpLabel || "Install instructions");
+      if (needsStart && !started) {
+        howto.disabled = true;
+        howto.title = "Available once JobSeeker has started.";
+      } else if (waLocked) {
+        howto.disabled = true;
+        howto.title = "Available once the Chrome extension is connected.";
+      }
+      howto.onclick = function () { send("help", s.help); };
+      slot.appendChild(howto);
+
+      // WhatsApp is optional and says so on the row, not only on a screen at the end of the run.
+      // Without this, the only way past it was to connect it -- an optional step you cannot
+      // decline is not optional.
+      // "fail" is left alone: the block below already offers Try again and Skip for a failed
+      // optional step, and two Skips on one row is worse than none.
+      if (s.id === "whatsapp" && s.state !== "ok" && s.state !== "skip" && s.state !== "fail") {
+        var skip = el("button", "ghost", "Skip");
+        skip.disabled = howto.disabled;
+        skip.title = howto.disabled ? howto.title : "Set this up later from the dashboard.";
+        skip.onclick = function () { send("wa-skip"); };
+        slot.appendChild(skip);
+      }
+    }
     if (s.state === "fail" && !st.busy) {
       var again = el("button", "", "Try again");
       again.onclick = function () { send("run", s.id); };
@@ -371,19 +918,83 @@ function renderActions(st) {
   function add(label, cls, cmd, disabled) {
     var b = el("button", cls, label);
     b.disabled = !!disabled;
-    b.onclick = function () { send(cmd); };
+    b.onclick = function () {
+      send(cmd);
+      // Quit shuts the server down, which leaves this page sitting there with nothing behind it --
+      // pressing Quit and watching nothing happen. Close the window ourselves. A window the browser
+      // opened for an app is usually allowed to close itself; when it is not, say so plainly rather
+      // than leaving a dead page that still looks live.
+      if (cmd === "quit") { farewell(); }
+    };
     acts.appendChild(b);
     return b;
   }
+  // The modal rides alongside whatever view is showing; it is not a view of its own.
+  var mod = document.getElementById("modal");
+  if (st.modal && st.modal.title) {
+    document.getElementById("modal-title").textContent = st.modal.title;
+    document.getElementById("modal-body").textContent = st.modal.body || "";
+    document.getElementById("modal-path").textContent = st.modal.path || "";
+    document.querySelector(".modal-path").hidden = !st.modal.path;
+    var ol = document.getElementById("modal-steps");
+    ol.textContent = "";
+    (st.modal.steps || []).forEach(function (line) {
+      var li = document.createElement("li");
+      // A step may carry a path on its own line; keep it on its own line and in a monospace face.
+      var parts = String(line).split("\n");
+      li.appendChild(document.createTextNode(parts[0]));
+      if (parts[1]) {
+        var c = el("code", "modal-inline-path", parts[1]);
+        li.appendChild(c);
+      }
+      ol.appendChild(li);
+    });
+    ol.hidden = !(st.modal.steps && st.modal.steps.length);
+    renderModalStage(st);
+    renderModalFoot(st);
+    renderPin(st);
+    var figs = document.getElementById("modal-figs");
+    figs.textContent = "";
+    (st.modal.images || []).forEach(function (src) {
+      var im = document.createElement("img");
+      im.src = src;
+      im.alt = "";
+      figs.appendChild(im);
+    });
+    figs.hidden = !(st.modal.images && st.modal.images.length);
+    mod.hidden = false;
+  } else {
+    mod.hidden = true;
+    waPage = "";
+    waCode = "";
+    renderPin(st);
+  }
+
   if (st.view === "welcome") {
     add("Quit", "ghost", "quit");
-    add("Get started", "primary", "continue");
+    // Get started goes under the welcome's own paragraph, not into the strip at the foot.
+    var wel = document.getElementById("wel-acts");
+    wel.textContent = "";
+    var go = el("button", "primary", "Get started");
+    go.onclick = function () { send("continue"); };
+    wel.appendChild(go);
   } else if (st.view === "plan") {
     add("Back", "ghost", "back");
     add(st.allInstalled ? "Start JobSeeker" : "Begin", "primary", "begin");
   } else if (st.view === "work") {
     if (st.busy) add("Stop", "ghost", "stop");
-    else if (st.failed) add("Try the rest anyway", "", "begin");
+    else if (st.failed) {
+      add("Collect logs", "primary", "collect-logs");
+      add("Try again", "", "begin");
+      // Even a failed row is not a reason to be trapped here. If JobSeeker is up, the way out of
+      // this screen is the same as anyone else's.
+      if (st.started) add("Open JobSeeker", "", "open");
+    } else if (st.started) {
+      // The checklist with nothing running on it used to have no action at all: setup done, or a
+      // step finished from a row, and the window just sat there. Whenever JobSeeker is answering,
+      // the button that leads to it is on screen.
+      add("Open JobSeeker", "primary", "open");
+    }
   } else if (st.view === "whatsapp") {
     if (st.waKnown) { add("Continue", "primary", "wa-skip"); }
     else {
@@ -402,12 +1013,27 @@ function renderActions(st) {
   } else if (st.view === "done") {
     add("Take me to the dashboard", "primary", "open");
   }
+  var where = document.getElementById("whereitlives");
+  var wasOpen = !where.hidden;
+  where.hidden = !st.whereItLives;
+  // Focus lands on the one action the moment the modal appears, so Return finishes setup without
+  // reaching for the mouse -- but only on the transition, or every state push would yank focus
+  // back out from under someone tabbing around.
+  if (!where.hidden && !wasOpen) {
+    var go = document.getElementById("wil-go");
+    if (go) { try { go.focus(); } catch (e) {} }
+  }
 }
 
 window.__render = function (st) {
   var j = JSON.stringify(st);
   if (j === lastJSON) return;      // nothing changed; leave the DOM alone
   lastJSON = j;
+
+  // The handover, hosted-side. The Mac app owns its web view and simply loads the dashboard into
+  // it; a browser window can only be sent somewhere by the page inside it, so the server says
+  // where and the page goes. The Mac host never sets this field, so this is dead code there.
+  if (st.dashboardUrl) { location.replace(st.dashboardUrl); return; }
 
   document.getElementById("title").textContent = st.title || "";
   document.getElementById("subtitle").textContent = st.subtitle || "";
@@ -471,12 +1097,28 @@ window.__render = function (st) {
 
   document.getElementById("status").innerHTML = "";
   var stat = document.getElementById("status");
-  if (st.status) {
+  // The welcome says nothing about installs. Whatever the survey has or has not found is the next
+  // screen's business; here it would only be a status line under a page that has no status.
+  if (st.status && st.view !== "welcome") {
     var parts = String(st.status).split("|");
     stat.appendChild(el("b", null, parts[0]));
     if (parts[1]) stat.appendChild(document.createTextNode(" " + parts[1]));
   }
   renderActions(st);
 };
+
+// ---- inbound, hosted: the server pushes the same state object over SSE ----------------------
+// One event per change, each carrying exactly what the Mac app passes to __render, so everything
+// above this line is unaware of which host it is talking to.
+if (HOSTED) {
+  try {
+    es = new EventSource("/events");
+    es.onmessage = function (ev) {
+      var st;
+      try { st = JSON.parse(ev.data); } catch (e) { return; }
+      window.__render(st);
+    };
+  } catch (e) { /* no EventSource: nothing renders, which is visible and reportable */ }
+}
 </script>
 </html>

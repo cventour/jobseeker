@@ -9,7 +9,7 @@ import http from "http";
 import { promises as fs, default as fsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, execFile } from "child_process";
+import * as platform from "./platform.mjs";
 import {
   parseFrontmatter,
   stringifyFrontmatter,
@@ -41,10 +41,40 @@ const CONFIG = path.join(ROOT, "config", "job-seeker.config.md");
 const CV_DIR = path.join(ROOT, "templates", "cv");
 const PUBLIC = path.join(ROOT, "public");
 
+// The Chrome-extension bridge (server/bridge.mjs) is how Windows reaches the browser: there is no
+// Apple Events / launchd broker to lean on, so a small extension talks to this server over
+// /bridge/*. The module is loaded dynamically and guarded, so a checkout without it (or a bridge
+// that fails to construct) still gets a working dashboard -- the Settings row then reports it.
+const bridge = await import("./bridge.mjs")
+  .then((mod) => (mod && typeof mod.createBridge === "function" ? mod.createBridge({ dataDir: DATA }) : null))
+  .catch(() => null);
+// The pairing code most recently minted from the UI, kept only until it expires. Minting is a POST;
+// the code is shown on the GET that follows, so it has to live somewhere between the two.
+let pairing = null;
+function activePairing() {
+  if (!pairing) return null;
+  const exp = typeof pairing.expires === "number" ? pairing.expires : Date.parse(pairing.expires);
+  if (Number.isNaN(exp) || exp <= Date.now()) {
+    pairing = null;
+    return null;
+  }
+  return pairing;
+}
+// Where a Connect click should land back. An allow-list -- never a raw Referer.
+const BRIDGE_RETURN = new Map([
+  ["settings", "/settings?tab=setup&sub=system"],
+  ["welcome", "/welcome?step=chrome"],
+  ["setup-step", "/setup-step?step=chrome&back=settings"],
+]);
+
 // Brand assets, served from public/. An explicit allowlist rather than a static file handler:
 // this server has no other GET surface, and a literal map cannot be path-traversed.
 const ASSETS = new Map([
   ["/favicon.ico", ["favicon.ico", "image/x-icon"]],
+  // Shown inside the Chrome-extension instructions on Windows, so the reader can match the page in
+  // front of them to the one being described.
+  ["/help-chrome-extensions.png", ["help-chrome-extensions.png", "image/png"]],
+  ["/help-chrome-details.png", ["help-chrome-details.png", "image/png"]],
   ["/favicon-16.png", ["favicon-16.png", "image/png"]],
   ["/favicon-32.png", ["favicon-32.png", "image/png"]],
   ["/favicon-48.png", ["favicon-48.png", "image/png"]],
@@ -1971,6 +2001,79 @@ function unfinishedHTML(w, markets) {
     </div>`;
 }
 
+// Windows only: the extension's connection state and, once Connect has been clicked, the two
+// steps that pair it. Shared by Settings and the wizard so the words cannot drift apart.
+function bridgeStateHTML(bs) {
+  if (!bs) return `<span class="bad-pill">bridge unavailable</span>`;
+  if (bs.connected) return `<span class="ok-pill">connected</span>`;
+  if (bs.paired) return `<span class="bad-pill">Chrome not running</span>`;
+  return `<span class="bad-pill">not connected</span>`;
+}
+
+/**
+ * What the state actually costs, and what to do about it. Three states, three different fixes, and
+ * a pill on its own tells the reader none of that.
+ */
+function bridgeWhyHTML(bs) {
+  const lost =
+    "Until it is connected, a run cannot read WhatsApp Web, LinkedIn or careers pages. Everything " +
+    "else — your email, the tracker, applying — is unaffected.";
+  if (!bs) return `The bridge did not start. Restart JobSeeker, then re-check.`;
+  if (bs.connected) return `Reading WhatsApp Web, LinkedIn and careers pages through your own Chrome.`;
+  if (bs.paired) {
+    return `This Chrome is paired, but nothing is answering. Open Chrome and give it a moment. ${lost}`;
+  }
+  return `The JobSeeker Bridge extension is not connected to this dashboard yet. ${lost}`;
+}
+
+function bridgeConnectHTML(back, extraHidden = "") {
+  return `<form method="POST" action="/bridge-mint" class="inline">${extraHidden}
+      <input type="hidden" name="_back" value="${esc(back)}">
+      <button type="submit" class="btn-small">Connect</button></form>`;
+}
+
+/** The two steps, with no code yet. Pressing Connect adds the code to the same shape. */
+function bridgeHowToHTML() {
+  const folder = path.join(ROOT, "extension");
+  return `<div class="alert warn bridge-pair">
+      <ol>
+        <li>Open <code>chrome://extensions</code>, turn on <b>Developer mode</b>, click <b>Load unpacked</b>
+          and choose this folder:<br><code class="bridge-path" title="Select and copy">${esc(folder)}</code></li>
+        <li>Press <b>Connect</b> above for a six-digit code, then enter it in the extension's <b>Options</b>.</li>
+      </ol>
+      <p class="muted">You only do this once. Chrome does not let a program add an extension for you.</p>
+      <figure class="bridge-shot">
+        <img src="/help-chrome-extensions.png" alt="Chrome's Extensions page, with two things circled: the Developer mode switch at the top right,
+          and the Load unpacked button below it on the left. Once loaded, JobSeeker Bridge appears as a card."
+          loading="lazy" width="1050" height="560">
+        <figcaption>Chrome's Extensions page. Developer mode is the switch top right; Load unpacked appears
+          under it once that is on. After loading, JobSeeker Bridge shows up as a card here.</figcaption>
+      </figure>
+      <figure class="bridge-shot">
+        <img src="/help-chrome-details.png" alt="The extension's Details page, with the Extension options row
+          circled near the bottom, below Collect errors and above Source." loading="lazy" width="695" height="570">
+        <figcaption>Press <b>Details</b> on that card, then scroll to <b>Extension options</b> near the
+          bottom. That is where the code goes.</figcaption>
+      </figure>
+    </div>`;
+}
+
+function bridgePairingHTML(pair) {
+  if (!pair) return "";
+  const exp = typeof pair.expires === "number" ? pair.expires : Date.parse(pair.expires);
+  const when = Number.isNaN(exp) ? "" : new Date(exp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const folder = path.join(ROOT, "extension");
+  return `<div class="alert warn bridge-pair">
+      <ol>
+        <li>Open <code>chrome://extensions</code>, turn on <b>Developer mode</b>, click <b>Load unpacked</b>
+          and choose this folder:<br><code class="bridge-path" title="Select and copy">${esc(folder)}</code></li>
+        <li>Open the extension's <b>Options</b> and enter this code:
+          <div class="bridge-code">${esc(String(pair.code))}</div>
+          ${when ? `<span class="muted tiny">Expires at ${esc(when)}.</span>` : ""}</li>
+      </ol>
+    </div>`;
+}
+
 function setupHTML(st, criteria, marketNames = [], subReq = "") {
   if (!st) return `<p class="empty">Status unavailable.</p>`;
   const cfg = st.config || {};
@@ -1994,12 +2097,24 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
       actionBtn("probe", "Re-check"),
       canRead ? "" : (b?.blockers || []).join(" "),
     ],
-    [
-      "Browser agent",
-      pill(st.agentInstalled, "installed", "not installed"),
-      actionBtn("install-browser-agent", st.agentInstalled ? "Reinstall" : "Install"),
-      "Lets the scheduled run drive Chrome with a permission that survives Claude Code updates.",
-    ],
+    platform.IS_WIN
+      ? [
+          "Chrome extension",
+          bridgeStateHTML(st.bridge),
+          st.bridge && st.bridge.connected ? "" : bridgeConnectHTML("settings", hidden),
+          bridgeWhyHTML(st.bridge) +
+            // A red pill with no way forward is a dead end, so the steps appear as soon as there is
+            // something to fix, rather than waiting for the user to guess that Connect comes first.
+            (st.bridge && st.bridge.connected
+              ? ""
+              : bridgePairingHTML(activePairing()) || bridgeHowToHTML()),
+        ]
+      : [
+          "Browser agent",
+          pill(st.agentInstalled, "installed", "not installed"),
+          actionBtn("install-browser-agent", st.agentInstalled ? "Reinstall" : "Install"),
+          "Lets the scheduled run drive Chrome with a permission that survives Claude Code updates.",
+        ],
     [
       "Daily run",
       st.schedInstalled ? `<span class="ok-pill">${esc(st.schedTime)}</span>` : `<span class="bad-pill">not scheduled</span>`,
@@ -2022,21 +2137,25 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
 
   // --- what only you can do -----------------------------------------------------------------
   const manual = [];
-  if (b?.blockers?.some((x) => /Allow JavaScript from Apple Events/i.test(x))) {
-    manual.push([
-      "Chrome setting",
-      "<ol><li>Open Chrome</li><li>Menu bar ▸ View ▸ Developer</li>" +
-        "<li>Click &quot;Allow JavaScript from Apple Events&quot;</li></ol>" +
-        "<p class='muted'>Automating this would need Accessibility permission — control of your whole UI. " +
-        "JobSeeker never asks for that.</p>",
-    ]);
-  }
-  if (b?.apple_events === "denied" || b?.apple_events === "prompt-pending") {
-    manual.push([
-      "macOS Automation",
-      "<ol><li>Open System Settings</li><li>Privacy &amp; Security ▸ Automation</li>" +
-        "<li>Tick <b>Google Chrome</b> under Claude</li></ol>",
-    ]);
+  // Apple Events and the Automation pane do not exist on Windows; there the extension row above is
+  // the whole story.
+  if (!platform.IS_WIN) {
+    if (b?.blockers?.some((x) => /Allow JavaScript from Apple Events/i.test(x))) {
+      manual.push([
+        "Chrome setting",
+        "<ol><li>Open Chrome</li><li>Menu bar ▸ View ▸ Developer</li>" +
+          "<li>Click &quot;Allow JavaScript from Apple Events&quot;</li></ol>" +
+          "<p class='muted'>Automating this would need Accessibility permission — control of your whole UI. " +
+          "JobSeeker never asks for that.</p>",
+      ]);
+    }
+    if (b?.apple_events === "denied" || b?.apple_events === "prompt-pending") {
+      manual.push([
+        "macOS Automation",
+        "<ol><li>Open System Settings</li><li>Privacy &amp; Security ▸ Automation</li>" +
+          "<li>Tick <b>Google Chrome</b> under Claude</li></ol>",
+      ]);
+    }
   }
   // Shown only when a tab actually failed to answer. Chrome discards long-idle background tabs, and
   // a discarded tab has no renderer — so the read fails with the same timeout a missing permission
@@ -2200,13 +2319,6 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
 }
 
 async function systemStatus() {
-  const sh = (cmd, args, timeout = 8000) =>
-    new Promise((resolve) =>
-      execFile(cmd, args, { cwd: ROOT, timeout }, (err, stdout) =>
-        resolve({ ok: !err, out: String(stdout || "").trim() })
-      )
-    );
-
   let browser = null;
   try {
     browser = JSON.parse(await fs.readFile(path.join(DATA, ".browser-status.json"), "utf8"));
@@ -2214,13 +2326,16 @@ async function systemStatus() {
     /* probe has not run here yet */
   }
 
-  const uid = process.getuid();
-  const [agent, sched, schedTime, spendRaw] = await Promise.all([
-    sh("launchctl", ["print", `gui/${uid}/com.jobseeker.browser`]),
-    sh("launchctl", ["print", `gui/${uid}/com.jobseeker.jobrun`]),
-    sh("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--show"]),
-    sh("node", [path.join(ROOT, "server", "record.mjs"), "list-spend", "--limit", "10"]),
+  // platform.mjs is the only module that knows which OS this is; everything here is OS-neutral.
+  const [agentStatus, schedInstalled, schedShown, spendRaw] = await Promise.all([
+    platform.browserAgentStatus(),
+    platform.isScheduled(),
+    platform.scheduleShow(),
+    platform.node([path.join(ROOT, "server", "record.mjs"), "list-spend", "--limit", "10"]),
   ]);
+  const agent = { ok: agentStatus.installed };
+  const sched = { ok: schedInstalled };
+  const schedTime = { out: schedShown };
 
   let spend = { month_total_usd: 0, month_runs: 0, runs_recorded: 0, recent: [], month: "" };
   try {
@@ -2279,6 +2394,7 @@ async function systemStatus() {
       linkedin: ageDays(wm.linkedin),
     },
     profileParsed,
+    bridge: bridge ? bridge.status() : null,
   };
 }
 
@@ -2929,7 +3045,11 @@ ${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcom
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
-<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a></footer>
+<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a>${
+  platform.IS_WIN
+    ? ` <form method="POST" action="/quit" class="inline" style="display:inline"><button type="submit" class="quitbtn">Quit JobSeeker</button></form>`
+    : ""
+}</footer>
 <div id="confirmOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
   <div class="modal confirm-modal">
     <h3 id="confirmTitle"></h3>
@@ -3380,6 +3500,16 @@ table td.wrap:first-child{white-space:normal}
 @media (max-width:720px){.pop{width:min(320px,calc(100vw - 48px))}}
 .alert{padding:11px 14px;border-radius:9px;margin:0 0 18px;font-size:13px;line-height:1.5}
 .alert.warn{background:rgba(214,138,0,.10);box-shadow:inset 3px 0 0 #d68a00}
+/* Chrome-extension pairing (Windows): the folder to load and the code to type, both meant to be read
+   across the room or copied in one select. */
+.bridge-pair ol{margin:6px 0 0;padding-left:20px}
+.bridge-pair li+li{margin-top:8px}
+.bridge-shot{margin:10px 0 0}
+.bridge-shot img{display:block;width:100%;max-width:560px;height:auto;border:1px solid var(--line);border-radius:8px}
+.bridge-shot figcaption{margin-top:6px;font-size:12px;color:var(--muted)}
+.bridge-path{display:inline-block;margin-top:4px;padding:3px 7px;user-select:all;-webkit-user-select:all;word-break:break-all}
+.bridge-code{font:700 30px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.18em;margin:6px 0 2px;user-select:all;-webkit-user-select:all}
+.quitbtn{background:transparent;border:0;padding:0;color:var(--mut);font:inherit;cursor:pointer;text-decoration:underline}
 .alert.bad{background:rgba(214,0,60,.10);box-shadow:inset 3px 0 0 #d0224a}
 .alert strong{color:var(--fg)}
 .alert a{color:var(--acc)}
@@ -4645,12 +4775,7 @@ async function handleAddCompany(form) {
   );
 
   if (!known) {
-    const child = spawn("node", [path.join(ROOT, "scripts", "discover-board.mjs"), company, market], {
-      cwd: ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    platform.spawnNodeDetached("scripts/discover-board.mjs", [company, market]);
   }
 
   return {
@@ -5121,16 +5246,6 @@ async function mergeCriteria(fields) {
   return out;
 }
 
-// Run a command and hand back its stdout. systemStatus() has had its own copy of this since before
-// there was a second caller; this one is module-level so the wizard can read the schedule back
-// without duplicating it a third time.
-const shOut = (cmd, args, timeout = 8000) =>
-  new Promise((resolve) =>
-    execFile(cmd, args, { cwd: ROOT, timeout }, (err, stdout) =>
-      resolve({ ok: !err, out: String(stdout || "").trim() })
-    )
-  );
-
 async function readConfigRaw() {
   const file = path.join(ROOT, "config", "job-seeker.config.md");
   const existing = await safeRead(file);
@@ -5169,10 +5284,9 @@ async function welcomeState({ schedule = false } = {}) {
     /* never parsed */
   }
   const answers = await readAnswers();
-  // Reading the schedule means running launchctl's plist reader, so it happens only on the step
+  // Reading the schedule means running the OS scheduler's reader, so it happens only on the step
   // that shows it — not on every dashboard load.
-  const sched = schedule ? await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--show"]) : { out: "" };
-  const schedRaw = (sched.out || "").trim();
+  const schedRaw = schedule ? (await platform.scheduleShow()).trim() : "";
   const [schedTime, schedDays] = schedRaw.split(/\s+/);
   return {
     cfg,
@@ -5597,7 +5711,22 @@ function welcomeStepHTML(key, st, mode = {}) {
           browser. You would be turning off recruiter messages that arrive on WhatsApp or LinkedIn.</em></span></label>
       </div>
       ${
-        canRead
+        platform.IS_WIN
+          ? (() => {
+              // Same rule as Settings: if it is not connected, the way to fix it is on screen
+              // already. Nobody should have to press a button to find out what the steps are.
+              const bs = bridge ? bridge.status() : null;
+              const done = Boolean(bs && bs.connected);
+              return `<div class="wcard" style="margin-top:12px">
+              <p class="wnote" style="margin:0 0 8px"><b>Chrome extension</b> ${bridgeStateHTML(bs)}
+              ${done ? "" : bridgeConnectHTML(solo ? "setup-step" : "welcome")}</p>
+              <p class="wnote" style="margin:0">${bridgeWhyHTML(bs)}</p>
+              ${done ? "" : bridgePairingHTML(activePairing()) || bridgeHowToHTML()}
+              <p class="wnote" style="margin:8px 0 0">You can also finish this later, from
+                <a href="/settings?tab=setup">Settings</a>. Saying yes above is what matters here.</p>
+            </div>`;
+            })()
+          : canRead
           ? `<p class="wnote">Chrome is reachable on this Mac.</p>`
           : `<p class="wnote">macOS has not granted Chrome access yet. Saying yes here records the
              decision; the permission itself is one dialog on the first run, and
@@ -5778,6 +5907,7 @@ const WELCOME_CSS = `
 .wsub{color:var(--mut);font-size:13.5px;margin:0 0 16px;max-width:64ch}
 .wsub2{flex:1;min-width:0}
 .wnote{font-size:11.5px;color:var(--mut);margin:9px 0 0;max-width:64ch;line-height:1.6}
+.wcard .bridge-pair{margin-top:10px}
 .wcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .wstack{display:flex;flex-direction:column;gap:14px}
 .wtwo{display:flex;gap:13px;flex-wrap:wrap}.wtwo>*{flex:1;min-width:200px}
@@ -6108,7 +6238,7 @@ async function handleWelcomeStep(form) {
     if (!cad) return { redirect: back, flash: { kind: "bad", msg: "Unknown schedule — nothing changed." } };
 
     if (cad.off) {
-      if (st.scheduled) await shOut("bash", [path.join(ROOT, "scripts", "set-schedule.sh"), "--remove"], 20000);
+      if (st.scheduled) await platform.scheduleRemove();
       await mergeConfig({ schedule_days: "off", min_hours_between_runs: "" });
       await logActivity("onboard", "Schedule removed — runs only when asked");
     } else {
@@ -6132,11 +6262,9 @@ async function handleWelcomeStep(form) {
         }
         days = picked.join(",");
       }
-      const args = [path.join(ROOT, "scripts", "set-schedule.sh"), time];
-      if (days) args.push(days);
-      const r = await shOut("bash", args, 20000);
+      const r = await platform.scheduleSet(time, days);
       if (!r.ok) {
-        return { redirect: back, flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || "see docs/SCHEDULER.md"}` } };
+        return { redirect: back, flash: { kind: "err", msg: `The schedule could not be installed: ${r.out || r.err || "see docs/SCHEDULER.md"}` } };
       }
       // The chosen cadence is the BASELINE the ladder steps down from. Without it recorded, the
       // ladder's Restore button would put a twice-a-week user back on daily — a change they never
@@ -6281,31 +6409,32 @@ async function handleDeferMarketAsk(form) {
 // Actions the Setup page may run. An ALLOWLIST of named actions mapped to fixed scripts — never a
 // command from the request. This endpoint changes OS state (installs launch agents), so the set of
 // things it can do is closed and auditable, exactly as scripts/browser-agent.sh does.
+// runner "script" is a bare script name that platform.mjs resolves to scripts/<name>.sh on macOS
+// and scripts/win/<name>.ps1 on Windows; runner "node" is a repo-relative .mjs path.
 const ACTIONS = new Map([
-  ["probe", { script: "scripts/browser-probe.mjs", runner: "node", detached: false }],
-  ["install-browser-agent", { script: "scripts/install-browser-agent.sh", runner: "bash", detached: false }],
-  ["set-schedule", { script: "scripts/set-schedule.sh", runner: "bash", detached: false, arg: "time" }],
-  ["remove-schedule", { script: "scripts/set-schedule.sh", runner: "bash", detached: false, fixedArgs: ["--remove"] }],
+  ["probe", { script: "scripts/browser-probe.mjs", runner: "node" }],
+  ["install-browser-agent", { script: "install-browser-agent", runner: "script", darwinOnly: true }],
+  ["set-schedule", { script: "set-schedule", runner: "script", arg: "time" }],
+  ["remove-schedule", { script: "set-schedule", runner: "script", fixedArgs: ["--remove"] }],
 ]);
 
 async function handleRunAction(form) {
   const name = String(form.action_name || "");
   const spec = ACTIONS.get(name);
   if (!spec) throw new Error(`Unknown action: ${JSON.stringify(name).slice(0, 40)}`);
+  if (spec.darwinOnly && !platform.IS_MAC) throw new Error("This action only applies on macOS");
 
-  const args = [path.join(ROOT, spec.script), ...(spec.fixedArgs || [])];
+  const extraArgs = [...(spec.fixedArgs || [])];
   if (spec.arg === "time") {
     const t = String(form.time || "").trim();
     // Validated here as well as in the script: defence in depth on the boundary that faces the web.
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new Error(`Invalid time ${JSON.stringify(t)} — expected HH:MM`);
-    args.push(t);
+    extraArgs.push(t);
   }
 
-  const out = await new Promise((resolve) => {
-    execFile(spec.runner, args, { cwd: ROOT, timeout: 120_000 }, (err, stdout, stderr) =>
-      resolve({ ok: !err, text: String(stdout || stderr || err?.message || "").trim() })
-    );
-  });
+  const c = spec.runner === "node" ? platform.nodeCommand(spec.script, extraArgs) : platform.scriptCommand(spec.script, extraArgs);
+  const r = await platform.run(c.cmd, c.args, { timeout: 120_000 });
+  const out = { ok: r.ok, text: r.out || r.err };
   await logActivity("setup-action", `${name}: ${out.ok ? "ok" : "failed"} — ${out.text.slice(0, 120)}`);
   if (!out.ok) throw new Error(out.text.split("\n")[0] || `${name} failed`);
   return out.text.split("\n").filter(Boolean).pop() || `${name} done`;
@@ -6777,12 +6906,7 @@ async function handleRunNow(form) {
 
   // Detached: these take minutes to tens of minutes. The page must come straight back, and the
   // run's own log and status file are how it reports, not this response.
-  const child = spawn("bash", [path.join(ROOT, "scripts", "run-now.sh"), slug], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  const child = platform.spawnScriptDetached("run-now", [slug]);
   // Claim the run immediately: run-now.sh takes its own lock seconds later, and until it does this
   // is the only record that something is starting.
   await fs
@@ -6828,12 +6952,7 @@ async function handleApplyNow(form) {
     };
   }
 
-  const child = spawn("bash", [path.join(ROOT, "scripts", "run-now.sh"), "apply", id], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  const child = platform.spawnScriptDetached("run-now", ["apply", id]);
   await fs
     .writeFile(
       path.join(DATA, ".run-now.pending.json"),
@@ -6931,12 +7050,7 @@ async function handleDecideApproval(form) {
 // Detached on purpose: a send is a whole `claude` session and the dashboard must never block on
 // one. Failures land in the record (`dispatch: failed`) and in the log, not in a lost HTTP response.
 function dispatchApproval(id) {
-  const child = spawn("bash", [path.join(ROOT, "scripts", "send-approval.sh"), id], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  platform.spawnScriptDetached("send-approval", [id]);
 }
 
 async function handleSetTaskStatus(form) {
@@ -7110,6 +7224,12 @@ function crossSitePost(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
+    // The Chrome extension's own channel. It authenticates with its pairing token, not with the
+    // browser's same-origin labels (an extension origin is never ours), so it is routed before
+    // the CSRF check below ever sees it.
+    if (bridge && url.pathname.startsWith("/bridge/")) {
+      if (bridge.handle(req, res)) return;
+    }
     // First run: if there is no config and no targeting, the dashboard is useless and the user has
     // nowhere obvious to start. Send them to Setup once. Any query string (including the flash
     // params a redirect adds) means they have been somewhere deliberately, so this cannot loop.
@@ -7305,12 +7425,7 @@ async function handlePost(req, res, url) {
   // Starting the parse takes no fields, and must be handled before the body is parsed as a form.
   if (url.pathname === "/welcome-parse") {
     await snapshotProfile();
-    const child = spawn("bash", [path.join(ROOT, "scripts", "parse-cv.sh")], {
-      cwd: ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    platform.spawnScriptDetached("parse-cv");
     await logActivity("cv-parse", "Reading the uploaded CV, started from the wizard");
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("started");
@@ -7321,6 +7436,29 @@ async function handlePost(req, res, url) {
   res._returnTab = form._tab || "";
   res._returnSub = form._sub || "";
   res._returnPage = form._page || "";
+  // Mint a pairing code for the Chrome extension and come back to the page that asked.
+  if (url.pathname === "/bridge-mint") {
+    const back = BRIDGE_RETURN.get(String(form._back || "")) || BRIDGE_RETURN.get("settings");
+    if (!bridge) {
+      res.writeHead(303, { Location: back + "&flash=err&msg=" + encodeURIComponent("The extension bridge is not available in this build.") });
+      return res.end();
+    }
+    pairing = await bridge.mintPairingCode();
+    res.writeHead(303, { Location: back });
+    return res.end();
+  }
+  // Windows only: the tray-less desktop launcher has no other way to stop the server. On macOS the
+  // app owns the process and kills it itself, so this route does not exist there.
+  if (url.pathname === "/quit") {
+    if (!platform.IS_WIN) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      return res.end("Not found");
+    }
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("Bye");
+    setTimeout(() => process.exit(0), 200);
+    return;
+  }
   if (url.pathname === "/save-config") {
     try {
       await handleSaveConfig(form);
@@ -7401,7 +7539,7 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/restore-schedule") {
     // Recovery is manual by design: the ladder slows itself down, but only a person speeds it back
     // up. Delegates to the same script that stepped it down, so there is one writer of the plist.
-    const r = await shOut("bash", [path.join(ROOT, "scripts", "schedule-ladder.sh"), "--reset"], 20000);
+    const r = await platform.runScript("schedule-ladder", ["--reset"], { timeout: 20000 });
     await logActivity("schedule-ladder", `Schedule restored to daily from the dashboard: ${r.out || "done"}`);
     return redirect(res, r.ok
       ? { kind: "ok", msg: `Schedule restored — ${r.out || "done"}.` }
@@ -7437,12 +7575,7 @@ async function handlePost(req, res, url) {
     }
     // Detached, because a research pass runs for minutes and the dashboard must not block on it.
     // Same pattern as the per-company board discovery in handleAddCompany.
-    const child = spawn("bash", [path.join(ROOT, "scripts", "research-market.sh"), market], {
-      cwd: ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    platform.spawnScriptDetached("research-market", [market]);
     await logActivity("markets", `Market research started for ${market} from the dashboard`);
     return redirect(res, {
       kind: "ok",
@@ -7480,8 +7613,34 @@ const PORT = Number(process.env.PORT || cfg.dashboard_port || 4319);
 const HOST = process.env.JOBSEEKER_DASHBOARD_HOST || "127.0.0.1";
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
+// A second copy on a port the first one holds is the commonest way this fails to start, and an
+// unhandled 'error' event turns that into a Node stack trace about EADDRINUSE -- which tells the
+// person reading it nothing about what to do. Say which case it is, and say it in one line.
+server.on("error", async (e) => {
+  if (e && e.code === "EADDRINUSE") {
+    let mine = false;
+    try {
+      const r = await fetch(`http://127.0.0.1:${PORT}/_whoami`, { signal: AbortSignal.timeout(2000) });
+      mine = r.ok && (await r.json())?.root === ROOT;
+    } catch {
+      /* whatever is there is not answering as us */
+    }
+    console.error(
+      mine
+        ? // Nothing for the user to do, and nothing for them to open: whoever asked for JobSeeker
+          // is about to be shown the window that is already running. This line is for a terminal.
+          `JobSeeker is already running.`
+        : `Another program on this computer is using the connection JobSeeker needs (port ${PORT}). ` +
+          `Close it, or set dashboard_port in config/job-seeker.config.md.`
+    );
+    process.exit(mine ? 0 : 1);
+  }
+  console.error(`The dashboard could not start: ${e?.message || e}`);
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
-  console.log(`Job-seeker dashboard on http://localhost:${PORT}`);
+  console.log(`Job-seeker dashboard on http://127.0.0.1:${PORT}`);
   if (!LOOPBACK.has(HOST)) {
     console.warn(
       `\n!! WARNING: bound to ${HOST}, not loopback. The dashboard has NO authentication, so your\n` +

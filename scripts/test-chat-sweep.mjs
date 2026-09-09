@@ -20,13 +20,25 @@ const check = (name, ok, detail = "") => {
   if (!ok) failures++;
 };
 
-// Stub the browser: return whatever the case under test needs, with no Chrome involved.
+// Stub the browser: return whatever the case under test needs, with no Chrome involved. The sweep
+// names a snippet now (extension/snippets.js) instead of handing over JS text, so the stub records
+// the name it was asked for and the test below asserts that name really exists.
+const asked = [];
 const ctxReturning = (payload) => ({
-  evalJson: async () => (payload instanceof Error ? Promise.reject(payload) : payload),
+  snippetJson: async (_tab, name) => {
+    asked.push(name);
+    return payload instanceof Error ? Promise.reject(payload) : payload;
+  },
 });
 const tab = { window: 1, tab: 1, unread: 7 };
 const run = (payload, t = tab) =>
-  sweepChannel({ ctx: ctxReturning(payload), source: "WhatsApp", host: "web.whatsapp.com", js: "x", tab: t });
+  sweepChannel({
+    ctx: ctxReturning(payload),
+    source: "WhatsApp",
+    host: "web.whatsapp.com",
+    snippet: "whatsappChatList",
+    tab: t,
+  });
 
 async function main() {
   console.log("\nchat-sweep safety\n");
@@ -53,6 +65,17 @@ async function main() {
     qr.swept === false && qr.logged_out === true && /SESSION LOST/.test(qr.reason),
     qr.reason
   );
+
+  // The snippet a channel names must be one the extension actually ships. A typo here would fail
+  // only in front of a real browser, which is the one place this suite cannot reach.
+  {
+    const { SNIPPETS } = (await import("../extension/snippets.js")).default;
+    const missing = ["whatsappChatList", "linkedinChatList", "openConversationClick", "readThreadMessages"].filter(
+      (n) => typeof SNIPPETS[n] !== "function"
+    );
+    check("the snippets the sweep names all exist", missing.length === 0, missing.join(", "));
+    check("the sweep asked for the snippet it was given", asked.every((n) => n === "whatsappChatList"), asked.join(", "));
+  }
 
   const good = await run({ chats: [{ name: "Dana Whitfield", preview: "hi", unread: 2 }, { name: "Recruiter", preview: "role", unread: 0 }] });
   check("real conversations -> swept", good.swept === true && good.chats.length === 2);

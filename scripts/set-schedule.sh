@@ -1,5 +1,6 @@
 #!/bin/bash
 # Set (or remove) the time the daily run fires.
+# Windows twin: scripts/win/set-schedule.ps1 — change both together.
 #
 # This exists because the schedule had a TRAP in it. config/job-seeker.config.md carried a
 # `schedule_job_run` cron expression, /onboard wrote it, and NOTHING READ IT -- the real schedule is

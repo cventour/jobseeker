@@ -20,9 +20,17 @@ destination that JobSeeker sends your data to. Your records are Markdown files i
 gitignored. The only outbound traffic is to the services you have connected — Gmail, Calendar,
 WhatsApp, and the careers sites a scout fetches.
 
-**You are the security boundary.** Anyone with access to your unlocked Mac has access to your job
-search, exactly as they have access to your email client. JobSeeker adds no authentication of its
+**You are the security boundary.** Anyone with access to your unlocked Mac or PC has access to your
+job search, exactly as they have access to your email client. JobSeeker adds no authentication of its
 own, because on a single-user machine it would be theatre.
+
+**Any local process that can read `data/.bridge.token` can drive browser reads** on Windows. That
+token is what the JobSeeker Bridge Chrome extension is paired with, and it is the same boundary the
+macOS Apple Events path already has — there, any process running as you can send Apple Events to
+Chrome. It is minted as 32 random bytes, written with mode 0600 where modes mean anything, handed to
+the extension once through a short-lived pairing code you copy from the dashboard, and it never
+leaves loopback. The extension's `chrome-extension://` origin is pinned at pairing time, so a web
+page that somehow learned the token still cannot poll for work.
 
 ## What it protects against
 
@@ -33,9 +41,11 @@ own, because on a single-user machine it would be theatre.
 | A crafted record id escaping the data directory | Ids become filenames, so they are validated against an allowlist before any filesystem access |
 | Concurrent writes corrupting or losing records | Single writer (`server/record.mjs`) holding a cross-process lock, with atomic writes |
 | An agent quietly doing nothing and reporting success | Coverage is recorded as measured data; an empty extraction is treated as failure, not an empty inbox |
-| Losing your WhatsApp session | The browser is never restarted or given flags, and no separate profile is ever created |
+| Losing your WhatsApp session | The browser is never restarted or given flags, and no separate profile is ever created — on either platform |
+| A web page reaching the Chrome bridge | The bridge rejects non-loopback connections, requires the `data/.bridge.token` bearer token, and pins the paired extension's origin |
 
-Each of these is covered by a test — `npm run test:security` and `npm run test:concurrency`.
+Each of these is covered by a test — `npm run test:security`, `npm run test:concurrency`, and
+`npm run test:bridge` for the last row.
 
 ## What it deliberately does not do
 
@@ -51,7 +61,9 @@ Each of these is covered by a test — `npm run test:security` and `npm run test
 
 **The dashboard can install launch agents and change the run schedule.** The Setup page runs a
 closed allowlist of named actions — install the browser agent, re-run the probe, set or remove the
-daily run — each mapped to a fixed script in this repository. It never executes a command supplied by
+daily run — each mapped to a fixed script in this repository. On Windows the same actions register
+and remove a Task Scheduler task (`\JobSeeker\JobRun`) instead of a LaunchAgent, through the
+PowerShell twin of the same script. It never executes a command supplied by
 the request, and arguments are validated at the boundary as well as inside the script. It is still a
 widening: a local process that can reach the dashboard can now change OS-level state, not only data.
 The CSRF rejection and loopback binding below are what bound that.
@@ -60,8 +72,11 @@ The CSRF rejection and loopback binding below are what bound that.
 `JOBSEEKER_DASHBOARD_HOST` to expose it on a network, anyone who can reach the port can read and
 modify your job search. The startup warning says so; do not ignore it.
 
-**The browser agent holds a standing macOS Automation grant.** While installed, it can read any page
-open in your Chrome, including authenticated ones. That is inherent to reading WhatsApp Web at all.
+**The browser agent holds a standing macOS Automation grant** — and on Windows, the paired Bridge
+extension is the equivalent standing access. Either can read any page
+open in your Chrome that it holds permission for, including authenticated ones. On Windows that is
+WhatsApp Web and LinkedIn by default, and every site once you grant the extension's optional
+careers-pages permission. That is inherent to reading WhatsApp Web at all.
 What bounds it is that the browser API exposes navigation, extraction, and exactly one narrow click:
 `openConversation`, which selects the Nth row of a named conversation list and refuses to click a
 `BUTTON`, an `INPUT`, or anything inside a `<form>`. There is no general click, no typing and no form

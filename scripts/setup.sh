@@ -1,5 +1,6 @@
 #!/bin/bash
 # First-run setup. Gets a fresh Mac to a VERIFIED working state, one line per step.
+# Windows twin: scripts/win/setup.ps1 — change both together.
 #
 #   npm run setup                 interactive first run
 #   npm run setup -- --dry-run    report only, change nothing

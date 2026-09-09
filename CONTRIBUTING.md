@@ -9,8 +9,15 @@ allows** — if an issue sits unanswered for a while, that is bandwidth, not ind
 with a reproduction are always welcome; large features may not be merged if they widen the project
 beyond what one person can maintain.
 
-It is **macOS only** and needs [Claude Code](https://claude.com/claude-code). That is not an
-oversight: it drives Chrome through Apple Events, and the agents are Claude Code agents.
+It runs on **macOS and Windows 10/11**, and needs [Claude Code](https://claude.com/claude-code) on
+both — the agents are Claude Code agents. Chrome is driven through Apple Events on macOS and through
+the JobSeeker Bridge extension (`extension/`, `server/bridge.mjs`) on Windows.
+
+`server/platform.mjs` is the **only** module that branches on the operating system. Every shell
+script has a PowerShell twin under `scripts/win/`, and a change to one is a change to both — the
+twins' headers say so. Run scripts by name (`npm run <script>`, or `node scripts/run.mjs <name>`)
+rather than naming a shell, and check both mappings with `npm run test:platform`, which asserts them
+from either OS.
 
 ## Cutting a release
 

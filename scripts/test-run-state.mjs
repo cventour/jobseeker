@@ -17,13 +17,23 @@
 // Only server/dashboard.mjs honours JOBSEEKER_DATA_DIR; audit.mjs and record.mjs resolve data/ from
 // __dirname/.. — so the sandbox has to be a real repo copy, not a redirected data directory.
 
+// Windows: the same sandbox, OS-shaped bits swapped rather than skipped. Stubs become `.cmd` batch
+// files, HOME *and* USERPROFILE are redirected, PATH is joined with path.delimiter, and every script
+// runs through platform.scriptCommand() — imported FROM THE SANDBOX COPY so its ROOT is the sandbox
+// and the PowerShell twin under scripts\win\ is what is exercised. The ladder there writes a real
+// Task Scheduler task, so JOBSEEKER_TASK_NAME pins it to JobSeeker\JobRunTest (never the real
+// \JobSeeker\JobRun) and cleanup unregisters it.
+
 import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import path from "path";
 import os from "os";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const IS_WIN = process.platform === "win32";
+const WIN_TASK = "JobSeeker\\JobRunTest";
+let plat;   // server/platform.mjs, loaded from the sandbox so ROOT is the sandbox
 let pass = 0, fail = 0;
 const ok = (n, x = "") => { pass++; console.log(`  ok    ${n}${x ? " — " + x : ""}`); };
 const bad = (n, x = "") => { fail++; console.log(`  FAIL  ${n}${x ? " — " + x : ""}`); };
@@ -52,19 +62,38 @@ async function sandbox() {
   for (const noop of ["browser-probe.mjs", "board-sweep.mjs", "chat-sweep.mjs"]) {
     await fs.writeFile(path.join(dir, "scripts", noop), "process.exit(0);\n");
   }
-  for (const [n, body] of [
-    ["launchctl", "#!/bin/bash\nexit 0\n"],
-    ["osascript", "#!/bin/bash\nexit 0\n"],
-    ["caffeinate", "#!/bin/bash\nexit 0\n"],
-    ["pgrep", "#!/bin/bash\nexit 1\n"],
-  ]) await fs.writeFile(path.join(dir, "bin", n), body, { mode: 0o755 });
+  // The macOS run shells out to these four; the Windows twin uses toast notifications and CIM
+  // instead, but the stubs are written anyway so nothing can quietly fall through to a real one.
+  for (const [n, code] of [
+    ["launchctl", 0],
+    ["osascript", 0],
+    ["caffeinate", 0],
+    ["pgrep", 1],
+  ]) await writeStub(dir, n, `#!/bin/bash\nexit ${code}\n`, `@echo off\r\nexit /b ${code}\r\n`);
   return dir;
 }
 
+// A stub executable: a bash script on macOS, a .cmd batch file on Windows (an extensionless file is
+// not executable there, and PATHEXT puts .cmd ahead of it anyway).
+async function writeStub(dir, name, bash, cmd) {
+  if (IS_WIN) await fs.writeFile(path.join(dir, "bin", `${name}.cmd`), cmd);
+  else await fs.writeFile(path.join(dir, "bin", name), bash, { mode: 0o755 });
+}
+
+/** Run one of the repo's scripts — scripts/<name>.sh or scripts\win\<name>.ps1 — inside `dir`. */
+const runScript = (dir, name, args = [], extraEnv = {}) => {
+  const c = plat.scriptCommand(name, args);
+  return sh(c.cmd, c.args, { cwd: dir, env: env(dir, extraEnv) });
+};
+
+// HOME is what the launchd path reads; USERPROFILE is what Windows reads. Both are redirected so
+// neither OS can reach the developer's real home.
 const env = (dir, extra = {}) => ({
   ...process.env,
   HOME: path.join(dir, "home"),
-  PATH: `${path.join(dir, "bin")}:${process.env.PATH}`,
+  USERPROFILE: path.join(dir, "home"),
+  PATH: `${path.join(dir, "bin")}${path.delimiter}${process.env.PATH}`,
+  ...(IS_WIN ? { JOBSEEKER_TASK_NAME: WIN_TASK } : {}),
   JOBRUN_REAP_WHATSAPP: "0",
   JOBRUN_GUARD: "0",
   JOBRUN_ATTEMPTS: "1",
@@ -86,12 +115,21 @@ async function runWith(dir, { canRead, digest, exitCode = 0, boards = 0 }) {
   await fs.rm(path.join(dir, "data", ".last-digest.md"), { force: true });
   // The stub claude writes the digest, exactly as the real /job-run does — so "no digest" is a
   // genuine absence rather than a file the harness forgot to create.
-  const stub = digest === null
+  const bashStub = digest === null
     ? `#!/bin/bash\nprintf '{"result":"no digest","total_cost_usd":0}\\n'\nexit ${exitCode}\n`
     : `#!/bin/bash\ncat > "$(dirname "$0")/../data/.last-digest.md" <<'D'\n${digest}\n- something happened\nD\nprintf '{"result":"ran","total_cost_usd":0}\\n'\nexit ${exitCode}\n`;
-  await fs.writeFile(path.join(dir, "bin", "claude"), stub, { mode: 0o755 });
+  // Same stub as batch: same digest file, same JSON on stdout, same exit code. %~dp0 is bin\, and
+  // the redirect goes before `echo` so no trailing space lands in the digest.
+  const cmdStub = (digest === null
+    ? ['@echo off', 'echo {"result":"no digest","total_cost_usd":0}']
+    : ['@echo off',
+       `> "%~dp0..\\data\\.last-digest.md" echo ${digest}`,
+       `>> "%~dp0..\\data\\.last-digest.md" echo - something happened`,
+       'echo {"result":"ran","total_cost_usd":0}']
+  ).concat(`exit /b ${exitCode}`).join("\r\n") + "\r\n";
+  await writeStub(dir, "claude", bashStub, cmdStub);
 
-  await sh("bash", [path.join(dir, "scripts", "job-run.sh")], { cwd: dir, env: env(dir) });
+  await runScript(dir, "job-run");
   try {
     return JSON.parse(await fs.readFile(path.join(dir, "data", ".job-run.status.json"), "utf8"));
   } catch (e) {
@@ -106,11 +144,13 @@ async function seedActivity(dir, rows) {
     "# Activity\n\n| timestamp | type | detail |\n|-----------|------|--------|\n" + body + "\n");
 }
 const ladder = (dir, today, args = []) =>
-  sh("node", [path.join(dir, "server", "audit.mjs"), "--gaps", today], { cwd: dir, env: env(dir) })
+  sh(process.execPath, [path.join(dir, "server", "audit.mjs"), "--gaps", today], { cwd: dir, env: env(dir) })
     .then((r) => JSON.parse(r.out).schedule_ladder);
 
 async function main() {
   const dir = await sandbox();
+  // platform.mjs from the SANDBOX copy, so scriptCommand() resolves scripts inside it.
+  plat = await import(pathToFileURL(path.join(dir, "server", "platform.mjs")).href);
   console.log("\nrun state\n");
 
   // ---- the state rule -------------------------------------------------------------------------
@@ -118,7 +158,15 @@ async function main() {
   check(st.state === "ok" && Array.isArray(st.gaps) && st.gaps.length === 0, "clean run reports ok", st.state);
 
   st = await runWith(dir, { canRead: false, digest: "delivered: whatsapp", boards: 53 });
-  check(st.state === "partial", "a run that could not read pages reports partial", st.state);
+  // When the verdict is wrong, the verdict alone says nothing about why. Show what the run
+  // actually measured, and the tail of its own log.
+  const why = async () => {
+    const tail = await fs.readFile(path.join(dir, "data", ".job-run.log"), "utf8")
+      .then((t) => t.trim().split("\n").slice(-8).join(" / ")).catch(() => "no log");
+    return `state=${st.state} gaps=${JSON.stringify(st.gaps)} coverage=${JSON.stringify(st.coverage)} log: ${tail}`;
+  };
+  check(st.state === "partial", "a run that could not read pages reports partial",
+    st.state === "partial" ? st.state : await why());
   check((st.gaps || []).includes("browser-read"), "…and names browser-read");
   check((st.gaps || []).includes("boards-queued"), "…and the boards it therefore could not drain");
   check(String(st.coverage?.blockers?.[0] || "").includes("Apple Events"), "…keeping the blocker text verbatim");
@@ -146,7 +194,7 @@ async function main() {
   let l = await ladder(dir, "2026-08-30");
   check(l.armed === false && l.action === "none", "an unarmed ladder recommends nothing");
 
-  await sh("bash", [path.join(dir, "scripts", "schedule-ladder.sh")], { cwd: dir, env: env(dir, { FAKE_TODAY: "2026-08-30" }) });
+  await runScript(dir, "schedule-ladder", [], { FAKE_TODAY: "2026-08-30" });
   l = await ladder(dir, "2026-08-30");
   check(l.armed === true && l.tier === 1 && l.action === "none",
     "arming on a install with months of stale history still leaves it daily", `dry_days=${l.dry_days}`);
@@ -155,7 +203,7 @@ async function main() {
   l = await ladder(dir, "2026-09-02");   // armed 08-30, so 3 dry days
   check(l.action === "warn" && l.next_tier === 2, "3 dry days warns first", l.why);
 
-  let r = await sh("bash", [path.join(dir, "scripts", "schedule-ladder.sh")], { cwd: dir, env: env(dir, { FAKE_TODAY: "2026-09-02" }) });
+  let r = await runScript(dir, "schedule-ladder", [], { FAKE_TODAY: "2026-09-02" });
   const afterWarn = JSON.parse(await fs.readFile(path.join(dir, "data", ".schedule-tier.json"), "utf8"));
   check(afterWarn.tier === 1, "…and does not step down on the same run that warned", `tier=${afterWarn.tier}`);
 
@@ -176,14 +224,21 @@ async function main() {
   l = await ladder(dir, "2026-09-05");
   check(l.action === "step" && l.next_tier === 2, "a warned ladder steps down on the next run", l.why);
 
-  await sh("bash", [path.join(dir, "scripts", "set-schedule.sh"), "08:00", "1,4"], { cwd: dir, env: env(dir) });
+  await runScript(dir, "set-schedule", ["08:00", "1,4"]);
   const plist = path.join(dir, "home", "Library", "LaunchAgents", "com.jobseeker.jobrun.plist");
-  const shown = await sh("bash", [path.join(dir, "scripts", "set-schedule.sh"), "--show"], { cwd: dir, env: env(dir) });
+  // The artefact the schedule leaves behind: a plist in the sandboxed HOME on macOS, a registered
+  // Task Scheduler task (JobSeeker\JobRunTest, never the real one) on Windows. Same assertion,
+  // asked of whichever object the OS actually uses.
+  const scheduleExists = async () =>
+    IS_WIN
+      ? (await sh("schtasks.exe", ["/Query", "/TN", WIN_TASK])).code === 0
+      : await fs.access(plist).then(() => true, () => false);
+  const shown = await runScript(dir, "set-schedule", ["--show"]);
   check(shown.out.trim() === "08:00 1,4", "tier 2 writes a Mon+Thu launch agent to the sandboxed HOME", shown.out.trim());
-  check(await fs.access(plist).then(() => true, () => false), "…and the plist really exists there");
+  check(await scheduleExists(), IS_WIN ? "…and the scheduled task really exists there" : "…and the plist really exists there");
 
-  await sh("bash", [path.join(dir, "scripts", "set-schedule.sh"), "--remove"], { cwd: dir, env: env(dir) });
-  check(!(await fs.access(plist).then(() => true, () => false)), "tier 4 removes it again");
+  await runScript(dir, "set-schedule", ["--remove"]);
+  check(!(await scheduleExists()), "tier 4 removes it again");
 
   // ---- abandonment turns it off -------------------------------------------------------------------
   // Reset warned_at explicitly: the previous case left one standing, and a test that inherits its
@@ -208,6 +263,9 @@ async function main() {
   check(l.next_tier === 4, "abandonment outranks a pending curation step", `next=${l.next_tier}`);
 
   console.log(`\n${fail ? "FAIL" : "PASS"} — ${pass} ok, ${fail} failed\n`);
+  // On macOS the schedule lives inside the sandbox HOME and goes with it. On Windows it is
+  // registered with the OS, so it has to be unregistered even though the last case removed it.
+  if (IS_WIN) await sh("schtasks.exe", ["/Delete", "/TN", WIN_TASK, "/F"]).catch(() => {});
   await fs.rm(dir, { recursive: true, force: true });
   return fail ? 1 : 0;
 }

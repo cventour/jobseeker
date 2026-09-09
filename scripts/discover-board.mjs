@@ -163,7 +163,7 @@ async function probeCareers(company) {
 
 function record(json) {
   return new Promise((resolve) => {
-    const child = spawn("node", [path.join(ROOT, "server", "record.mjs"), "upsert-board", JSON.stringify(json)], {
+    const child = spawn(process.execPath, [path.join(ROOT, "server", "record.mjs"), "upsert-board", JSON.stringify(json)], {
       cwd: ROOT,
       stdio: ["ignore", "pipe", "pipe"],
     });

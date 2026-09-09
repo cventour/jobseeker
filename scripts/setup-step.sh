@@ -1,5 +1,6 @@
 #!/bin/bash
 # One step of the graphical setup, run as a detached child of JobSeeker.app.
+# Windows twin: scripts/win/setup-step.ps1 — change both together.
 #
 #   bash scripts/setup-step.sh check-all      report the state of every prerequisite, change nothing
 #   bash scripts/setup-step.sh node           install Node, then verify it
@@ -122,7 +123,7 @@ wa_number() {
   sed -n 's/^WHATSAPP_PHONE_NUMBER=//p' "$WA_DIR/.env" | head -1
 }
 check_whatsapp() {
-  wa_paired || return 1
+  wa_linked || wa_paired || return 1
   local n; n="$(wa_number 2>/dev/null)"
   if [ -n "$n" ]; then printf 'connected as +%s' "$n"; else printf 'connected'; fi
 }
@@ -488,13 +489,75 @@ do_start() {
 # real, working WhatsApp link.
 WA_DIR="${JOBSEEKER_WA_DIR:-$HOME/.whatsapp-channel}"
 WA_PLUGIN_REPO="Rich627/whatsapp-claude-plugin"
-WA_PLUGIN="whatsapp-claude-channel@whatsapp-claude-plugin"
+WA_MARKETPLACE="whatsapp-claude-plugin"
+# The name the plugin had when this was written. It is a fallback, not the answer: the author
+# renamed it (whatsapp-claude-channel -> whatsapp-channel) without changing the marketplace, and
+# every install after that failed with "not found in marketplace". wa_plugin_name reads the name
+# out of the marketplace once it has been cloned, so the next rename costs nothing.
+WA_PLUGIN_FALLBACK="whatsapp-claude-channel"
 
+# What the marketplace calls its WhatsApp plugin, right now. Read from the clone rather than
+# remembered here: the marketplace kept its name and version while the plugin inside it was
+# renamed, so a hardcoded name is a promise about somebody else's repository they never made.
+wa_plugin_name() {
+  local m="$HOME/.claude/plugins/marketplaces/$WA_MARKETPLACE/.claude-plugin/marketplace.json"
+  local n=""
+  if [ -f "$m" ]; then
+    n="$(node -e '
+      const fs = require("fs");
+      try {
+        const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const p = (j.plugins || []).find((x) => x && typeof x.name === "string" && x.name.includes("whatsapp"));
+        if (p) process.stdout.write(p.name);
+      } catch {}
+    ' "$m" 2>/dev/null)"
+  fi
+  if [ -n "$n" ]; then
+    [ "$n" = "$WA_PLUGIN_FALLBACK" ] || log "the marketplace now calls the plugin '$n'"
+    printf '%s' "$n"
+  else
+    printf '%s' "$WA_PLUGIN_FALLBACK"
+  fi
+}
+
+# Did WE watch this link succeed?
+#
+# The only claim worth making about a connection is one we saw made. When the channel reports
+# "connected as <jid>" this step writes that down here, and this file -- ours, written by us, at a
+# moment we witnessed -- is what "already connected" means from then on.
+#
+# It exists because every attempt to infer the answer from Baileys' own files has been wrong. The
+# worst was the retry: a first attempt that failed left a credential file the next run read as
+# proof, so pressing Try again reported success instantly to someone who had never linked anything.
+wa_linked() {
+  local m="$WA_DIR/.jobseeker-linked.json"
+  [ -f "$m" ] || return 1
+  # The marker records what we saw; the credentials are what the channel actually uses. If someone
+  # has cleared those, the link is gone whatever we remember about it.
+  [ -f "$WA_DIR/.baileys_auth/creds.json" ] || return 1
+  local n; n="$(node_bin)" || return 1
+  "$n" -e 'try{const c=require(process.argv[1]);process.exit((c.jid||c.number)?0:1)}catch{process.exit(1)}' \
+    "$m" 2>/dev/null
+}
+
+wa_write_linked() {
+  local jid="$1" number="$2"
+  local n; n="$(node_bin)" || return 0
+  "$n" -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({jid:process.argv[2],number:process.argv[3]}))' \
+    "$WA_DIR/.jobseeker-linked.json" "$jid" "$number" 2>/dev/null || log "could not record the link"
+}
+
+# A link that completed, read out of Baileys' own file.
+#
+# For installs that paired before the marker above existed, and as a second opinion. `registered`
+# alone is worthless -- Baileys sets it when the code is REQUESTED. `account` and `signalIdentities`
+# come from the server's pair-success payload, so they appear only after a phone has actually
+# accepted the code; all four together is the strongest statement this file can make.
 wa_paired() {
   local creds="$WA_DIR/.baileys_auth/creds.json"
   [ -f "$creds" ] || return 1
   local n; n="$(node_bin)" || return 1
-  "$n" -e 'try{const c=require(process.argv[1]);process.exit(c.registered?0:1)}catch{process.exit(1)}' \
+  "$n" -e 'try{const c=require(process.argv[1]);const ok=c.registered&&c.me&&c.me.id&&c.account&&Array.isArray(c.signalIdentities)&&c.signalIdentities.length;process.exit(ok?0:1)}catch{process.exit(1)}' \
     "$creds" 2>/dev/null
 }
 
@@ -513,8 +576,9 @@ do_whatsapp() {
   pct 5
 
   # Already linked? Do not touch it. Re-pairing a working channel to show a nicer screen would be
-  # the worst possible trade.
-  if wa_paired; then
+  # the worst possible trade. But "already linked" now means a link we watched succeed, or a
+  # credential file bearing the marks of a completed handshake -- not merely one that exists.
+  if wa_linked || wa_paired; then
     local n; n="$(wa_number 2>/dev/null)"
     log "already paired - leaving the existing link alone"
     if [ -n "$n" ]; then detail whatsapp "connected as +$n"; else detail whatsapp "connected"; fi
@@ -553,10 +617,13 @@ do_whatsapp() {
   log "claude plugin marketplace add $WA_PLUGIN_REPO"
   "$claude" plugin marketplace add "$WA_PLUGIN_REPO" 2>&1 | sed 's/^/    /'
   pct 45
+  local name ref
+  name="$(wa_plugin_name)"
+  ref="$name@$WA_MARKETPLACE"
   say "Installing the WhatsApp plugin"
-  log "claude plugin install $WA_PLUGIN"
-  "$claude" plugin install "$WA_PLUGIN" 2>&1 | sed 's/^/    /'
-  if ! "$claude" plugin list 2>/dev/null | grep -q "whatsapp-claude-channel"; then
+  log "claude plugin install $ref"
+  "$claude" plugin install "$ref" 2>&1 | sed 's/^/    /'
+  if ! "$claude" plugin list 2>/dev/null | grep -qF "$name"; then
     detail whatsapp "The plugin did not install — see the log"
     step whatsapp fail; finish fail
   fi
@@ -603,29 +670,67 @@ do_whatsapp() {
     rm -f "$WA_DIR/.server.lock"
   fi
 
+  # Nothing here is linked -- the check at the top of this function has already said so. Anything
+  # left in the auth folder is the wreckage of an attempt that did not finish: a wrong number, a
+  # code that was never typed, a code typed wrong. Baileys will not request a fresh code over the
+  # top of it, and it is exactly what the next run would misread as success. Clear it.
+  if [ -d "$WA_DIR/.baileys_auth" ]; then
+    log "clearing an unfinished pairing attempt before asking for a new code"
+    rm -rf "$WA_DIR/.baileys_auth"
+  fi
+  rm -f "$WA_DIR/.jobseeker-linked.json"
+
   local before=0
   [ -f "$WA_DIR/pairing.log" ] && before="$(wc -l < "$WA_DIR/pairing.log" 2>/dev/null | tr -d ' ')"
   say "Asking WhatsApp for a pairing code"
+  # stdin must stay OPEN, and `< /dev/null` is the opposite of that.
+  #
+  # The channel is an MCP stdio server: it has process.stdin.on("end", shutdown). /dev/null reads as
+  # end-of-file immediately, so it shut itself down seconds after starting and exited on its grace
+  # window while the phone was still on "Logging in" -- the phone then failed every time, for a
+  # reason nothing on this side reported.
+  #
+  # A fifo opened read-write on a spare descriptor never reports EOF and never blocks, and the
+  # descriptor closes when this script does. No data is ever written to it; the channel just needs
+  # a stdin that stays open.
+  local fifo="$WORK/wa-stdin.fifo"
+  rm -f "$fifo"
+  mkfifo "$fifo" 2>/dev/null || log "could not make a fifo; the channel may shut itself down early"
+  exec 9<>"$fifo"
   nohup "$bun" run --cwd "$plugin_dir" --shell=bun --silent start \
-    >> "$WORK/whatsapp-server.log" 2>&1 < /dev/null &
+    >> "$WORK/whatsapp-server.log" 2>&1 < "$fifo" &
   local server_pid=$!
   log "channel server pid $server_pid"
 
-  local code="" i
-  for i in $(seq 1 60); do
+  # Both places it could appear, for two minutes. Reading one file for sixty seconds assumed the
+  # plugin still writes that file, still writes that sentence, and that WhatsApp answers within a
+  # minute of a cold start -- three assumptions about a third party's program.
+  local code="" i exit_noted=""
+  for i in $(seq 1 240); do
     if [ -f "$WA_DIR/pairing.log" ]; then
       code="$(tail -n +$((before + 1)) "$WA_DIR/pairing.log" 2>/dev/null \
               | sed -n 's/.*PAIRING CODE: \([A-Z0-9-]*\).*/\1/p' | tail -1)"
-      [ -n "$code" ] && break
     fi
-    kill -0 "$server_pid" 2>/dev/null || { log "the channel server exited early"; break; }
-    pct $(( 65 + i / 4 )); sleep 1
+    if [ -z "$code" ]; then
+      code="$(sed -n 's/.*PAIRING CODE: \([A-Z0-9-]*\).*/\1/p' "$WORK/whatsapp-server.log" 2>/dev/null | tail -1)"
+    fi
+    [ -n "$code" ] && break
+    # A launcher that has exited says nothing about the server it started: `bun run start` hands
+    # over to a child and leaves. Keep reading the logs until the deadline.
+    if ! kill -0 "$server_pid" 2>/dev/null && [ -z "$exit_noted" ]; then
+      exit_noted=1; log "the launcher process has exited; still watching the logs for a code"
+    fi
+    pct $(( 65 + i / 15 )); sleep 0.5
   done
 
   if [ -z "$code" ]; then
     kill "$server_pid" 2>/dev/null
-    log "no pairing code appeared within 60s"
-    detail whatsapp "WhatsApp did not send a code. Check the number and try again."
+    log "no pairing code appeared within 120s - here is what the logs say"
+    for f in "$WA_DIR/pairing.log" "$WORK/whatsapp-server.log"; do
+      log "--- $f"
+      if [ -f "$f" ]; then tail -25 "$f" | sed 's/^/    /'; else log "  (absent)"; fi
+    done
+    detail whatsapp "WhatsApp did not send a code. Check the number, or collect the logs below."
     step whatsapp fail; finish fail
   fi
   log "pairing code issued"
@@ -634,12 +739,49 @@ do_whatsapp() {
   pct 85
 
   # ---- wait for the phone ----
+  # ---- wait for the phone, and take nobody's word for it but the channel's ----
+  #
+  # Reading the credential file was the wrong question twice over. Baileys writes creds.json while
+  # the pairing is being REQUESTED, so `registered` was true within a second and `me` shortly after
+  # -- the step reported "Connected" to people whose phones had never been touched.
+  #
+  # The plugin knows the answer and says so. Baileys raises connection 'open' only once the device
+  # is actually registered, and the plugin's handler writes to stderr:
+  #
+  #     whatsapp channel: connected as 971XXXXXXXXX@s.whatsapp.net
+  #
+  # That line is the confirmation. Nothing else is accepted as one, except a credential file that
+  # still looks complete twenty seconds later -- a fallback for the day that wording changes, long
+  # enough that it can never fire on a fresh request.
   say "Waiting for your phone"
+  local jid=""
   for i in $(seq 1 150); do
-    if wa_paired; then
+    jid="$(grep -ho 'connected as [^ ]*' "$WORK/whatsapp-server.log" 2>/dev/null | tail -1 | sed 's/^connected as //')"
+    if [ -n "$jid" ]; then
+      jid="${jid%%[.,;]}"
+      log "the channel reports it is connected as $jid"
+      say "Finishing on your phone"
+      # Do NOT stop the channel here. Linking is not over when WhatsApp says the device is
+      # connected: the phone then syncs history and app state to it, and its own screen sits on
+      # "Logging in" until that finishes. Killing the channel a second after the handshake left the
+      # link genuinely made and the phone spinning forever. The plugin says when it is really done.
+      local settle
+      for settle in $(seq 1 60); do
+        grep -q 'Ready to receive messages' "$WORK/whatsapp-server.log" 2>/dev/null && break
+        sleep 0.5
+      done
       kill "$server_pid" 2>/dev/null
-      log "paired"
-      detail whatsapp "Connected"
+      local n; n="$(wa_number)"
+      wa_write_linked "$jid" "$n"
+      if [ -n "$n" ]; then detail whatsapp "connected as +$n"; else detail whatsapp "Connected"; fi
+      step whatsapp ok; pct 100; finish ok
+    fi
+    if [ "$i" -ge 10 ] && wa_paired; then
+      kill "$server_pid" 2>/dev/null
+      log "no 'connected as' line, but the credentials have looked complete for 20s"
+      local n2; n2="$(wa_number)"
+      wa_write_linked "" "$n2"
+      if [ -n "$n2" ]; then detail whatsapp "connected as +$n2"; else detail whatsapp "Connected"; fi
       step whatsapp ok; pct 100; finish ok
     fi
     sleep 2

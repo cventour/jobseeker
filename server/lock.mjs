@@ -54,9 +54,16 @@ async function inspect(LOCK_FILE) {
   }
 }
 
+// Codes that mean "someone else got there first", per platform. See the catch in acquire().
+const CONTENDED = process.platform === "win32"
+  ? new Set(["EEXIST", "EPERM", "EACCES", "EBUSY"])
+  : new Set(["EEXIST"]);
+const isContended = (e) => CONTENDED.has(e?.code);
+
 async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
   const token = mintToken();
   const deadline = Date.now() + timeoutMs;
+  let lastContendedCode = null;
   await fs.mkdir(path.dirname(LOCK_FILE), { recursive: true });
 
   for (;;) {
@@ -66,13 +73,34 @@ async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
       await fs.writeFile(LOCK_FILE, token, { flag: "wx" });
       return token;
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      // POSIX reports a lost race as EEXIST and nothing else. Windows is looser: when two processes
+      // call create-exclusive on the same path in the same instant, or one is opening the file while
+      // another deletes it, the loser can come back EPERM, EACCES or EBUSY instead. Treating those
+      // as fatal is how a parallel agent lost its write on Windows CI -- the exact failure this lock
+      // exists to prevent. They mean "contended, try again", so they rejoin the loop. A real
+      // permission problem still surfaces: it simply keeps failing until the deadline below, and
+      // the timeout names the code it kept seeing.
+      if (!isContended(e)) throw e;
+      lastContendedCode = e.code;
     }
 
     const held = await inspect(LOCK_FILE);
     // Absent → it was just released. Retry immediately; do NOT delete anything, or we would
-    // destroy the lock of whoever acquired it in the meantime.
-    if (held === null) continue;
+    // destroy the lock of whoever acquired it in the meantime. The deadline is checked here as
+    // well as below, because a create that fails while the file does not exist is not contention
+    // at all -- it is a directory we cannot write to -- and without this that case would spin
+    // forever instead of reporting itself.
+    if (held === null) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `Timed out after ${timeoutMs / 1000}s trying to create the ${label} lock at ${LOCK_FILE}` +
+            (lastContendedCode ? ` (last error: ${lastContendedCode})` : "") +
+            ". The lock is never there when we look, so the directory is most likely not writable."
+        );
+      }
+      await sleep(POLL_MS);
+      continue;
+    }
 
     if (held.ageMs > staleMs) {
       // Presumed-dead holder. Re-verify immediately before acting so we cannot break a lock that
@@ -85,7 +113,7 @@ async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
         const dead = `${LOCK_FILE}.dead.${process.pid}`;
         try {
           await fs.rename(LOCK_FILE, dead);
-          await fs.rm(dead, { force: true });
+          await rmWithWin32Retry(dead);
         } catch {
           /* another process broke it first */
         }
@@ -100,6 +128,22 @@ async function acquire(LOCK_FILE, { staleMs, timeoutMs, label }) {
       );
     }
     await sleep(POLL_MS + Math.random() * POLL_MS); // jitter so waiters don't sync up
+  }
+}
+
+// Windows file locks: rm() on a file another process still has open (antivirus, a concurrent
+// inspect()) fails with EPERM/EBUSY/EACCES instead of waiting. Retry briefly on win32 only; on
+// POSIX this is a single plain rm. Kept local rather than imported from md.mjs so lock.mjs stays
+// dependency-free of the data layer it guards.
+const WIN32_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+async function rmWithWin32Retry(file, attempts = 5, delayMs = 20) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fs.rm(file, { force: true });
+    } catch (e) {
+      if (process.platform !== "win32" || !WIN32_RETRY_CODES.has(e?.code) || i >= attempts) throw e;
+      await sleep(delayMs);
+    }
   }
 }
 
