@@ -72,6 +72,37 @@ main>#welcome{flex:1}
 h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .sub{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 18px;max-width:56ch}
 
+/* ---- the pairing code, pinned to the top of the window ----
+   A number you have to retype into a different program is the one thing on this page that must
+   never scroll away. It sits above main (which is the only thing that scrolls) and above the
+   instructions overlay, so it is on screen from the moment it is minted until it is used. */
+.pinbar{flex:none;position:relative;z-index:60;display:flex;align-items:center;gap:16px;
+  padding:12px 34px;background:var(--card);border-bottom:1px solid var(--acc)}
+.pinbar-lab{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);
+  flex:none}
+.pin{display:inline-flex;align-items:center;gap:14px;padding:7px 16px;border-radius:10px;
+  border:1px solid var(--acc);background:var(--bg);color:var(--fg);font:inherit;cursor:default;
+  flex:none}
+.pin:hover{background:var(--line)}
+.pin:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+/* letter-spacing pads the right of the last glyph too, so the same amount is added on the left
+   to keep the digits optically centred in their box. */
+.pin b{font:700 27px/1 ui-monospace,Menlo,monospace;letter-spacing:.32em;padding-left:.32em}
+.pin i{font-style:normal;font-size:12px;color:var(--acc);white-space:nowrap}
+.pinbar-hint{font-size:12.5px;color:var(--mut);line-height:1.45}
+/* With the bar up, the overlay starts below it rather than over it. */
+body.has-pin .modal{top:var(--pinh,0px)}
+body.has-pin .modal-box{max-height:calc(86vh - var(--pinh,0px))}
+
+/* ---- the same code, on the row it belongs to ---- */
+.rowpin{display:inline-flex;align-items:center;gap:10px;padding:3px 10px;margin-right:8px;
+  border:1px solid var(--acc);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;
+  cursor:default;vertical-align:middle}
+.rowpin:hover{background:var(--line)}
+.rowpin:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.rowpin b{font:700 17px/1 ui-monospace,Menlo,monospace;letter-spacing:.22em;padding-left:.22em}
+.rowpin i{font-style:normal;font-size:11.5px;color:var(--acc)}
+
 /* ---- the "here is where it went" modal ---- */
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;
   justify-content:center;z-index:50;padding:24px}
@@ -208,6 +239,14 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}.bar i{transition:none}}
 </style>
 
+<div class="pinbar" id="pinbar" hidden>
+  <span class="pinbar-lab">Pairing code</span>
+  <button class="pin" id="pin" type="button" aria-label="Copy the pairing code">
+    <b id="pin-digits">------</b><i id="pin-copy">Copy</i>
+  </button>
+  <span class="pinbar-hint">Type this into the extension’s options page and press Connect.<br>
+    It is good for a few minutes and can only be used once.</span>
+</div>
 <main>
   <div class="brand"><img class="mark" src="logo-128.png" alt=""><b>JobSeeker</b>
     <span id="brandnote">· first run on this Mac</span>
@@ -343,6 +382,62 @@ function farewell() {
   }, 120);
 }
 
+// ---- the pairing code ----------------------------------------------------------------------
+// Six digits that have to be typed into a different program. Clicking either copy of it puts it on
+// the clipboard and says so on the button itself, because a copy that gives no sign it happened is
+// a copy the user does not trust and types by hand anyway.
+function copyCode(code, badge, done) {
+  var said = false;
+  function ok() {
+    if (said) return;
+    said = true;
+    var was = badge.textContent;
+    badge.textContent = done || "Copied";
+    setTimeout(function () { badge.textContent = was; }, 1600);
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(ok, fallback);
+      return;
+    }
+  } catch (e) { /* fall through */ }
+  fallback();
+  // execCommand is deprecated and still the only thing that works when the page is not a secure
+  // context -- which is exactly what a file:// setup window is.
+  function fallback() {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = code;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      ok();
+    } catch (e) { /* nothing left to try; the digits are on screen either way */ }
+  }
+}
+
+var pinBar = document.getElementById("pinbar");
+var pinDigits = document.getElementById("pin-digits");
+var pinCopy = document.getElementById("pin-copy");
+var pinCode = "";
+document.getElementById("pin").onclick = function () { copyCode(pinCode, pinCopy); };
+
+function renderPin(st) {
+  // The WhatsApp screen shows its own code, full width, as the only thing on the page; a second
+  // copy of a different number above it would be two codes and no way to tell them apart.
+  var show = !!st.code && st.view === "work";
+  pinCode = show ? st.code : "";
+  if (show && pinDigits.textContent !== st.code) pinDigits.textContent = st.code;
+  pinBar.hidden = !show;
+  document.body.classList.toggle("has-pin", show);
+  // The overlay needs the bar's real height, and only the browser knows it.
+  document.body.style.setProperty("--pinh", show ? pinBar.offsetHeight + "px" : "0px");
+}
+
 var modalOk = document.getElementById("modal-ok");
 if (modalOk) { modalOk.onclick = function () { send("dismiss-modal"); }; }
 
@@ -433,6 +528,18 @@ function renderChecklist(st) {
     // so the person has to. The button sits on the row it belongs to, and is offered whether the
     // step is waiting, finished or failed -- it is a reference, not an error message.
     if (s.help) {
+      // Between the row and its instructions, where the eye already is: the code, then the button
+      // that explains where to type it.
+      if (s.id === "extension" && st.code && st.view === "work") {
+        var chip = el("button", "rowpin");
+        chip.type = "button";
+        chip.setAttribute("aria-label", "Copy the pairing code");
+        chip.appendChild(el("b", null, st.code));
+        var badge = el("i", null, "Copy");
+        chip.appendChild(badge);
+        chip.onclick = function () { copyCode(st.code, badge); };
+        slot.appendChild(chip);
+      }
       var howto = el("button", s.state === "running" ? "primary" : "", "Install instructions");
       howto.onclick = function () { send("help", s.help); };
       slot.appendChild(howto);
@@ -581,6 +688,8 @@ window.__render = function (st) {
     renderChecklist(st);
     document.getElementById("plan").hidden = true;
   }
+
+  renderPin(st);
 
   var prog = document.getElementById("progress");
   prog.hidden = !st.busy;

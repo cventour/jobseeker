@@ -155,6 +155,9 @@ const STEPS = [
     password: false,
     optional: true,
     interactive: true,
+    // Same reason as the extension: "Connect WhatsApp" names a thing, not an action. This one also
+    // needs a phone in your hand, so what it has to say cannot wait until the screen appears.
+    help: "whatsapp",
   },
 ];
 
@@ -343,12 +346,10 @@ function drainStepLog() {
       if (s2) s2.detail = q === -1 ? "" : rest.slice(q + 1);
     }
   }
-  // ui.html paints `code` only on the WhatsApp screen (#wa-code). The extension step runs in the
-  // ordinary work view, where the one thing that is always drawn is the need box, so its code is
-  // folded into that text -- same protocol on the step's side, same place on the page for both.
-  if (running === "extension" && state.code && state.need && !state.need.includes(state.code)) {
-    state.need = `${state.need}  Code: ${state.code}`;
-  }
+  // The extension's code used to be folded into the need box, where it read as one more sentence
+  // to get through. It now has a bar of its own pinned to the top of the window, which is where a
+  // number you have to type into another program belongs: still on screen after you have scrolled
+  // the instructions, and one click from the clipboard.
   state.log = plain.slice(-200).join("\n");
 }
 
@@ -459,7 +460,7 @@ function afterStep(ok) {
     // Stop the run and let the user decide: retry that row, or continue without it.
     state.title = "One step did not finish";
     state.subtitle = "Nothing else was changed. Try it again, or carry on without it.";
-    state.status = "Stopped|— the row below says what happened.";
+    state.status = "Stopped|— nothing else will run until that row is dealt with.";
     push();
     return;
   }
@@ -513,7 +514,7 @@ function onQueueEmpty() {
   state.view = "work";
   state.title = "Not finished";
   state.subtitle = "JobSeeker could not start. The rows below say why.";
-  state.status = "Stopped|";
+  state.status = "Stopped|— nothing else will run. The rows above say which step it was.";
   push();
 }
 
@@ -618,6 +619,35 @@ function showExtensionHelp() {
         : "Type the six-digit code this window shows and press Connect.",
     ],
     images: ["/help-chrome-extensions.png", "/help-chrome-details.png"],
+    path: "",
+  };
+  push();
+}
+
+/**
+ * What WhatsApp is for here, and what the person will be asked to do.
+ *
+ * The extension's help exists because Chrome will not let a program do the work. This one exists
+ * for a different reason: the step is optional, it asks for a phone number, and a row that says
+ * only "Connect WhatsApp" gives no way to decide whether to. So this says what it buys, what it
+ * costs, and that the phone has to be in reach -- before the screen that asks for the number.
+ */
+function showWhatsAppHelp() {
+  state.modal = {
+    title: "Connect WhatsApp",
+    body:
+      "Optional. It links this computer to your WhatsApp so JobSeeker can send you the daily " +
+      "digest there, and read job-related chats you point it at. Nothing is sent to anyone else, " +
+      "and you can skip this and add it later from the dashboard.",
+    steps: [
+      "Have your phone to hand — you finish this on the phone, not here.",
+      "On the next screen, type your WhatsApp number with its country code (for example +971…).",
+      "Press Send me a code. This window then shows an eight-character code.",
+      "On the phone: WhatsApp ▸ Settings ▸ Linked Devices ▸ Link a Device ▸ Link with phone " +
+        "number instead.",
+      "Type the code into the phone. The row here turns green once the phone answers.",
+    ],
+    images: [],
     path: "",
   };
   push();
@@ -738,6 +768,7 @@ function handleCommand(cmd) {
   }
   if (cmd.cmd === "help") {
     if (cmd.id === "extension") showExtensionHelp();
+    if (cmd.id === "whatsapp") showWhatsAppHelp();
     return;
   }
   if (cmd.cmd === "collect-logs") {

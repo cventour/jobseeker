@@ -55,7 +55,7 @@
 #   ::pct   <0-100>                       progress of the step now running
 #   ::say   <text>                        what is happening, right now
 #   ::need  <text>                        something only the user can do
-#   ::code  <XXXX-XXXX>                   a WhatsApp pairing code, to show large
+#   ::code  <XXXX-XXXX>                   a pairing code, to show large and on its own
 #   ::done  <ok|fail>                     this step is over
 
 $ErrorActionPreference = "Stop"
@@ -1287,7 +1287,8 @@ function Do-Extension {
 
   Emit ("::code " + $code)
   Write-Need ("In Chrome: turn on Developer mode (top right), click Load unpacked and " + $where +
-    ". Then open JobSeeker Bridge ▸ Details ▸ Extension options, type this code and click Connect." + $portNote)
+    ". Then open JobSeeker Bridge ▸ Details ▸ Extension options, type the code shown at the top " +
+    "of this window and click Connect." + $portNote)
   Write-Detail "extension" "Waiting for you to load it in Chrome"
 
   # ---- wait for it to actually connect ----
