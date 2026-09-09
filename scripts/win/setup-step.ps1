@@ -434,7 +434,12 @@ if (-not $WaDir) {
   $WaDir = Join-Path $uh ".whatsapp-channel"
 }
 $WaPluginRepo = "Rich627/whatsapp-claude-plugin"
-$WaPlugin = "whatsapp-claude-channel@whatsapp-claude-plugin"
+# The name the plugin had when this was written. It is a fallback, not the answer: the author
+# renamed it (whatsapp-claude-channel -> whatsapp-channel) without changing the marketplace, and
+# every install after that failed with "not found in marketplace". Get-WaPluginName reads the name
+# out of the marketplace the moment it has been cloned, so the next rename costs nothing.
+$WaPluginFallback = "whatsapp-claude-channel"
+$WaMarketplace = "whatsapp-claude-plugin"
 
 function Test-WaPaired {
   $creds = Join-Path $WaDir ".baileys_auth\creds.json"
@@ -867,10 +872,30 @@ function Do-Git {
 }
 
 # ---------------------------------------------------------------------------- claude code
+# Installing Claude Code and being able to use it are two different things: the binary lands
+# signed out, and every agent JobSeeker runs will fail at the first call with an auth error that
+# says nothing about setup. So the row says so, on the row, while the person is still in the
+# window that put it there.
+#
+# The file is the one Claude Code writes when a sign-in succeeds. Its presence is a good enough
+# hint to stop nagging someone who has already done it; its absence is never treated as an error.
+function Test-ClaudeSignedIn {
+  if ($env:ANTHROPIC_API_KEY) { return $true }
+  if (-not $env:USERPROFILE) { return $false }
+  return (Test-Path -LiteralPath (Join-Path $env:USERPROFILE ".claude\.credentials.json"))
+}
+
+function Write-ClaudeDetail([string]$Version, [bool]$Already) {
+  $t = $Version
+  if ($Already) { $t = "{0} (already installed)" -f $Version }
+  if (-not (Test-ClaudeSignedIn)) { $t = $t + " — sign in to Claude before the first run" }
+  Write-Detail "claude" $t
+}
+
 function Do-Claude {
   $c = Check-Claude
   if ($c.Ok) {
-    Write-Step "claude" "ok"; Write-Detail "claude" ("{0} (already installed)" -f $c.Text); Finish "ok"
+    Write-Step "claude" "ok"; Write-ClaudeDetail $c.Text $true; Finish "ok"
   }
   Write-Step "claude" "running"; Write-Pct 5
   Write-Say "Installing Claude Code from claude.ai"
@@ -896,7 +921,8 @@ function Do-Claude {
   $c = Check-Claude
   if ($c.Ok) {
     Write-Log ("verified: claude {0} at {1}" -f $c.Text, (Get-ClaudeBin))
-    Write-Detail "claude" $c.Text; Write-Step "claude" "ok"; Write-Pct 100; Finish "ok"
+    if (-not (Test-ClaudeSignedIn)) { Write-Log "not signed in yet - the row will say so" }
+    Write-ClaudeDetail $c.Text $false; Write-Step "claude" "ok"; Write-Pct 100; Finish "ok"
   }
   Write-Log "installer ran but claude is not on PATH"
   Write-Detail "claude" "Installed, but not found on PATH — the agents will not run yet"
@@ -1172,6 +1198,30 @@ function Do-Start {
 #
 # A timeout is not a failure. Chrome is optional on Windows and the same thing can be finished at
 # any time from Settings > Browser > Connect, so the step finishes as skipped and setup carries on.
+
+# A pairing code is good for five minutes (PAIR_TTL_MS in server\bridge.mjs). Renew at four, so a
+# code is replaced while it still works rather than after it has stopped.
+$PairRenewSeconds = 240
+
+# mintPairingCode() writes data\.bridge.pair.json, which is the same file the running bridge reads
+# when the extension posts a code, so minting out of process is exactly as good as asking the bridge
+# to do it. Minting again supersedes the last one, so this is also how a code is renewed.
+#
+# The module path is derived from the working directory rather than passed as an argument, and that
+# is not a style choice: under `node -e` process.argv[1] is the first USER argument, and bridge.mjs
+# treats "argv[1] resolves to me" as "I was run directly" and exits with a usage line. Handing it
+# its own path would make it refuse to be imported. The snippet travels in an environment variable
+# because 5.1's argument binder mangles the quotes in it on a command line.
+#
+# Returns the six digits, or "" -- every caller has something better to do than fail.
+function New-PairingCode {
+  $snippet = 'const p=require("path"),{pathToFileURL}=require("url");import(pathToFileURL(p.join(process.cwd(),"server","bridge.mjs")).href).then(m=>m.mintPairingCode(process.argv[1])).then(x=>console.log(x.code)).catch(e=>{console.error(e&&e.message?e.message:String(e));process.exit(1)})'
+  $r = Invoke-NodeSnippet -Snippet $snippet -ArgumentList @((Get-DataDir))
+  if ($r.ExitCode -eq 0 -and $r.Out -match '(\d{6})') { return $Matches[1] }
+  Write-Log ("could not mint a pairing code: " + $r.Err)
+  return ""
+}
+
 function Do-Extension {
   Write-Step "extension" "running"; Write-Pct 3
 
@@ -1241,20 +1291,10 @@ function Do-Extension {
   Write-Log ("bridge answering on port " + $st.Port)
 
   # ---- mint a pairing code ----
-  # mintPairingCode() writes data\.bridge.pair.json, which is the same file the running bridge reads
-  # when the extension posts a code, so minting out of process is exactly as good as asking the
-  # bridge to do it. The snippet travels in an environment variable because 5.1's argument binder
-  # mangles the quotes in it on a command line.
   Write-Pct 25
   Write-Say "Making a pairing code"
-  # The module path is derived from the working directory rather than passed as an argument, and
-  # that is not a style choice: under `node -e` process.argv[1] is the first USER argument, and
-  # bridge.mjs treats "argv[1] resolves to me" as "I was run directly" and exits with a usage line.
-  # Handing it its own path would make it refuse to be imported.
-  $snippet = 'const p=require("path"),{pathToFileURL}=require("url");import(pathToFileURL(p.join(process.cwd(),"server","bridge.mjs")).href).then(m=>m.mintPairingCode(process.argv[1])).then(x=>console.log(x.code)).catch(e=>{console.error(e&&e.message?e.message:String(e));process.exit(1)})'
-  $r = Invoke-NodeSnippet -Snippet $snippet -ArgumentList @((Get-DataDir))
-  $code = ""
-  if ($r.ExitCode -eq 0 -and $r.Out -match '(\d{6})') { $code = $Matches[1] }
+  $code = New-PairingCode
+  $codeMinted = Get-Date
   if (-not $code) {
     Write-Log ("could not mint a pairing code: " + $r.Err)
     Write-Detail "extension" "Could not make a pairing code — you can connect this later from Settings ▸ Browser"
@@ -1269,7 +1309,12 @@ function Do-Extension {
   if ($copied) { Write-Log ("copied to the clipboard: " + $extDir) }
   else { Write-Log ("could not reach the clipboard; the folder is " + $extDir) }
 
-  Write-Say "Opening chrome://extensions"
+  # Chrome is opened, but not ON the extensions page, and not for want of asking. Chrome drops
+  # chrome:// URLs given on the command line and opens the new tab instead -- measured on Chrome
+  # 152 three ways: as a bare argument, behind --new-window, and as --app=. All three landed on
+  # chrome://newtab/. So the URL is still passed (it costs nothing and a future Chrome may honour
+  # it) and the instructions carry the menu route, which always works.
+  Write-Say "Opening Chrome"
   try {
     Start-Process -FilePath $chromeExe -ArgumentList (ConvertTo-CmdLine @("chrome://extensions")) | Out-Null
   } catch {
@@ -1286,7 +1331,8 @@ function Do-Extension {
   if (-not $copied) { $where = "choose " + $extDir }
 
   Emit ("::code " + $code)
-  Write-Need ("In Chrome: turn on Developer mode (top right), click Load unpacked and " + $where +
+  Write-Need ("In Chrome, open the ⋮ menu ▸ Extensions ▸ Manage extensions. " +
+    "Turn on Developer mode (top right), click Load unpacked and " + $where +
     ". Then open JobSeeker Bridge ▸ Details ▸ Extension options, type the code shown at the top " +
     "of this window and click Connect." + $portNote)
   Write-Detail "extension" "Waiting for you to load it in Chrome"
@@ -1296,7 +1342,10 @@ function Do-Extension {
   # no "it probably worked" branch: the whole point of the step is that it does not have to guess.
   Write-Pct 45
   Write-Say "Waiting for the extension to connect"
-  $deadline = (Get-Date).AddMinutes(5)
+  # Fifteen minutes, not five. Loading an unpacked extension is four screens of Chrome for someone
+  # who has never seen chrome://extensions, and the old budget expired at the same moment the code
+  # did -- so the people most likely to need more time were the ones who got a dead number.
+  $deadline = (Get-Date).AddMinutes(15)
   $i = 0
   while ((Get-Date) -lt $deadline) {
     $i = $i + 1
@@ -1306,7 +1355,23 @@ function Do-Extension {
       Write-Detail "extension" "Connected to Chrome"
       Write-Step "extension" "ok"; Write-Pct 100; Finish "ok"
     }
-    Write-Pct ([Math]::Min(95, 45 + [int]($i / 3)))
+    # A pairing code lives five minutes. Rather than let it die on screen -- where it still looks
+    # perfectly usable, and is refused when typed -- mint another one before it does and show that
+    # instead. Minting supersedes the old code, so there is never more than one that works.
+    if (((Get-Date) - $codeMinted).TotalSeconds -ge $PairRenewSeconds) {
+      $fresh = New-PairingCode
+      if ($fresh) {
+        $code = $fresh
+        $codeMinted = Get-Date
+        Emit ("::code " + $code)
+        Write-Log "pairing code renewed before it expired"
+      } else {
+        # Keep showing the old one and try again shortly: a stale code that might still be within
+        # its five minutes beats no code at all.
+        $codeMinted = (Get-Date).AddSeconds(-$PairRenewSeconds + 20)
+      }
+    }
+    Write-Pct ([Math]::Min(95, 45 + [int]($i / 9)))
     Start-Sleep -Seconds 2
   }
   Write-Log "gave up waiting; nothing ever reported connected"
@@ -1322,6 +1387,29 @@ function Do-Extension {
 # author's page. It also needs bun -- the plugin's MCP server is launched with `bun run`, not node
 # -- which is why bun is installed here rather than as a JobSeeker prerequisite: nobody who skips
 # WhatsApp should be made to install a second runtime.
+# What the marketplace calls its WhatsApp plugin, right now.
+#
+# Read from the clone rather than remembered here, because the two are not the same fact: the
+# marketplace kept its name and version while the plugin inside it was renamed, so a hardcoded name
+# is a promise about somebody else's repository that they never made.
+function Get-WaPluginName {
+  $m = Join-Path $env:USERPROFILE (".claude\plugins\marketplaces\" + $WaMarketplace + "\.claude-plugin\marketplace.json")
+  try {
+    if (Test-Path -LiteralPath $m) {
+      $j = Get-Content -LiteralPath $m -Raw | ConvertFrom-Json
+      foreach ($pl in $j.plugins) {
+        if ($pl.name -and $pl.name -like "*whatsapp*") {
+          if ($pl.name -ne $WaPluginFallback) { Write-Log ("the marketplace now calls the plugin '" + $pl.name + "'") }
+          return $pl.name
+        }
+      }
+    }
+  } catch {
+    Write-Log ("could not read the marketplace listing: " + $_.Exception.Message)
+  }
+  return $WaPluginFallback
+}
+
 function Do-Whatsapp([string]$Phone) {
   Write-Step "whatsapp" "running"
   Write-Pct 5
@@ -1380,13 +1468,15 @@ function Do-Whatsapp([string]$Phone) {
   Write-Indented $r.Out
   Write-Indented $r.Err
   Write-Pct 45
+  $name = Get-WaPluginName
+  $ref = $name + "@" + $WaMarketplace
   Write-Say "Installing the WhatsApp plugin"
-  Write-Log ("claude plugin install " + $WaPlugin)
-  $r = Invoke-Captured -FilePath $claude -ArgumentList @("plugin", "install", $WaPlugin)
+  Write-Log ("claude plugin install " + $ref)
+  $r = Invoke-Captured -FilePath $claude -ArgumentList @("plugin", "install", $ref)
   Write-Indented $r.Out
   Write-Indented $r.Err
   $list = Invoke-Captured -FilePath $claude -ArgumentList @("plugin", "list")
-  if (-not ($list.Out -match "whatsapp-claude-channel")) {
+  if (-not ($list.Out -match [Regex]::Escape($name))) {
     Write-Detail "whatsapp" "The plugin did not install — see the log"
     Write-Step "whatsapp" "fail"; Finish "fail"
   }

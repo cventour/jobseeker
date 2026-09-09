@@ -72,12 +72,14 @@ main>#welcome{flex:1}
 h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .sub{color:var(--mut);font-size:13px;line-height:1.6;margin:0 0 18px;max-width:56ch}
 
-/* ---- the pairing code, pinned to the top of the window ----
-   A number you have to retype into a different program is the one thing on this page that must
-   never scroll away. It sits above main (which is the only thing that scrolls) and above the
-   instructions overlay, so it is on screen from the moment it is minted until it is used. */
-.pinbar{flex:none;position:relative;z-index:60;display:flex;align-items:center;gap:16px;
-  padding:12px 34px;background:var(--card);border-bottom:1px solid var(--acc)}
+/* ---- the pairing code, pinned to the top of the instructions ----
+   A number you have to retype into a different program must not scroll away while you are reading
+   how to use it. The instructions box is what scrolls, so the code is a sticky header inside it:
+   still there at step five, whatever the pictures have pushed off screen. Negative margins and the
+   box's own padding put its background edge to edge. */
+.pinbar{position:sticky;top:-22px;z-index:2;display:flex;align-items:center;gap:14px;
+  margin:-22px -24px 12px;padding:12px 24px;background:var(--card);
+  border-bottom:1px solid var(--acc)}
 .pinbar-lab{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);
   flex:none}
 .pin{display:inline-flex;align-items:center;gap:14px;padding:7px 16px;border-radius:10px;
@@ -89,10 +91,6 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
    to keep the digits optically centred in their box. */
 .pin b{font:700 27px/1 ui-monospace,Menlo,monospace;letter-spacing:.32em;padding-left:.32em}
 .pin i{font-style:normal;font-size:12px;color:var(--acc);white-space:nowrap}
-.pinbar-hint{font-size:12.5px;color:var(--mut);line-height:1.45}
-/* With the bar up, the overlay starts below it rather than over it. */
-body.has-pin .modal{top:var(--pinh,0px)}
-body.has-pin .modal-box{max-height:calc(86vh - var(--pinh,0px))}
 
 /* ---- a modal that turns pages ----
    Connecting WhatsApp is three short screens, not one long instruction. Each replaces the last,
@@ -270,14 +268,6 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}.bar i{transition:none}}
 </style>
 
-<div class="pinbar" id="pinbar" hidden>
-  <span class="pinbar-lab">Pairing code</span>
-  <button class="pin" id="pin" type="button" aria-label="Copy the pairing code">
-    <b id="pin-digits">------</b><i id="pin-copy">Copy</i>
-  </button>
-  <span class="pinbar-hint">Type this into the extension’s options page and press Connect.<br>
-    It is good for a few minutes and can only be used once.</span>
-</div>
 <main>
   <div class="brand"><img class="mark" src="logo-128.png" alt=""><b>JobSeeker</b>
     <span id="brandnote">· first run on this Mac</span>
@@ -297,6 +287,12 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
        one button, no state of its own. -->
   <div class="modal" id="modal" hidden>
     <div class="modal-box">
+      <div class="pinbar" id="pinbar" hidden>
+        <span class="pinbar-lab">Pairing code</span>
+        <button class="pin" id="pin" type="button" aria-label="Copy the pairing code">
+          <b id="pin-digits">------</b><i id="pin-copy">Copy</i>
+        </button>
+      </div>
       <h2 id="modal-title"></h2>
       <div id="modal-stage" hidden></div>
       <p id="modal-body"></p>
@@ -459,17 +455,25 @@ var pinCode = "";
 document.getElementById("pin").onclick = function () { copyCode(pinCode, pinCopy); };
 
 function renderPin(st) {
-  // Only the extension's code. WhatsApp mints one that looks just like it, and shows it on the
-  // page the user is already reading -- two codes at once, alike and unlabelled, is how the wrong
-  // one gets typed.
-  var show = !!st.code && st.codeFor === "extension" && st.view === "work";
+  // Only the extension's code, and only above the extension's instructions. WhatsApp mints one
+  // that looks just like it and shows it on the page it belongs to; two codes at once, alike and
+  // unlabelled, is how the wrong one gets typed.
+  var m = st.modal;
+  var show = !!st.code && st.codeFor === "extension" && !!m && m.help === "extension";
   pinCode = show ? st.code : "";
   if (show && pinDigits.textContent !== st.code) pinDigits.textContent = st.code;
   pinBar.hidden = !show;
-  document.body.classList.toggle("has-pin", show);
-  // The overlay needs the bar's real height, and only the browser knows it.
-  document.body.style.setProperty("--pinh", show ? pinBar.offsetHeight + "px" : "0px");
 }
+
+// Esc closes whatever the modal is showing. It is what Esc does everywhere else, and this window
+// has no other way out of a page of instructions than finding the button at the foot of it.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  var mod = document.getElementById("modal");
+  if (!mod || mod.hidden) return;
+  e.preventDefault();
+  send("dismiss-modal");
+});
 
 // ---- the modal's pages ---------------------------------------------------------------------
 // An ordinary modal has one page and a Close button. The WhatsApp one has several, and each needs
@@ -507,9 +511,13 @@ function buildWaPane(st, page, dir) {
     if (m.err) pane.appendChild(el("p", "hint bad", m.err));
     setTimeout(function () { try { inp.focus(); } catch (e) { /* not visible yet */ } }, 30);
   } else if (page === "code") {
-    if (st.code) {
+    // st.code alone is not enough. The extension step can still be waiting -- for fifteen minutes,
+    // by design -- and its six digits would sit here under a heading about a phone. Only a code
+    // this step minted is this step's code.
+    var mine = st.code && st.codeFor === "whatsapp" ? st.code : "";
+    if (mine) {
       var box = el("div", "panecode");
-      box.appendChild(el("b", null, st.code));
+      box.appendChild(el("b", null, mine));
       pane.appendChild(box);
       pane.appendChild(el("p", null,
         "On the phone: WhatsApp \u25b8 Settings \u25b8 Linked Devices \u25b8 Link a Device \u25b8 " +
@@ -550,6 +558,11 @@ function renderModalFoot(st) {
   }
   var close = function () { send("dismiss-modal"); };
   var m = st.modal;
+  if (m && m.help === "claude" && m.steps && m.steps.length) {
+    b("Close", "ghost", close);
+    b("Open sign-in", "primary", function () { send("claude-signin"); });
+    return;
+  }
   if (!m || m.flow !== "whatsapp") { b("Close", "primary", close); return; }
   if (m.page === "intro") {
     b("Not now", "ghost", close);
@@ -579,7 +592,8 @@ function renderModalStage(st) {
   // The code page redraws when the code arrives, and only then -- otherwise a redraw mid-typing
   // would replace the input under the user's hands.
   var same = page === waPage;
-  if (same && !(page === "code" && st.code && !stage.querySelector(".panecode"))) return;
+  var codeArrived = page === "code" && st.code && st.codeFor === "whatsapp" && !stage.querySelector(".panecode");
+  if (same && !codeArrived) return;
   var dir = ORDER.indexOf(page) < ORDER.indexOf(waPage) ? "back" : "fwd";
   if (same) dir = "";
   stage.textContent = "";
@@ -747,6 +761,7 @@ function renderActions(st) {
     ol.hidden = !(st.modal.steps && st.modal.steps.length);
     renderModalStage(st);
     renderModalFoot(st);
+    renderPin(st);
     var figs = document.getElementById("modal-figs");
     figs.textContent = "";
     (st.modal.images || []).forEach(function (src) {
@@ -760,6 +775,7 @@ function renderActions(st) {
   } else {
     mod.hidden = true;
     waPage = "";
+    renderPin(st);
   }
 
   if (st.view === "welcome") {
@@ -838,8 +854,6 @@ window.__render = function (st) {
     renderChecklist(st);
     document.getElementById("plan").hidden = true;
   }
-
-  renderPin(st);
 
   var prog = document.getElementById("progress");
   prog.hidden = !st.busy;

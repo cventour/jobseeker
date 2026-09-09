@@ -489,7 +489,36 @@ do_start() {
 # real, working WhatsApp link.
 WA_DIR="${JOBSEEKER_WA_DIR:-$HOME/.whatsapp-channel}"
 WA_PLUGIN_REPO="Rich627/whatsapp-claude-plugin"
-WA_PLUGIN="whatsapp-claude-channel@whatsapp-claude-plugin"
+WA_MARKETPLACE="whatsapp-claude-plugin"
+# The name the plugin had when this was written. It is a fallback, not the answer: the author
+# renamed it (whatsapp-claude-channel -> whatsapp-channel) without changing the marketplace, and
+# every install after that failed with "not found in marketplace". wa_plugin_name reads the name
+# out of the marketplace once it has been cloned, so the next rename costs nothing.
+WA_PLUGIN_FALLBACK="whatsapp-claude-channel"
+
+# What the marketplace calls its WhatsApp plugin, right now. Read from the clone rather than
+# remembered here: the marketplace kept its name and version while the plugin inside it was
+# renamed, so a hardcoded name is a promise about somebody else's repository they never made.
+wa_plugin_name() {
+  local m="$HOME/.claude/plugins/marketplaces/$WA_MARKETPLACE/.claude-plugin/marketplace.json"
+  local n=""
+  if [ -f "$m" ]; then
+    n="$(node -e '
+      const fs = require("fs");
+      try {
+        const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const p = (j.plugins || []).find((x) => x && typeof x.name === "string" && x.name.includes("whatsapp"));
+        if (p) process.stdout.write(p.name);
+      } catch {}
+    ' "$m" 2>/dev/null)"
+  fi
+  if [ -n "$n" ]; then
+    [ "$n" = "$WA_PLUGIN_FALLBACK" ] || log "the marketplace now calls the plugin '$n'"
+    printf '%s' "$n"
+  else
+    printf '%s' "$WA_PLUGIN_FALLBACK"
+  fi
+}
 
 wa_paired() {
   local creds="$WA_DIR/.baileys_auth/creds.json"
@@ -554,10 +583,13 @@ do_whatsapp() {
   log "claude plugin marketplace add $WA_PLUGIN_REPO"
   "$claude" plugin marketplace add "$WA_PLUGIN_REPO" 2>&1 | sed 's/^/    /'
   pct 45
+  local name ref
+  name="$(wa_plugin_name)"
+  ref="$name@$WA_MARKETPLACE"
   say "Installing the WhatsApp plugin"
-  log "claude plugin install $WA_PLUGIN"
-  "$claude" plugin install "$WA_PLUGIN" 2>&1 | sed 's/^/    /'
-  if ! "$claude" plugin list 2>/dev/null | grep -q "whatsapp-claude-channel"; then
+  log "claude plugin install $ref"
+  "$claude" plugin install "$ref" 2>&1 | sed 's/^/    /'
+  if ! "$claude" plugin list 2>/dev/null | grep -qF "$name"; then
     detail whatsapp "The plugin did not install — see the log"
     step whatsapp fail; finish fail
   fi

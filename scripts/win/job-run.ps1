@@ -283,7 +283,9 @@ function Reap-WhatsAppMcp {
   $found = @()
   try {
     $found = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
-      Where-Object { $_.CommandLine -like '*whatsapp-claude-channel*' -and $_.ProcessId -ne $PID })
+      # Both names: the plugin was renamed whatsapp-claude-channel -> whatsapp-channel upstream,
+      # and a machine set up before that still runs a process under the old one.
+      Where-Object { $_.CommandLine -match 'whatsapp(-claude)?-channel' -and $_.ProcessId -ne $PID })
   } catch {
     Log ("whatsapp MCP: could not enumerate processes (" + $_.Exception.Message + ") — continuing")
     return

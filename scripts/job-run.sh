@@ -204,7 +204,9 @@ run_with_timeout() {
 reap_whatsapp_mcp() {
   [ "${JOBRUN_REAP_WHATSAPP:-1}" = "1" ] || { echo "whatsapp reaping disabled"; return 0; }
   local pids
-  pids="$(pgrep -f "whatsapp-claude-channel" 2>/dev/null || true)"
+  # Both names: the plugin was renamed whatsapp-claude-channel -> whatsapp-channel upstream, and a
+  # machine set up before that still runs a process under the old one.
+  pids="$(pgrep -f "whatsapp(-claude)?-channel" 2>/dev/null || true)"
   if [ -z "$pids" ]; then
     echo "whatsapp MCP: no pre-existing instance — this run will spawn a clean one"
     return 0

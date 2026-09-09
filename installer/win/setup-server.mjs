@@ -107,6 +107,11 @@ const STEPS = [
     label: "Install Claude Code",
     note: "Where the agents live. Downloaded from claude.ai.",
     password: false,
+    // Installed and usable are not the same thing: the binary arrives signed out, and the first
+    // agent JobSeeker runs would fail with an auth error that says nothing about setup. The step
+    // says so on its own row, and this opens a terminal already running the sign-in.
+    help: "claude",
+    helpLabel: "Sign in",
   },
   {
     id: "chrome",
@@ -170,8 +175,10 @@ const STEPS = [
 // while that list is still being computed and says "Checking..." for several seconds.
 const state = {
   view: "welcome",
-  title: `Checking ${HOST_NOUN}`,
-  subtitle: "One moment — looking at what is already installed.",
+  // The welcome hides both of these and every other view sets them before it is shown, so they are
+  // only ever a fallback. They no longer say "one moment": nothing here waits on the survey.
+  title: "JobSeeker",
+  subtitle: "",
   brandnote: `· first run on ${HOST_NOUN}`,
   steps: [],
   pct: 0,
@@ -181,7 +188,7 @@ const state = {
   code: "",
   codeFor: "",
   waKnown: "",
-  status: "Looking…",
+  status: "Ready when you are.|",
   busy: false,
   failed: false,
   allInstalled: false,
@@ -195,18 +202,38 @@ function stepById(id) {
 // path nothing is. An empty list renders as no list.
 let quietStart = false;
 
+/**
+ * Is Claude Code already signed in?
+ *
+ * The file is the one Claude Code writes when a sign-in succeeds, and an API key in the
+ * environment is the other way to be authorised. Neither is read -- only their presence is
+ * checked, and only to decide whether to offer help nobody needs. A wrong answer here costs a
+ * button, never a step.
+ */
+function claudeSignedIn() {
+  if (process.env.ANTHROPIC_API_KEY) return true;
+  try {
+    return fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
+  } catch {
+    return false;
+  }
+}
+
 function syncSteps() {
   if (quietStart) {
     state.steps = [];
     return;
   }
+  const signedIn = claudeSignedIn();
   state.steps = STEPS.map((s) => ({
     id: s.id,
     label: s.label,
     note: s.note,
     password: !!s.password,
     optional: !!s.optional,
-    help: s.help || "",
+    // Someone already signed in does not need a Sign in button on the row, and being told to do
+    // something you have done reads as the software not knowing what it is doing.
+    help: s.id === "claude" && signedIn ? "" : s.help || "",
     helpLabel: s.helpLabel || "",
     state: s.state || "todo",
     detail: s.detail || "",
@@ -370,6 +397,8 @@ let phase = "boot";
 // Set when the user pressed Continue before the survey had finished; the plan is shown as soon as
 // there is one to show.
 let wantPlan = false;
+// Set when Begin was pressed before the survey had finished; the run starts as soon as it has.
+let wantBegin = false;
 let waOffered = false;
 // True while a WhatsApp run was started from the modal on the row, not from the WhatsApp screen.
 let waFromModal = false;
@@ -612,6 +641,15 @@ function decideWhatToDo() {
   // There is real work to do. The welcome is already on screen, so leave it there -- unless the
   // user has already pressed Continue and is waiting on us.
   state.status = "Nothing has been installed yet.|";
+  if (wantBegin) {
+    wantBegin = false;
+    wantPlan = false;
+    state.busy = false;
+    state.say = "";
+    enqueueAll();
+    startNext();
+    return;
+  }
   if (wantPlan) {
     wantPlan = false;
     showPlan();
@@ -632,18 +670,20 @@ function decideWhatToDo() {
 function showExtensionHelp() {
   const folder = path.join(REPO, "extension");
   state.modal = {
+    // Which instructions these are. The page shows the pairing code above them, and only these.
+    help: "extension",
     title: "Connect the Chrome extension",
     body:
       "Chrome does not let a program add this for you, so these five steps are yours. Chrome is " +
-      "already open on the right page, and the folder below is already on your clipboard.",
+      "open, and the folder below is already on your clipboard.",
     steps: [
-      "In Chrome, go to the Extensions page (it should already be open at chrome://extensions).",
+      // Not "it is already open there": Chrome discards chrome:// URLs given on the command line
+      // and lands on the new tab instead, so the menu route is the one that is always true.
+      "In Chrome, open the \u2807 menu \u25b8 Extensions \u25b8 Manage extensions.",
       "Top right, turn on Developer mode.",
       `Click Load unpacked and choose this folder — press Ctrl+V to paste it:\n${folder}`,
       "On the JobSeeker Bridge card, click Details, then scroll down to Extension options.",
-      state.code
-        ? `Type this code and press Connect:  ${state.code}`
-        : "Type the six-digit code this window shows and press Connect.",
+      "Type the pairing code shown at the top of this window, and press Connect.",
     ],
     images: ["/help-chrome-extensions.png", "/help-chrome-details.png"],
     path: "",
@@ -678,6 +718,75 @@ function showWhatsAppHelp() {
       "Type the code into the phone. The row here turns green once the phone answers.",
     ],
     err: "",
+  };
+  push();
+}
+
+/**
+ * Signing in to Claude, which cannot be done for anyone.
+ *
+ * It is a browser round trip that ends in a terminal, so the most this window can do is open that
+ * terminal with the command already running and say what to expect. Sign-in state is Claude Code's
+ * to keep; JobSeeker never sees the credentials and never asks for them.
+ */
+function showClaudeHelp() {
+  state.modal = {
+    help: "claude",
+    title: "Sign in to Claude",
+    body:
+      "Claude Code arrives signed out. JobSeeker's agents run through it, so until you sign in " +
+      "once, every run will stop at the first step. It is a one-off.",
+    steps: [
+      "Press Open sign-in below. A terminal window opens with Claude already running.",
+      "Choose your login method. Claude opens your browser to finish it.",
+      "When the browser says you are signed in, close the terminal. Nothing else to do.",
+    ],
+    images: [],
+    path: "",
+  };
+  push();
+}
+
+/**
+ * Open a real console with `claude` running in it.
+ *
+ * A console, not a hidden process: the sign-in is a conversation with the user -- it prints a URL,
+ * waits, and asks which account. Anything without a visible window would hang forever on a prompt
+ * nobody can see.
+ */
+function openClaudeSignin() {
+  const bin = platform.resolveBin("claude");
+  if (!bin) {
+    state.modal = {
+      title: "Claude Code is not on PATH",
+      body:
+        "It cannot be started from here. Install it first — the row above does that — then try " +
+        "this again.",
+      path: "",
+    };
+    push();
+    return;
+  }
+  log(`opening a terminal for: ${bin}`);
+  try {
+    if (platform.IS_WIN) {
+      // `start` needs the empty title argument, or it takes the quoted path as the window title.
+      spawn("cmd", ["/c", "start", "", "cmd", "/k", bin], { cwd: REPO, detached: true, stdio: "ignore" }).unref();
+    } else {
+      spawn("open", ["-a", "Terminal", bin], { cwd: REPO, stdio: "ignore" }).unref();
+    }
+  } catch (e) {
+    log(`could not open a terminal: ${e.message}`);
+  }
+  state.modal = {
+    help: "claude",
+    title: "Finish in the terminal",
+    body:
+      "A terminal window is open with Claude running. Follow what it asks — it will open your " +
+      "browser — then close it and come back here.",
+    steps: [],
+    images: [],
+    path: "",
   };
   push();
 }
@@ -718,11 +827,20 @@ function showPlan() {
   const missing = STEPS.filter((s) => s.state !== "ok");
   state.view = "plan";
   state.title = "Here is everything that will happen.";
+  // Before the survey has landed, every step still reads as "not done", so the count below would
+  // claim this PC has nothing. Say nothing about the count until it is known.
+  const counted = phase === "ready";
   const need = missing.filter((s) => s.id !== "start" && s.id !== "configure");
-  state.subtitle = need.length
-    ? `JobSeeker needs ${need.length} thing${need.length > 1 ? "s" : ""} ${HOST_NOUN} does not have ` +
-      "yet. Nothing is installed until you press Begin, and nothing is sent anywhere."
-    : "Almost there — just your settings and a first start.";
+  if (!counted) {
+    state.subtitle =
+      "Nothing is installed until you press Begin, and nothing is sent anywhere. Whatever this " +
+      `${HOST_NOUN} already has is skipped.`;
+  } else {
+    state.subtitle = need.length
+      ? `JobSeeker needs ${need.length} thing${need.length > 1 ? "s" : ""} ${HOST_NOUN} does not have ` +
+        "yet. Nothing is installed until you press Begin, and nothing is sent anywhere."
+      : "Almost there — just your settings and a first start.";
+  }
   state.status = "Ready|— it checks first and skips whatever is already installed.";
   push();
 }
@@ -785,6 +903,19 @@ function handleCommand(cmd) {
     return;
   }
   if (cmd.cmd === "wa-start") {
+    // One step at a time. The extension step waits fifteen minutes for a human, and starting
+    // WhatsApp on top of it would replace the child this window is reading from -- the extension
+    // would go silent, and its pairing code would keep arriving into a window about a phone.
+    if (running) {
+      log(`refused wa-start: ${running} is still running`);
+      if (state.modal && state.modal.flow === "whatsapp") {
+        state.modal.page = "number";
+        state.modal.err =
+          "Something else is still running in this window. Let it finish, or close it, then try again.";
+        push();
+      }
+      return;
+    }
     state.code = "";
     state.codeFor = "";
     state.failed = false;
@@ -799,23 +930,23 @@ function handleCommand(cmd) {
     return;
   }
   if (cmd.cmd === "continue") {
-    // The survey usually finishes long before anyone reads the welcome, but it is allowed to be
-    // slow. Rather than showing a plan that is still being written, remember that the user asked
-    // for it and show it the moment there is one.
-    if (phase !== "ready") {
-      wantPlan = true;
-      state.title = `Checking ${HOST_NOUN}`;
-      state.subtitle = "One moment — looking at what is already installed.";
-      state.view = "plan";
-      push();
-      return;
-    }
+    // The plan is shown immediately, even mid-survey. It used to put up "Checking this PC / one
+    // moment" instead, which made a button press feel like a queue: the survey is this program's
+    // business, not something to hold a person at a blank screen for. The list of steps is known
+    // without it; all the survey adds is which of them are already done, and it fills those in as
+    // it lands. So: show the plan, and let it improve underneath.
+    if (phase !== "ready") wantPlan = true;
     showPlan();
     return;
   }
   if (cmd.cmd === "help") {
     if (cmd.id === "extension") showExtensionHelp();
     if (cmd.id === "whatsapp") showWhatsAppHelp();
+    if (cmd.id === "claude") showClaudeHelp();
+    return;
+  }
+  if (cmd.cmd === "claude-signin") {
+    openClaudeSignin();
     return;
   }
   if (cmd.cmd === "collect-logs") {
@@ -834,6 +965,17 @@ function handleCommand(cmd) {
   }
   if (cmd.cmd === "begin") {
     state.failed = false;
+    // Someone can read the plan and press Begin faster than the survey finishes. Running now would
+    // reinstall things this PC already has -- harmless, since every step checks first, but slow and
+    // alarming to watch. A second or two of "checking" is the honest wait, and it is a wait the
+    // user asked for by pressing the button.
+    if (phase !== "ready") {
+      wantBegin = true;
+      state.busy = true;
+      state.say = "Checking what is already installed";
+      push();
+      return;
+    }
     enqueueAll();
     startNext();
     return;
