@@ -279,7 +279,21 @@ function launchStep(id, extraArg) {
   const c = platform.scriptCommand("setup-step", args);
   log(`run: ${c.cmd} ${c.args.join(" ")}`);
   try {
-    child = spawn(c.cmd, c.args, { cwd: REPO, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    // stdin is a PIPE we never write to and never close, not "ignore".
+    //
+    // "ignore" gives the step NUL, which reads as end-of-file the instant anything looks at it.
+    // That would be harmless if the step were the only reader -- but the WhatsApp channel server it
+    // starts inherits that handle, and that server is an MCP stdio server: it has
+    // process.stdin.on("end", shutdown). So it shut itself down seconds after starting, took its
+    // two-second grace window, and exited while the phone was still on "Logging in". The phone then
+    // failed, every time, for a reason nothing on this side reported.
+    //
+    // Measured on Windows 11: a child of a parent whose stdin is NUL reports STDIN-EOF immediately;
+    // the same child under a parent with a real stdin is still alive three seconds later.
+    child = spawn(c.cmd, c.args, { cwd: REPO, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    // Never end() this. An open pipe with no writer is exactly what the channel needs: no data, no
+    // EOF. It closes when the step exits, which is when the channel should stop caring anyway.
+    if (child.stdin) child.stdin.on("error", () => { /* the step may exit first; nothing to do */ });
   } catch (e) {
     child = null;
     running = null;

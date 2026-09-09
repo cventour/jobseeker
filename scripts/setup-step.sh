@@ -683,8 +683,22 @@ do_whatsapp() {
   local before=0
   [ -f "$WA_DIR/pairing.log" ] && before="$(wc -l < "$WA_DIR/pairing.log" 2>/dev/null | tr -d ' ')"
   say "Asking WhatsApp for a pairing code"
+  # stdin must stay OPEN, and `< /dev/null` is the opposite of that.
+  #
+  # The channel is an MCP stdio server: it has process.stdin.on("end", shutdown). /dev/null reads as
+  # end-of-file immediately, so it shut itself down seconds after starting and exited on its grace
+  # window while the phone was still on "Logging in" -- the phone then failed every time, for a
+  # reason nothing on this side reported.
+  #
+  # A fifo opened read-write on a spare descriptor never reports EOF and never blocks, and the
+  # descriptor closes when this script does. No data is ever written to it; the channel just needs
+  # a stdin that stays open.
+  local fifo="$WORK/wa-stdin.fifo"
+  rm -f "$fifo"
+  mkfifo "$fifo" 2>/dev/null || log "could not make a fifo; the channel may shut itself down early"
+  exec 9<>"$fifo"
   nohup "$bun" run --cwd "$plugin_dir" --shell=bun --silent start \
-    >> "$WORK/whatsapp-server.log" 2>&1 < /dev/null &
+    >> "$WORK/whatsapp-server.log" 2>&1 < "$fifo" &
   local server_pid=$!
   log "channel server pid $server_pid"
 
