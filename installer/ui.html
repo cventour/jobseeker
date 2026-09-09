@@ -128,6 +128,8 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
   padding:14px;border:1px solid var(--acc);border-radius:12px;background:var(--card)}
 .panecode b{font:700 30px/1 ui-monospace,Menlo,monospace;letter-spacing:.22em;padding-left:.22em;
   color:var(--fg)}
+/* A phone number is read, not typed into another program, so it does not want a code's spacing. */
+.pane .panecode b.num{font-size:24px;letter-spacing:.02em;padding-left:0}
 .panecode i{font-style:normal;font-size:12px;color:var(--acc)}
 .panewait{display:flex;align-items:center;gap:10px;justify-content:center;padding:20px 0}
 
@@ -500,7 +502,7 @@ document.addEventListener("keydown", function (e) {
 // ---- the modal's pages ---------------------------------------------------------------------
 // An ordinary modal has one page and a Close button. The WhatsApp one has several, and each needs
 // its own buttons, so the foot is built from the page rather than written into the markup.
-var ORDER = ["intro", "number", "code", "done", "fail"];
+var ORDER = ["linked", "intro", "number", "code", "done", "fail"];
 var waPage = "";        // the page currently drawn, so a redraw does not re-animate or wipe typing
 var waNumber = "";      // kept across redraws: a push while someone is typing must not eat it
 // The code, once seen, is remembered here until the window is closed.
@@ -580,6 +582,20 @@ function buildWaPane(st, page, dir) {
       w.appendChild(document.createTextNode(st.say || "Asking WhatsApp for a code\u2026"));
       pane.appendChild(w);
     }
+  } else if (page === "linked") {
+    // The number, said plainly, and the one thing worth offering: proof it works.
+    var num = String(m.body || "").replace(/^connected as\s*/i, "");
+    var box = el("div", "panecode");
+    var nb = el("b", "num", num || "connected");
+    box.appendChild(nb);
+    pane.appendChild(box);
+    pane.appendChild(el("p", null,
+      "This computer is already linked to that number, and the morning digest will reach it. " +
+      "Nothing needs doing \u2014 but you can send yourself a message to be sure."));
+    addTestLine(pane, m);
+    pane.appendChild(el("p", "hint",
+      "To link a different number, unlink this one on your phone first: WhatsApp \u25b8 Settings " +
+      "\u25b8 Linked Devices."));
   } else if (page === "done") {
     pane.appendChild(el("p", null, "Connected. The morning digest will reach that number."));
     addTestLine(pane, m);
@@ -654,7 +670,7 @@ function renderModalFoot(st) {
     b("Back", "ghost", function () { send("wa-page", "intro"); });
     b("Send me a code", "primary", waSend);
     waCode = "";
-  } else if (m.page === "done" || (m.page === "code" && m.outcome === "ok")) {
+  } else if (m.page === "linked" || m.page === "done" || (m.page === "code" && m.outcome === "ok")) {
     // Only here: a link this window watched succeed. Never offered on a page that is still waiting,
     // and never on one that failed -- there would be nothing for it to send through.
     b("Close", "ghost", close);

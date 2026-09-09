@@ -804,6 +804,25 @@ function showExtensionHelp() {
  * whatever that page needs.
  */
 function showWhatsAppHelp() {
+  // Already linked? Then the first thing to say is so, and with the number -- not five steps for
+  // setting up something that is set up. Pressing Start connection on a working link and being
+  // walked through pairing again is how someone ends up re-pairing a channel that was fine.
+  const ws = stepById("whatsapp");
+  if (ws && ws.state === "ok") {
+    state.modal = {
+      flow: "whatsapp",
+      page: "linked",
+      title: "WhatsApp is connected",
+      // The row's own words: "connected as +971...". Whatever it knows, this says.
+      body: ws.detail || "connected",
+      steps: [],
+      err: "",
+      test: "",
+      testErr: "",
+    };
+    push();
+    return;
+  }
   state.modal = {
     flow: "whatsapp",
     page: "intro",
