@@ -711,10 +711,23 @@ function decideWhatToDo() {
   const onlyStartMissing = missing.length === 1 && missing[0].id === "start";
   state.allInstalled = missing.length === 0;
 
-  if (missing.length === 0) {
+  if (missing.length === 0 && !STAY) {
     // Set up, and already answering: an ordinary launch of an app configured weeks ago.
     state.brandnote = "";
     openDashboard();
+    return;
+  }
+  if (missing.length === 0) {
+    // --stay: everything is installed and the window is wanted anyway. Show the checklist, with
+    // every row where it stands, so the optional steps can be revisited -- reconnecting the Chrome
+    // extension, or sending a WhatsApp test message -- without reinstalling anything to reach them.
+    state.view = "work";
+    state.title = "Everything is set up";
+    state.subtitle = "Nothing needs installing. Use the buttons on the rows to check or redo a step.";
+    state.status = "Ready|— nothing here will change unless you press something.";
+    state.brandnote = "";
+    flowDone = true;
+    push();
     return;
   }
   if (onlyStartMissing) {
@@ -1558,6 +1571,10 @@ const argv = process.argv.slice(2);
 const portArg = argv.indexOf("--port");
 const port = portArg !== -1 ? Number(argv[portArg + 1]) || 0 : 0;
 const wantOpen = !argv.includes("--no-open");
+// --stay keeps the window on the checklist instead of handing over to the dashboard when there is
+// nothing left to install. It is how you get back to the optional steps -- the Chrome extension and
+// WhatsApp -- on a machine that is already set up.
+const STAY = argv.includes("--stay") || process.env.JOBSEEKER_SETUP_STAY === "1";
 
 fs.mkdirSync(WORK, { recursive: true });
 
