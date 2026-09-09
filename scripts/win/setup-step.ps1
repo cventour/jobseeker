@@ -128,11 +128,20 @@ function Finish([string]$State) {
 # Same reasoning as scripts\win\lib\claude-run.ps1: under 5.1 with $ErrorActionPreference = "Stop" a
 # native program writing one line to stderr becomes a terminating error, so everything external is
 # run with both streams redirected to files and read back afterwards.
+# Runs a program, captures both streams, and comes back.
+#
+# Deliberately NOT `Start-Process -Wait`. That flag waits for the process AND every descendant it
+# leaves behind, and the Claude Code installer leaves a PowerShell running: the install completed,
+# claude.exe was on disk, and setup sat there forever anyway with the window showing nothing. A
+# setup step that can never finish is worse than one that fails, because there is nothing to read
+# and nothing to retry. So this waits on the child it actually started, and only for as long as it
+# said it would.
 function Invoke-Captured {
   param(
     [Parameter(Mandatory = $true)][string]$FilePath,
     [string[]]$ArgumentList = @(),
-    [string]$WorkingDirectory
+    [string]$WorkingDirectory,
+    [int]$TimeoutSec = 600
   )
   if (-not $WorkingDirectory) { $WorkingDirectory = $Repo }
   $outFile = [IO.Path]::GetTempFileName()
@@ -144,7 +153,6 @@ function Invoke-Captured {
       RedirectStandardOutput = $outFile
       RedirectStandardError  = $errFile
       NoNewWindow            = $true
-      Wait                   = $true
       PassThru               = $true
     }
     $cmdline = ConvertTo-CmdLine $ArgumentList
@@ -154,7 +162,16 @@ function Invoke-Captured {
     $err = ""
     try {
       $p = Start-Process @sp
-      $code = [int]$p.ExitCode
+      if ($p.WaitForExit($TimeoutSec * 1000)) {
+        $code = [int]$p.ExitCode
+      } else {
+        # Past its budget. Stop this child (not the stragglers it may have left, which are none of
+        # our business) and report the timeout so the step can decide what it means.
+        Write-Log ("{0} did not finish within {1}s; stopping it" -f $FilePath, $TimeoutSec)
+        try { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null } catch { }
+        $code = 124
+        $err = "timed out after ${TimeoutSec}s"
+      }
     } catch {
       $err = $_.Exception.Message
     }
@@ -824,8 +841,9 @@ function Do-Claude {
   # $ErrorActionPreference = "Stop" and a strict-mode preference it never asked for.
   $ps = "powershell.exe"
   if (-not $OnWindows) { $ps = "pwsh" }
-  $r = Invoke-Captured -FilePath $ps -ArgumentList @(
+  $r = Invoke-Captured -TimeoutSec 300 -FilePath $ps -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://claude.ai/install.ps1 | iex")
+  if ($r.ExitCode -eq 124) { Write-Log "the installer did not return; checking whether it landed anyway" }
   Write-Indented $r.Out
   Write-Indented $r.Err
   Write-Pct 85
