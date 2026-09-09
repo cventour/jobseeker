@@ -44,6 +44,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import * as platform from "../../server/platform.mjs";
+// Importing is safe: bridge.mjs only starts a server when argv[1] resolves to itself.
+import { mintPairingCode } from "../../server/bridge.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "..", "..");
@@ -195,6 +197,9 @@ const state = {
   // Is the dashboard actually answering? Asked of the dashboard itself, not inferred from a step
   // that may have been skipped, retried, or already green before this window opened.
   started: false,
+  // Is the Chrome extension actually talking to the bridge? Asked of the bridge, not inferred from
+  // a step that may have run in another session.
+  extensionConnected: false,
   // Set on the closing screen: name the two shortcuts the installer made.
   whereItLives: false,
 };
@@ -604,7 +609,9 @@ function onQueueEmpty() {
     state.subtitle =
       "WhatsApp is optional: connect it on the row below, or skip it and add it later from the " +
       "dashboard.";
-    state.status = "Ready|— nothing else will run on its own.";
+    // No status line. The rows say where everything stands and the subtitle says what is left; a
+    // footer repeating that in different words is one more thing to read and nothing to act on.
+    state.status = "";
     flowDone = true;
     push();
     return;
@@ -664,19 +671,39 @@ function setupFinished() {
 // So ask the dashboard. It either answers on its port or it does not.
 let dashProbe = null;
 async function checkStarted() {
-  const url = `http://127.0.0.1:${dashboardPort()}/_whoami`;
+  const port = dashboardPort();
   let up = false;
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(1500) });
+    const r = await fetch(`http://127.0.0.1:${port}/_whoami`, { signal: AbortSignal.timeout(1500) });
     up = r.ok;
   } catch {
     up = false;
   }
-  if (up !== state.started) {
-    state.started = up;
-    log(`JobSeeker is ${up ? "answering" : "not answering"} on port ${dashboardPort()}`);
-    push();
+
+  // And the extension, from the bridge that would be talking to it. The WhatsApp row waits on the
+  // extension, and it was waiting on the extension STEP's recorded state -- which says nothing on a
+  // machine whose extension was connected before this window opened, or in a session that only
+  // updated the code. Same mistake as the buttons that stayed grey while JobSeeker was running:
+  // ask the thing itself.
+  let ext = false;
+  if (up) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/bridge/status`, { signal: AbortSignal.timeout(1500) });
+      if (r.ok) {
+        const j = await r.json();
+        ext = !!(j && j.connected);
+      }
+    } catch {
+      ext = false;
+    }
   }
+
+  const changed = up !== state.started || ext !== state.extensionConnected;
+  if (up !== state.started) log(`JobSeeker is ${up ? "answering" : "not answering"} on port ${port}`);
+  if (ext !== state.extensionConnected) log(`the Chrome extension is ${ext ? "connected" : "not connected"}`);
+  state.started = up;
+  state.extensionConnected = ext;
+  if (changed) push();
 }
 
 function watchStarted() {
@@ -733,7 +760,7 @@ function decideWhatToDo() {
     state.view = "work";
     state.title = "Everything is set up";
     state.subtitle = "Nothing needs installing. Use the buttons on the rows to check or redo a step.";
-    state.status = "Ready|— nothing here will change unless you press something.";
+    state.status = "";
     state.brandnote = "";
     flowDone = true;
     push();
@@ -779,8 +806,28 @@ function decideWhatToDo() {
  * stuck and about to send the file to someone.
  */
 /** The five things to do, in order, with the two that are hard to find shown as pictures. */
-function showExtensionHelp() {
+async function showExtensionHelp() {
   const folder = path.join(REPO, "extension");
+  // A code, whether or not the step happens to be running.
+  //
+  // The instructions say "type the pairing code shown at the top of this window", and the code was
+  // only ever there while the extension step itself was mid-flight. Opened at any other moment --
+  // afterwards, on an install that is already set up, from a row someone came back to -- the
+  // instructions named a code that was not on screen. Minting supersedes any previous one, so
+  // there is never more than one that works.
+  if (!state.code || state.codeFor !== "extension") {
+    try {
+      const dataDir = process.env.JOBSEEKER_DATA_DIR
+        ? path.resolve(process.env.JOBSEEKER_DATA_DIR)
+        : path.join(REPO, "data");
+      const p = await mintPairingCode(dataDir);
+      state.code = p.code;
+      state.codeFor = "extension";
+      log("minted a pairing code for the instructions");
+    } catch (e) {
+      log(`could not mint a pairing code: ${e.message}`);
+    }
+  }
   state.modal = {
     // Which instructions these are. The page shows the pairing code above them, and only these.
     help: "extension",

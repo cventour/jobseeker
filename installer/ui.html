@@ -820,7 +820,10 @@ function renderChecklist(st) {
       // proves the browser half works, and someone who reaches WhatsApp first tends to leave the
       // harder one undone. A SKIPPED extension counts as settled -- refusing WhatsApp forever
       // because the extension was declined would be a trap, not an order.
-      var extDone = st.steps.some(function (x) {
+      // The bridge's answer first, then the step's record. A machine whose extension was connected
+      // before this window opened has a record that says nothing, and the row would sit grey next
+      // to an extension that was plainly working.
+      var extDone = st.extensionConnected || st.steps.some(function (x) {
         return x.id === "extension" && (x.state === "ok" || x.state === "skip");
       });
       var waLocked = s.id === "whatsapp" && !extDone;
