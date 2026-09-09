@@ -82,6 +82,12 @@ h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
 .modal-path code{display:block;word-break:break-all;background:var(--card);border:1px solid var(--line);
   border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--fg)}
 .modal-foot{display:flex;justify-content:flex-end;margin-top:14px}
+.modal-box{max-height:86vh;overflow:auto}
+#modal-steps{margin:0 0 12px;padding-left:22px;font-size:14px;line-height:1.7}
+#modal-steps li{margin-bottom:7px}
+.modal-inline-path{display:block;margin-top:4px;background:var(--card);border:1px solid var(--line);
+  border-radius:6px;padding:6px 8px;font-size:12.5px;word-break:break-all}
+#modal-figs img{display:block;width:100%;margin-top:10px;border:1px solid var(--line);border-radius:8px}
 
 /* ---- the welcome (the very first thing anyone sees) ---- */
 /* Centred in the window, and deliberately almost empty: this screen exists to say where you are
@@ -223,6 +229,8 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
     <div class="modal-box">
       <h2 id="modal-title"></h2>
       <p id="modal-body"></p>
+      <ol id="modal-steps" hidden></ol>
+      <div id="modal-figs" hidden></div>
       <p class="modal-path"><code id="modal-path"></code></p>
       <div class="modal-foot"><button class="primary" id="modal-ok">Close</button></div>
     </div>
@@ -394,6 +402,14 @@ function renderChecklist(st) {
     li.appendChild(nm);
 
     var slot = el("span");
+    // The one step nobody can guess their way through: Chrome will not let us add the extension,
+    // so the person has to. The button sits on the row it belongs to, and is offered whether the
+    // step is waiting, finished or failed -- it is a reference, not an error message.
+    if (s.help) {
+      var howto = el("button", s.state === "running" ? "primary" : "", "Install instructions");
+      howto.onclick = function () { send("help", s.help); };
+      slot.appendChild(howto);
+    }
     if (s.state === "fail" && !st.busy) {
       var again = el("button", "", "Try again");
       again.onclick = function () { send("run", s.id); };
@@ -427,6 +443,29 @@ function renderActions(st) {
     document.getElementById("modal-body").textContent = st.modal.body || "";
     document.getElementById("modal-path").textContent = st.modal.path || "";
     document.querySelector(".modal-path").hidden = !st.modal.path;
+    var ol = document.getElementById("modal-steps");
+    ol.textContent = "";
+    (st.modal.steps || []).forEach(function (line) {
+      var li = document.createElement("li");
+      // A step may carry a path on its own line; keep it on its own line and in a monospace face.
+      var parts = String(line).split("\n");
+      li.appendChild(document.createTextNode(parts[0]));
+      if (parts[1]) {
+        var c = el("code", "modal-inline-path", parts[1]);
+        li.appendChild(c);
+      }
+      ol.appendChild(li);
+    });
+    ol.hidden = !(st.modal.steps && st.modal.steps.length);
+    var figs = document.getElementById("modal-figs");
+    figs.textContent = "";
+    (st.modal.images || []).forEach(function (src) {
+      var im = document.createElement("img");
+      im.src = src;
+      im.alt = "";
+      figs.appendChild(im);
+    });
+    figs.hidden = !(st.modal.images && st.modal.images.length);
     mod.hidden = false;
   } else {
     mod.hidden = true;

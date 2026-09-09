@@ -141,6 +141,10 @@ const STEPS = [
     note: "Chrome makes you load this one by hand — it opens the page and copies the path for you.",
     password: false,
     optional: true,
+    // Puts an "Install instructions" button on this row. Chrome will not let a program add the
+    // extension, so this is the one step where the person has to do something themselves -- and
+    // "Connect the Chrome extension" on its own tells them nothing about what.
+    help: "extension",
   },
   // Listed so "everything that will happen" is true, but `interactive` keeps it out of the queue:
   // it needs a phone number and a phone, so it gets its own screen after the rest is done.
@@ -194,6 +198,7 @@ function syncSteps() {
     note: s.note,
     password: !!s.password,
     optional: !!s.optional,
+    help: s.help || "",
     state: s.state || "todo",
     detail: s.detail || "",
   }));
@@ -595,6 +600,29 @@ function decideWhatToDo() {
  * without being told a path, and the point of this button is that the person pressing it is already
  * stuck and about to send the file to someone.
  */
+/** The five things to do, in order, with the two that are hard to find shown as pictures. */
+function showExtensionHelp() {
+  const folder = path.join(REPO, "extension");
+  state.modal = {
+    title: "Connect the Chrome extension",
+    body:
+      "Chrome does not let a program add this for you, so these five steps are yours. Chrome is " +
+      "already open on the right page, and the folder below is already on your clipboard.",
+    steps: [
+      "In Chrome, go to the Extensions page (it should already be open at chrome://extensions).",
+      "Top right, turn on Developer mode.",
+      `Click Load unpacked and choose this folder — press Ctrl+V to paste it:\n${folder}`,
+      "On the JobSeeker Bridge card, click Details, then scroll down to Extension options.",
+      state.code
+        ? `Type this code and press Connect:  ${state.code}`
+        : "Type the six-digit code this window shows and press Connect.",
+    ],
+    images: ["/help-chrome-extensions.png", "/help-chrome-details.png"],
+    path: "",
+  };
+  push();
+}
+
 function collectLogs() {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const dir = path.join(os.homedir(), "Downloads");
@@ -708,6 +736,10 @@ function handleCommand(cmd) {
     showPlan();
     return;
   }
+  if (cmd.cmd === "help") {
+    if (cmd.id === "extension") showExtensionHelp();
+    return;
+  }
   if (cmd.cmd === "collect-logs") {
     collectLogs();
     return;
@@ -807,6 +839,19 @@ const server = createServer(async (req, res) => {
       "cache-control": "no-store",
     });
     res.end(html);
+    return;
+  }
+
+  // The same two pictures the dashboard shows in Settings. A person who has never loaded an
+  // unpacked extension needs to see the switch and the button, not read about them.
+  if (req.method === "GET" && (url === "/help-chrome-extensions.png" || url === "/help-chrome-details.png")) {
+    const f = path.join(REPO, "public", url.slice(1));
+    if (!fs.existsSync(f)) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "image/png", "cache-control": "no-store" });
+    fs.createReadStream(f).pipe(res);
     return;
   }
 
