@@ -143,6 +143,12 @@ async function main() {
     ["CV parse", path.join(DATA, ".cv-parse.log")],
     ["setup", path.join(DATA, ".setup", "setup.log")],
     ["setup step", path.join(DATA, ".setup", "step.log")],
+    // stdout and stderr are separate files, and a process that dies before it can announce itself
+    // writes only to the second. Reading just the first is how an EADDRINUSE looked like silence.
+    ["dashboard start (stdout)", path.join(DATA, ".setup", "server.log")],
+    ["dashboard start (stderr)", path.join(DATA, ".setup", "server.err.log")],
+    ["bridge (stderr)", path.join(DATA, ".setup", "bridge.err.log")],
+    ["whatsapp server (stderr)", path.join(DATA, ".setup", "whatsapp-server.err.log")],
   ]) {
     await show(label, file);
   }

@@ -153,8 +153,11 @@ const STEPS = [
   },
 ];
 
+// Opens on the welcome. The survey runs behind it, because nobody wants to meet a piece of software
+// for the first time through a list of things it is about to install on their PC, and least of all
+// while that list is still being computed and says "Checking..." for several seconds.
 const state = {
-  view: "plan",
+  view: "welcome",
   title: `Checking ${HOST_NOUN}`,
   subtitle: "One moment — looking at what is already installed.",
   brandnote: `· first run on ${HOST_NOUN}`,
@@ -315,6 +318,9 @@ function drainStepLog() {
 let queue = [];
 const skipped = {};
 let phase = "boot";
+// Set when the user pressed Continue before the survey had finished; the plan is shown as soon as
+// there is one to show.
+let wantPlan = false;
 let waOffered = false;
 let queuedTotal = 0;
 let queuedDone = 0;
@@ -501,7 +507,9 @@ function dashboardPort() {
 // same effect, and this server is then finished -- it exits a moment later so nothing is left
 // running behind the dashboard.
 function openDashboard() {
-  const url = `http://localhost:${dashboardPort()}`;
+  // 127.0.0.1, not localhost: the dashboard binds the IPv4 loopback only, and localhost resolves to
+  // ::1 first on Windows.
+  const url = `http://127.0.0.1:${dashboardPort()}`;
   flowDone = true;
   state.dashboardUrl = url;
   log(`window handed over to ${url}`);
@@ -535,10 +543,15 @@ function decideWhatToDo() {
     startNext();
     return;
   }
-  // There is real work to do, so open on the welcome rather than dropping someone straight into a
-  // list of things about to be installed on their PC.
-  state.view = "welcome";
+  // There is real work to do. The welcome is already on screen, so leave it there -- unless the
+  // user has already pressed Continue and is waiting on us.
   state.status = "Nothing has been installed yet.|";
+  if (wantPlan) {
+    wantPlan = false;
+    showPlan();
+    return;
+  }
+  state.view = "welcome";
   push();
 }
 
@@ -609,6 +622,17 @@ function handleCommand(cmd) {
     return;
   }
   if (cmd.cmd === "continue") {
+    // The survey usually finishes long before anyone reads the welcome, but it is allowed to be
+    // slow. Rather than showing a plan that is still being written, remember that the user asked
+    // for it and show it the moment there is one.
+    if (phase !== "ready") {
+      wantPlan = true;
+      state.title = `Checking ${HOST_NOUN}`;
+      state.subtitle = "One moment — looking at what is already installed.";
+      state.view = "plan";
+      push();
+      return;
+    }
     showPlan();
     return;
   }

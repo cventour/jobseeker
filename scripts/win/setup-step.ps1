@@ -403,12 +403,18 @@ function Get-Url([string]$Url, [int]$TimeoutSec) {
 # Whether OUR JobSeeker is answering -- not merely whether something is. A dashboard left running
 # from a different checkout answers a plain request exactly the same way, and handing the window
 # over to it shows the user another build entirely, which reads as "the update did nothing".
+# 127.0.0.1, never localhost. The dashboard binds the IPv4 loopback only, and on Windows localhost
+# resolves to ::1 first: asking for it times out and reports "nothing there" about a dashboard that
+# is running perfectly well. That is not hypothetical -- it is what made this step start a second
+# dashboard on a port the first one already had, and then report "JobSeeker stopped while starting
+# up" about the copy that lost the race. Measured: localhost times out after 2.2s, 127.0.0.1
+# answers in 26ms.
 function Check-Start {
   $port = Get-DashboardPort
-  $who = Get-Url ("http://localhost:{0}/_whoami" -f $port) 2
+  $who = Get-Url ("http://127.0.0.1:{0}/_whoami" -f $port) 2
   if (-not $who) {
     # Nothing there, or something too old to answer. Either way it is not a JobSeeker we can claim.
-    $any = Get-Url ("http://localhost:{0}" -f $port) 2
+    $any = Get-Url ("http://127.0.0.1:{0}" -f $port) 2
     if (-not $any) { return Ck $false "" }
     return Ck $false ("something else is using port {0}" -f $port)
   }
@@ -1042,9 +1048,9 @@ function Do-Start {
 
   # If the port is taken by another JobSeeker, ours cannot bind and the failure would read as
   # "JobSeeker stopped while starting up". Name the real problem instead.
-  $any = Get-Url ("http://localhost:{0}" -f $port) 2
+  $any = Get-Url ("http://127.0.0.1:{0}" -f $port) 2
   if ($any) {
-    $who = Get-Url ("http://localhost:{0}/_whoami" -f $port) 2
+    $who = Get-Url ("http://127.0.0.1:{0}/_whoami" -f $port) 2
     $other = ""
     if ($who) { try { $other = (ConvertFrom-Json $who).root } catch { $other = "" } }
     $whoText = "an unknown server"
@@ -1096,13 +1102,34 @@ function Do-Start {
   for ($i = 1; $i -le 60; $i++) {
     $c = Check-Start
     if ($c.Ok) {
-      Write-Log ("answering on http://localhost:{0}" -f $port)
+      Write-Log ("answering on http://127.0.0.1:{0}" -f $port)
       Write-Detail "start" ("Running on port {0}" -f $port)
       Write-Step "start" "ok"; Write-Pct 100; Finish "ok"
     }
     if ($proc.HasExited) {
-      Write-Log "the server exited while starting - see data\.setup\server.log"
-      Write-Detail "start" "JobSeeker stopped while starting up"
+      # Node writes the reason to stderr, so read THAT file. Pointing at server.log was wrong: it is
+      # where stdout goes, and a server that dies before it can announce itself never writes a line
+      # there. "JobSeeker stopped while starting up" beside an empty file explains nothing.
+      $why = ""
+      if (Test-Path -LiteralPath $serverErr) {
+        $why = (Get-Content -LiteralPath $serverErr -Tail 25 -ErrorAction SilentlyContinue) -join " "
+      }
+      Write-Indented $why
+      if ($why -match "EADDRINUSE") {
+        # Someone already has the port. If that someone is this very install, the work is done and
+        # starting a second copy was the mistake -- not something to report as a failure.
+        $again = Check-Start
+        if ($again.Ok) {
+          Write-Log ("port {0} was already serving this install; using the one that is running" -f $port)
+          Write-Detail "start" ("Already running on port {0}" -f $port)
+          Write-Step "start" "ok"; Write-Pct 100; Finish "ok"
+        }
+        Write-Log ("port {0} is in use by something else" -f $port)
+        Write-Detail "start" ("Port {0} is already taken by another program. Close it, or set dashboard_port in config\job-seeker.config.md." -f $port)
+        Write-Step "start" "fail"; Finish "fail"
+      }
+      Write-Log "the server exited while starting - see data\.setup\server.err.log"
+      Write-Detail "start" ("JobSeeker stopped while starting up" + $(if ($why) { " - " + ($why -replace "\s+", " ").Substring(0, [Math]::Min(120, $why.Length)) } else { "" }))
       Write-Step "start" "fail"; Finish "fail"
     }
     Write-Pct (10 + $i)
