@@ -268,6 +268,7 @@ let stepBuf = "";
 
 function launchStep(id, extraArg) {
   stepBuf = "";
+  cancelled = false;
   try {
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(STEPLOG, "");
@@ -338,6 +339,14 @@ function launchStep(id, extraArg) {
     if (settled) return;
     settled = true;
     drainStepLog();
+    // A step we killed on purpose is not a step that failed. Without this, cancelling an attempt
+    // would land in onStepClosed with `running` already cleared, find no step to blame, and mark
+    // the whole run failed -- a red screen for someone who had simply closed a window.
+    if (cancelled) {
+      appendLog(FULLLOG, `${stepBuf}\n`);
+      child = null;
+      return;
+    }
     onStepClosed(code === 0);
   };
   // Every step ends by printing `::done`. Waiting for that, rather than for the process or its
@@ -425,6 +434,8 @@ let waFromModal = false;
 // True once a code has actually been shown to the user in this attempt. A screen carrying a code
 // is never replaced by an outcome screen; the outcome is added to it.
 let waCodeShown = false;
+// Set when a step was killed deliberately, so its exit is not read as a verdict.
+let cancelled = false;
 let queuedTotal = 0;
 let queuedDone = 0;
 let flowDone = false;
@@ -922,6 +933,74 @@ function showPlan() {
   push();
 }
 
+/**
+ * Stop a WhatsApp attempt the user has walked away from.
+ *
+ * Closing the window used to leave the run going: the bar kept moving and the footer kept saying
+ * "Waiting for your phone" for a phone nobody was holding any more. Worse, the channel server the
+ * step started outlives the step, and it holds a singleton lock -- so the abandoned attempt was
+ * also what made the NEXT one refuse to start.
+ *
+ * Killing the step does not kill that server: it is a grandchild, started through a launcher that
+ * has already exited. The lock file is how it is found, because it is the file the server writes
+ * its own pid into.
+ */
+function stopChannelServer() {
+  // Same override the step itself honours, so a scratch run never reaches for the real link.
+  const waDir = process.env.JOBSEEKER_WA_DIR
+    ? path.resolve(process.env.JOBSEEKER_WA_DIR)
+    : path.join(os.homedir(), ".whatsapp-channel");
+  const lock = path.join(waDir, ".server.lock");
+  let pid = 0;
+  try {
+    pid = Number(String(fs.readFileSync(lock, "utf8")).trim().split(/\r?\n/)[0]);
+  } catch {
+    return; // no lock, nothing claiming to run
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid);
+    log(`stopped the channel server the attempt left behind (pid ${pid})`);
+  } catch {
+    /* already gone, which is the outcome we wanted anyway */
+  }
+  try {
+    fs.rmSync(lock, { force: true });
+  } catch {
+    /* the next attempt's own staleness check will deal with it */
+  }
+}
+
+function cancelWhatsApp(why) {
+  if (running !== "whatsapp") return false;
+  log(`cancelling the WhatsApp attempt: ${why}`);
+  cancelled = true;
+  try {
+    if (child) child.kill();
+  } catch {
+    /* already gone */
+  }
+  stopChannelServer();
+  running = null;
+  child = null;
+  waFromModal = false;
+  waCodeShown = false;
+  state.busy = false;
+  state.say = "";
+  state.pct = 0;
+  state.need = "";
+  state.code = "";
+  state.codeFor = "";
+  const ws = stepById("whatsapp");
+  // Back to "not done", not "failed": walking away is not a failure, and a red row would be a
+  // verdict on something the user simply chose not to finish.
+  if (ws && ws.state === "running") {
+    ws.state = "todo";
+    ws.detail = "";
+  }
+  return true;
+}
+
 // ------------------------------------------------------------------ page -> server
 // The same envelope and the same dedupe as JobSeeker.js's readCommand(): the page counts its own
 // commands and we ignore anything we have already seen, so a retried POST cannot run a step twice.
@@ -973,6 +1052,8 @@ function handleCommand(cmd) {
   // not know about would be undone by the next log line.
   if (cmd.cmd === "wa-page") {
     if (state.modal && state.modal.flow === "whatsapp") {
+      // Turning back off the code page abandons the code on it; the attempt goes with it.
+      if (cmd.id !== "code") cancelWhatsApp(`the user went back to ${cmd.id || "intro"}`);
       state.modal.page = cmd.id || "intro";
       if (cmd.id === "number") state.modal.err = "";
       push();
@@ -1033,7 +1114,11 @@ function handleCommand(cmd) {
     return;
   }
   if (cmd.cmd === "dismiss-modal") {
+    // Closing the WhatsApp window ends the attempt behind it. Leaving it running was how the bar
+    // went on saying "Waiting for your phone" after the phone had been put down.
+    const wasWa = state.modal && state.modal.flow === "whatsapp";
     state.modal = null;
+    if (wasWa) cancelWhatsApp("the user closed the window");
     push();
     return;
   }
