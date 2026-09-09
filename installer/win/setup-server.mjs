@@ -586,7 +586,7 @@ function onQueueEmpty() {
     return;
   }
 
-  if (startStep && startStep.state === "ok" && waStep && !skipped.whatsapp && !waOffered) {
+  if (((startStep && startStep.state === "ok") || state.started) && waStep && !skipped.whatsapp && !waOffered) {
     waOffered = true; // shown once per run, never nagged
     state.view = "whatsapp";
     state.busy = false;
@@ -605,7 +605,11 @@ function onQueueEmpty() {
     return;
   }
 
-  if (startStep && startStep.state === "ok") {
+  // The probe as well as the record, for the same reason the row buttons use it: a start that was
+  // already green before this window opened leaves the record saying something other than "ok"
+  // while JobSeeker is up and answering. Skipping WhatsApp on such a machine used to land on
+  // "JobSeeker could not start", about a JobSeeker that was running.
+  if ((startStep && startStep.state === "ok") || state.started) {
     state.view = "done";
     state.title = "JobSeeker is ready";
     state.subtitle = anySkipped

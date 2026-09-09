@@ -816,6 +816,14 @@ function renderChecklist(st) {
         || st.steps.some(function (x) { return x.id === "start" && (x.state === "ok" || x.state === "skip"); })
         || (st.code && st.codeFor === "extension");
       var needsStart = s.id === "extension" || s.id === "whatsapp";
+      // WhatsApp waits for the extension. Not an arbitrary order: the extension is the step that
+      // proves the browser half works, and someone who reaches WhatsApp first tends to leave the
+      // harder one undone. A SKIPPED extension counts as settled -- refusing WhatsApp forever
+      // because the extension was declined would be a trap, not an order.
+      var extDone = st.steps.some(function (x) {
+        return x.id === "extension" && (x.state === "ok" || x.state === "skip");
+      });
+      var waLocked = s.id === "whatsapp" && !extDone;
       // Between the row and its instructions, where the eye already is: the code, then the button
       // that explains where to type it.
       if (s.id === "extension" && st.code && st.codeFor === "extension" && st.view === "work") {
@@ -833,9 +841,25 @@ function renderChecklist(st) {
       if (needsStart && !started) {
         howto.disabled = true;
         howto.title = "Available once JobSeeker has started.";
+      } else if (waLocked) {
+        howto.disabled = true;
+        howto.title = "Available once the Chrome extension is connected.";
       }
       howto.onclick = function () { send("help", s.help); };
       slot.appendChild(howto);
+
+      // WhatsApp is optional and says so on the row, not only on a screen at the end of the run.
+      // Without this, the only way past it was to connect it -- an optional step you cannot
+      // decline is not optional.
+      // "fail" is left alone: the block below already offers Try again and Skip for a failed
+      // optional step, and two Skips on one row is worse than none.
+      if (s.id === "whatsapp" && s.state !== "ok" && s.state !== "skip" && s.state !== "fail") {
+        var skip = el("button", "ghost", "Skip");
+        skip.disabled = howto.disabled;
+        skip.title = howto.disabled ? howto.title : "Set this up later from the dashboard.";
+        skip.onclick = function () { send("wa-skip"); };
+        slot.appendChild(skip);
+      }
     }
     if (s.state === "fail" && !st.busy) {
       var again = el("button", "", "Try again");
