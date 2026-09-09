@@ -1781,8 +1781,36 @@ function Do-Whatsapp([string]$Phone) {
       }
     }
     if ($jid) {
-      Stop-WaServer $server
+      # The sentence it appears in ends in a full stop, and \S+ takes it with the address.
+      $jid = $jid.TrimEnd('.', ',', ';')
       Write-Log ("the channel reports it is connected as " + $jid)
+      Write-Say "Finishing on your phone"
+
+      # Do NOT stop the channel here. Linking is not over when WhatsApp says the device is
+      # connected: the phone then syncs history and app state to it, and its own screen sits on
+      # "Logging in" until that finishes. Killing the channel a second after the handshake left the
+      # link genuinely made -- credentials written, messages decrypting -- and the phone spinning
+      # forever, with no way to tell that it had worked.
+      #
+      # The plugin says when it is really done: "Ready to receive messages." Wait for that, or
+      # thirty seconds, whichever comes first. Then stop it -- it holds a singleton lock, and a
+      # Claude Code session with the plugin loaded needs to be able to start its own.
+      $settleBy = (Get-Date).AddSeconds(30)
+      $ready = $false
+      while ((Get-Date) -lt $settleBy) {
+        foreach ($src in @($waErr, $waLog)) {
+          if ($ready) { break }
+          foreach ($l in (Read-LiveLines $src)) {
+            if ($l -match 'Ready to receive messages') { $ready = $true; break }
+          }
+        }
+        if ($ready) { break }
+        Start-Sleep -Milliseconds 500
+      }
+      if ($ready) { Write-Log "the phone has finished syncing" }
+      else { Write-Log "the phone did not report finishing within 30s; carrying on" }
+      Stop-WaServer $server
+
       $num = Get-WaNumber
       Write-WaLinked $jid $num
       if ($num) { Write-Detail "whatsapp" ("connected as +{0}" -f $num) } else { Write-Detail "whatsapp" "Connected" }
