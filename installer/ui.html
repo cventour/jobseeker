@@ -698,7 +698,12 @@ function renderChecklist(st) {
       // early they lead somewhere that fails for a reason the user cannot see, so they are offered
       // late instead -- visible the whole time, so nothing appears out of nowhere, and live only
       // once the row above them is green.
-      var started = st.steps.some(function (x) { return x.id === "start" && x.state === "ok"; });
+      // st.started is the dashboard answering, asked of the dashboard. The step's own state is
+      // accepted too, for the moment between "the step said ok" and the next probe. And a minted
+      // pairing code settles it outright: nothing mints one unless the bridge is up.
+      var started = st.started
+        || st.steps.some(function (x) { return x.id === "start" && (x.state === "ok" || x.state === "skip"); })
+        || (st.code && st.codeFor === "extension");
       var needsStart = s.id === "extension" || s.id === "whatsapp";
       // Between the row and its instructions, where the eye already is: the code, then the button
       // that explains where to type it.

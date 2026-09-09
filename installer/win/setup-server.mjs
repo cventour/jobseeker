@@ -192,6 +192,9 @@ const state = {
   busy: false,
   failed: false,
   allInstalled: false,
+  // Is the dashboard actually answering? Asked of the dashboard itself, not inferred from a step
+  // that may have been skipped, retried, or already green before this window opened.
+  started: false,
 };
 
 function stepById(id) {
@@ -587,6 +590,42 @@ function setupFinished() {
   if (/^welcome_(done|left):[ \t]*\S/m.test(cfg)) return true;
   const crit = readFileSafe(path.join(REPO, "data", "criteria.md"));
   return /^markets:[ \t]*\S/m.test(crit) || /^roles:[ \t]*\S/m.test(crit);
+}
+
+// ------------------------------------------------------------------ is JobSeeker up?
+//
+// Two rows depend on this: the Chrome extension pairs against the bridge the dashboard hosts, and
+// WhatsApp writes into a configured, running install. Both were gated on the `start` step reading
+// "ok", which is a record of what this window did -- not of what is true. A start that was already
+// green before the window opened, a step retried on its own, a run that reached the extension by
+// another path: each leaves the record saying something other than "ok" while JobSeeker is up and
+// answering, and the buttons stayed grey with no way to argue.
+//
+// So ask the dashboard. It either answers on its port or it does not.
+let dashProbe = null;
+async function checkStarted() {
+  const url = `http://127.0.0.1:${dashboardPort()}/_whoami`;
+  let up = false;
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(1500) });
+    up = r.ok;
+  } catch {
+    up = false;
+  }
+  if (up !== state.started) {
+    state.started = up;
+    log(`JobSeeker is ${up ? "answering" : "not answering"} on port ${dashboardPort()}`);
+    push();
+  }
+}
+
+function watchStarted() {
+  if (dashProbe) return;
+  checkStarted();
+  // Every two seconds while the window is open. It is one loopback request to a server on this
+  // machine; the cost of asking is far below the cost of a button that is wrong.
+  dashProbe = setInterval(checkStarted, 2000);
+  dashProbe.unref();
 }
 
 // ------------------------------------------------------------------ the handoff
@@ -1136,6 +1175,7 @@ function onClientArrived() {
   if (phase !== "boot") return;
   phase = "survey";
   log("page is up, surveying what is installed");
+  watchStarted();
   appendLog(FULLLOG, `${stamp()}  ui loaded\n`);
   if (!launchStep("check-all", null)) {
     phase = "ready";
