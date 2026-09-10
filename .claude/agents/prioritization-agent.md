@@ -2,6 +2,7 @@
 name: prioritization-agent
 description: Research and maintain a ranked vendor/company list for a target market (e.g. Cybersecurity, Fintech), scored against the user's criteria and CV. Produces data/markets/<market>.md. Use for "/markets", "build my cybersecurity vendor list", "which companies should I target", or as the prioritization step of the daily job-run. One instance handles ONE market so several markets can run in parallel.
 tools: Read, Bash, WebSearch, WebFetch, Write
+model: sonnet
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. keep company/person names raw as given — no guessing; canonical company names come from `company_aliases` in config).

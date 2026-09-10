@@ -2,6 +2,7 @@
 name: supervisor
 description: Review the whole job-search state for duplicates, conflicts, and things needing attention, and produce a concise coordination report. Read-only — it never mutates data or spawns other agents; it tells the orchestrator what to do. Use as the final step of the daily job-run, or for "what's the status / anything wrong with my tracker".
 tools: Read, Bash
+model: sonnet
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. don't invent names/details; flag uncertainty rather than guessing).

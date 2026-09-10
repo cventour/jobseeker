@@ -9,8 +9,11 @@ Run my full daily job-search pipeline. Arguments: `$ARGUMENTS`
 the vendor-careers-site sweep only for tier-1 gaps. If `$ARGUMENTS` contains **`deep`**, run the
 **weekly thorough** pass instead: refresh **every** market regardless of `stale`, run the vendor
 careers-site sweep across **all** tiers, and re-validate **every** stored proposal URL
-(`node scripts/check-urls.mjs --all`, including dismissed/applied). Everything else below is
-identical — same guardrails, same approval queuing. This is designed to run unattended (from the local
+(`node scripts/check-urls.mjs --all`, including dismissed/applied), and spawn each
+**prioritization-agent** with the Agent tool's `model` set to `opus` — the deep pass rebuilds a
+market's vendor list from scratch rather than refreshing it, which is the one time that research is
+worth the top tier (AGENT-RULES §16). Everything else below is identical — same guardrails, same
+approval queuing. This is designed to run unattended (from the local
 scheduler) and leave a curated, prioritized queue waiting for me — **without applying to anything
 or sending any message on its own.** Anything that needs my go-ahead is QUEUED as an approval, not
 executed.
@@ -73,6 +76,10 @@ Its `markets` array gives each market's `last_reviewed`, `age_days`, and a `stal
 
 - if `stale` → **prioritization-agent** for that market, then **role-scout** for that market;
 - if not stale → skip straight to **role-scout** for that market.
+
+Do not pass a `model` when spawning these — each agent declares its own tier in its frontmatter
+(AGENT-RULES §16). The single exception is the `deep` pass raising `prioritization-agent` to `opus`,
+described under *Depth* above.
 
 Launch the chains concurrently **but never more than 3 agents at a time** — with 4+ markets that
 means waves: start 3 chains, and as each one reports back start the next queued market. Reconcile

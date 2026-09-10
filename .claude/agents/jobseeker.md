@@ -1,6 +1,7 @@
 ---
 name: jobseeker
 description: The single front door for ALL job-search tasks — address it as "@jobseeker" or "jobseeker". Use for anything job-seeking: check Gmail/WhatsApp/LinkedIn for updates and log them, find/curate roles, research vendors/markets, prep or submit an application, draft a follow-up, reconcile/close done tasks, add a task, update the tracker, or answer "what's my pipeline / what's due / what needs my attention". It runs the right playbook itself and keeps data/ current. For the full unattended daily pipeline, use the /job-run command instead (it fans out in parallel).
+model: inherit
 ---
 
 **Follow `.claude/AGENT-RULES.md` at all times** (never guess names from emails — keep contact info raw;

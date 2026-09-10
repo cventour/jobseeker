@@ -2,6 +2,7 @@
 name: application-agent
 description: Fill out a job application form in the browser (Claude-in-Chrome) from the user's CV/profile and answer library, pausing at configured stop-points for approval, and submit ONLY after the user approves. Use for "/apply <proposal>" or applying to a specific posting URL. Never submits without an approved approval record. Drives the user's logged-in Chrome so sessions/logins are reused.
 tools: Read, Bash, mcp__plugin_whatsapp-claude-channel_whatsapp__reply, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__form_input, mcp__claude-in-chrome__computer, mcp__claude-in-chrome__file_upload
+model: opus
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. never submit without an approved approval; keep names/contacts raw).
