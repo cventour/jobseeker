@@ -13,6 +13,9 @@ Interpret the arguments:
 
 Steps:
 1. `cat data/criteria.md` to read the current `markets:` list (and to append for `add`).
+   Markets are **comma-separated**. Older files may use semicolons — treat those as separators too,
+   so `Economic Development; Exporting; Trade` is three markets, not one oddly-named one. Append
+   with a comma.
 2. Determine the list of markets to process.
 3. **Launch one `prioritization-agent` per market, in parallel — at most 3 at a time** (multiple
    Agent tool calls in a single message). Tell each agent exactly which market it owns. They write
