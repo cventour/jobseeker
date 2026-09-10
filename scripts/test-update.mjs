@@ -67,6 +67,19 @@ check(!TAG_OK.test("v0.7.0/../../etc"), "a tag carrying a path is refused");
 
   const wrapped = parseBullets("- one bullet that\n  wraps onto a second line\n- another");
   check(wrapped.length === 2 && wrapped[0].endsWith("second line"), "a wrapped bullet is joined back together");
+
+  // A release body is Markdown and the dialog renders text, so the markers have to go — and they
+  // matter twice, because groupBullets reads the first word to sort New from Changed from Fixed.
+  const md = parseBullets(
+    "- **Report a problem** is now a bug icon\n- Added `npm run logs` and a [link](https://x.test)\n- Fixed: your *username* leaked\n"
+  );
+  check(md[0] === "Report a problem is now a bug icon", "bold markers are stripped", md[0]);
+  check(md[1] === "Added npm run logs and a link", "code spans and links are flattened", md[1]);
+  check(md[2] === "Fixed: your username leaked", "italics are stripped", md[2]);
+  const g = groupBullets(md);
+  check(g.new.length === 1 && g.fixed.length === 1 && g.changed.length === 1,
+    "a bullet opening with emphasis is grouped on its words, not its asterisks",
+    JSON.stringify(g));
 }
 
 {

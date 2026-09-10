@@ -506,6 +506,7 @@ async function loadAll() {
   const markets = await loadMarkets();
   const marketAskDismissed = await readMarketAskDismissed();
   const dismissedNotices = await readDismissedNotices();
+  const updateDeferred = await readUpdateDeferred();
   const update = await updateState();
   // Read separately from `update`, not off it. The update check is a background job that has not
   // necessarily run yet -- on a first launch, offline, or within the first seconds -- and the
@@ -596,6 +597,7 @@ async function loadAll() {
     markets,
     marketAskDismissed,
     dismissedNotices,
+    updateDeferred,
     update,
     version,
     updateRun,
@@ -1966,19 +1968,32 @@ function updateModal(u) {
       <p class="upd-safe">Your applications, tasks, settings and CV are left exactly as they are.
         JobSeeker quits and reopens by itself, which takes about a minute.</p>
       <div class="actions confirm-acts">
-        <form method="POST" action="/dismiss-notice" class="inline">
-          <input type="hidden" name="_tab" value="today">
-          <input type="hidden" name="key" value="update:${esc(u.latest)}">
-          <input type="hidden" name="summary" value="${esc(`Skipped the update to ${u.latest}`)}">
-          <button type="submit" class="btn-secondary">Not now</button>
+        <form method="POST" action="/defer-update" class="inline">
+          <input type="hidden" name="version" value="${esc(u.latest)}">
+          <button type="submit" class="btn-secondary">Later</button>
         </form>
         <form method="POST" action="/update-now" class="inline">
           <input type="hidden" name="tag" value="${esc(u.tag)}">
-          <button type="submit">Update and restart</button>
+          <button type="submit">Update now</button>
         </form>
       </div>
     </div>
   </div>`;
+}
+
+// Whether the dialog is DUE, handed to the script that decides.
+//
+// `forced` is a manual "Check for updates": the user just asked the question out loud, so the
+// answer is the dialog itself and a deferral does not apply to it.
+function updateSignal(all, forced) {
+  if (!all.update?.available) return "";
+  const until = (all.updateDeferred || {})[all.update.latest] || "";
+  const deferred = Boolean(until) && Date.parse(until) > Date.now();
+  return `<script>window.__UPDATE__=${JSON.stringify({
+    version: all.update.latest,
+    deferred,
+    forced: Boolean(forced),
+  }).replace(/</g, "\\u003c")};</script>`;
 }
 
 // ---------- Notices ----------
@@ -3153,7 +3168,7 @@ function addDays(iso, n) {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
-function page(all, flash) {
+function page(all, flash, forceUpdate = false) {
   const dueToday = all.tasks.rows.filter(
     (t) => t.status === "open" && t.due_date && t.due_date <= today()
   );
@@ -3295,13 +3310,7 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
   </div>
 </div>
 ${updateModal(all.update)}
-${
-  // Whether the modal is DUE. The version is all the script needs: it checks it against the
-  // dismissed key it can see, and shows the dialog only if that version was never waved away.
-  all.update?.available
-    ? `<script>window.__UPDATE__=${JSON.stringify({ version: all.update.latest, dismissed: Boolean((all.dismissedNotices || {})[`update:${all.update.latest}`]) }).replace(/</g, "\\u003c")};</script>`
-    : ""
-}
+${updateSignal(all, forceUpdate)}
 <script>window.__DETAILS__=${detailsJSON};</script>
 ${
   // Escaped the same way __DETAILS__ is: a literal "</script>" inside the JSON would end the block
@@ -3319,7 +3328,7 @@ ${FEEDBACK_MODAL}
 // ---------- Settings ----------
 // Configuration only: things set once and changed rarely. Split out so the daily page holds nothing
 // but what actually changes daily. Same tab mechanics, its own small set of panes.
-function settingsPage(all, flash) {
+function settingsPage(all, flash, forceUpdate = false) {
   // One tab, not two. "Markets & vendors" and "Careers boards" described the same entity from two
   // angles and overlapped on 183 companies — see joinCompanies().
   const companies = joinCompanies(all);
@@ -3389,6 +3398,8 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
     </div>
   </div>
 </div>
+${updateModal(all.update)}
+${updateSignal(all, forceUpdate)}
 ${FEEDBACK_MODAL}
 <script>${JS}${FEEDBACK_JS}</script>
 </body></html>`;
@@ -4456,7 +4467,9 @@ const JS = `${VIEWPORT_JS}
   (function(){
     var u = window.__UPDATE__;
     var ov = document.getElementById('updateOverlay');
-    if (!u || !ov || u.dismissed) return;
+    /* forced is a manual Check for updates -- a deferral is not an answer to a question the user
+       has just asked again. */
+    if (!u || !ov || (u.deferred && !u.forced)) return;
     /* Not on top of something the user is already doing. */
     function busy(){
       var a = document.activeElement;
@@ -4467,7 +4480,7 @@ const JS = `${VIEWPORT_JS}
       return !!(c && getComputedStyle(c).display !== 'none');
     }
     function show(){
-      if (busy()) { setTimeout(show, 4000); return; }
+      if (busy() && !u.forced) { setTimeout(show, 4000); return; }
       ov.style.display = 'flex';
       var b = ov.querySelector('.btn-secondary');
       if (b) b.focus();
@@ -4477,7 +4490,7 @@ const JS = `${VIEWPORT_JS}
     document.addEventListener('keydown', function(e){
       if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none';
     });
-    setTimeout(show, 900);
+    if (u.forced) show(); else setTimeout(show, 900);
   })();
 
   /* Cmd-R.
@@ -4522,7 +4535,10 @@ const JS = `${VIEWPORT_JS}
         .then(function(r){ return r.ok ? r.json() : null; })
         .then(function(d){
           if (!d) return;
-          var now = (d.running ? d.running.slug + '@' + d.running.started : '') + '|' + (d.finished || '');
+          /* A version this page has never heard of is a change worth reloading for, the same as a
+             run finishing: the reload is what puts the dialog in front of the user. */
+          var now = (d.running ? d.running.slug + '@' + d.running.started : '') + '|' + (d.finished || '') +
+                    '|' + (d.update || '');
           if (seen === null) { seen = now; return; }      /* first answer is the baseline */
           if (now !== seen && !occupied()) {
             seen = now;
@@ -5473,11 +5489,12 @@ function parseForm(buf) {
 // Every mutation ends in a 303 back to a GET. Without carrying the tab, that would dump you on
 // Today after every dismiss/advance/save — so the client stamps each POST form with the pane it was
 // submitted from (`_tab`) and the page it belongs to (`_page`), and we hand both back.
-function redirect(res, flash) {
+function redirect(res, flash, extra = "") {
   const parts = [];
   if (flash) {
     parts.push(`flash=${encodeURIComponent(flash.kind)}`, `msg=${encodeURIComponent(flash.msg)}`);
   }
+  if (extra) parts.push(extra);
   if (res._returnTab) parts.push(`tab=${encodeURIComponent(res._returnTab)}`);
   // Settings' sub-panes are a second axis: without this, saving from Channels lands you back on
   // Roles and you have to find your way to what you just changed.
@@ -7159,6 +7176,42 @@ async function readCVPrevious() {
 // count. When the underlying fact changes the key changes and the notice comes back, which is the
 // behaviour you want: dismissing "the 4 Sep run was partial" must not also hide "the 5 Sep run
 // failed".
+// "Later" on the update dialog.
+//
+// It used to write a permanent dismissal keyed to the version, the same mechanism a Today notice
+// uses. That is wrong for this dialog: a notice is a fact you have read, and an update is an offer
+// that stands until you take it. Waving it away once meant never being asked again, so an install
+// could sit three releases behind having been told once — which is exactly what happened.
+//
+// So Later defers, it does not dismiss. The offer comes back on the next launch after the deferral
+// runs out, and a NEW version resets it, because a different version is a different offer.
+const DEFER_UPDATE_MS = 24 * 60 * 60 * 1000;
+
+async function readUpdateDeferred() {
+  try {
+    const j = JSON.parse(await fs.readFile(NOTICES_FILE, "utf8"));
+    return j && typeof j.updateDeferred === "object" && j.updateDeferred ? j.updateDeferred : {};
+  } catch {
+    return {};
+  }
+}
+
+async function handleDeferUpdate(form) {
+  const version = String(form.version || "").trim();
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return { kind: "bad", msg: "Unknown version — nothing changed." };
+  let file = {};
+  try {
+    file = JSON.parse(await fs.readFile(NOTICES_FILE, "utf8")) || {};
+  } catch {
+    /* first time */
+  }
+  // Only the current offer is kept: an old deferral for a version nobody can install any more is
+  // just a row that never expires.
+  file.updateDeferred = { [version]: new Date(Date.now() + DEFER_UPDATE_MS).toISOString() };
+  await writeFileAtomic(NOTICES_FILE, JSON.stringify(file, null, 2));
+  return { kind: "ok", msg: `Left for later. JobSeeker ${version} is in Settings whenever you want it.` };
+}
+
 async function readDismissedNotices() {
   try {
     const j = JSON.parse(await fs.readFile(NOTICES_FILE, "utf8"));
@@ -7815,19 +7868,16 @@ async function handleCheckUpdate() {
   const before = await updateState();
   const r = await checkNow({ timeoutMs: 8000 });
   if (r?.error) {
-    return { kind: "bad", msg: `Could not check for updates — ${r.error}. Nothing changed.` };
+    return { flash: { kind: "bad", msg: `Could not check for updates — ${r.error}. Nothing changed.` } };
   }
   const after = await updateState();
   if (after?.available) {
-    // Only say "new" when it is news. Pressing the button twice should not announce a discovery
-    // the second time.
-    const known = before?.available && before.latest === after.latest;
-    return {
-      kind: "ok",
-      msg: `${known ? "Still on offer" : "New version"}: ${after.latest}. Use the Update button to install it.`,
-    };
+    // No toast. Someone who presses "Check for updates" is asking to be shown what is there, and
+    // being told in a banner to go and find a different button is not an answer — it is the answer
+    // pointing at itself. The caller opens the dialog instead.
+    return { found: true };
   }
-  return { kind: "ok", msg: `You are up to date — ${after?.current || ""} is the newest release.` };
+  return { flash: { kind: "ok", msg: `You are up to date — ${after?.current || ""} is the newest release.` } };
 }
 
 // Start the update, and get out of the way.
@@ -8241,11 +8291,16 @@ const server = http.createServer(async (req, res) => {
       } catch {
         /* nothing has been run from here yet */
       }
+      // The six-hourly check runs in this process, but a page that is already open would not learn
+      // about it until someone happened to reload. This poll is already here and already cheap, so
+      // it carries the answer: the client reloads once, and the dialog appears on the way back.
+      const upd = await updateState().catch(() => null);
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return res.end(
         JSON.stringify({
           running: live ? { slug: live.slug, started: live.started } : null,
           finished: last?.finished || "",
+          update: upd?.available ? upd.latest : "",
         })
       );
     }
@@ -8299,7 +8354,11 @@ const server = http.createServer(async (req, res) => {
       // headers already sent, so the catch below could not send a 500 — it threw
       // ERR_HTTP_HEADERS_SENT and killed the whole process, taking the dashboard down.
       all.welcome = res._welcome;
-      const html = url.pathname === "/settings" ? settingsPage(all, flash) : page(all, flash);
+      // ?upd=1 comes back from the Check for updates button: the user asked the question, so the
+      // answer is the dialog itself rather than a toast pointing at a button somewhere else.
+      const forceUpdate = url.searchParams.get("upd") === "1";
+      const html =
+        url.pathname === "/settings" ? settingsPage(all, flash, forceUpdate) : page(all, flash, forceUpdate);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
       return;
@@ -8587,7 +8646,8 @@ async function handlePost(req, res, url) {
     return redirect(res, await handleUpdateNow(form));
   }
   if (url.pathname === "/check-update") {
-    return redirect(res, await handleCheckUpdate());
+    const r = await handleCheckUpdate();
+    return redirect(res, r.flash || null, r.found ? "upd=1" : "");
   }
   if (url.pathname === "/pick-cv") {
     const r = await handlePickCV(form);
@@ -8599,6 +8659,9 @@ async function handlePost(req, res, url) {
   }
   if (url.pathname === "/apply-now") {
     return redirect(res, await handleApplyNow(form));
+  }
+  if (url.pathname === "/defer-update") {
+    return redirect(res, await handleDeferUpdate(form));
   }
   if (url.pathname === "/dismiss-notice") {
     return redirect(res, await handleDismissNotice(form));

@@ -17,7 +17,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DATA = path.join(ROOT, "data");
+// The same override the rest of the server honours. Without it a dashboard pointed at the sample
+// dataset writes its update cache into the real data/, so the two disagree about what is on offer.
+const DATA = process.env.JOBSEEKER_DATA_DIR ? path.resolve(process.env.JOBSEEKER_DATA_DIR) : path.join(ROOT, "data");
 const CHECK_FILE = path.join(DATA, ".update-check.json");
 
 const REPO = process.env.JOBSEEKER_REPO_SLUG || "cventour/jobseeker";
@@ -94,13 +96,26 @@ export function groupBullets(bullets) {
  * with a wrapped continuation joined back onto the line it belongs to. Anything that is not a
  * bullet (the install instructions the generator appends) is dropped.
  */
+// A release body is Markdown, and the dialog renders text. Left alone, "**Report a problem** is now
+// a bug icon" arrives on screen with its asterisks showing — and, worse, groupBullets tests the
+// FIRST WORD to decide New/Changed/Fixed, so a bullet that opens with emphasis was classified on
+// the asterisks rather than on what it said.
+function plain(s) {
+  return String(s || "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // [text](url) -> text
+    .replace(/(\*\*|__)(.+?)\1/g, "$2") // bold
+    .replace(/(^|[^*])\*(?!\*)([^*]+)\*(?!\*)/g, "$1$2") // italic, leaving **bold** alone
+    .replace(/`([^`]+)`/g, "$1") // code
+    .trim();
+}
+
 export function parseBullets(body) {
   const items = [];
   let inList = false;
   for (const line of String(body || "").split("\n")) {
     const t = line.trim();
     if (t.startsWith("- ")) {
-      items.push(t.slice(2).trim());
+      items.push(plain(t.slice(2)));
       inList = true;
     } else if (!t) {
       // A blank line ENDS the list. release-notes.mjs appends install instructions after one, and
@@ -109,7 +124,7 @@ export function parseBullets(body) {
       inList = false;
     } else if (inList) {
       // A wrapped bullet, joined back onto the line it belongs to.
-      items[items.length - 1] += " " + t;
+      items[items.length - 1] += " " + plain(t);
     }
   }
   return items.filter(Boolean);
