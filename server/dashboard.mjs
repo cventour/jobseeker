@@ -560,6 +560,16 @@ async function loadAll() {
   } catch {
     /* nothing has been run from the dashboard yet */
   }
+  // scripts/research-market.sh writes this. Market research is the only long job the dashboard
+  // starts that used to report nothing at all: it is spawned detached with stdio ignored, so a
+  // script that died on its first line looked exactly like one quietly working. Meanwhile the flash
+  // promised companies would appear on reload, and they never did.
+  let marketsRun = null;
+  try {
+    marketsRun = JSON.parse(await fs.readFile(path.join(DATA, ".markets-run.status.json"), "utf8"));
+  } catch {
+    /* no market has been researched from the dashboard yet */
+  }
   // scripts/browser-probe.mjs writes this before every run. Surfaced because browser-only work
   // fails QUIETLY: WhatsApp and LinkedIn simply go unread and the run still reports success.
   let browser = null;
@@ -608,6 +618,7 @@ async function loadAll() {
     ladder,
     runNow,
     lastRunNow,
+    marketsRun,
     browser,
     status: await systemStatus(),
     lastDigest,
@@ -1408,6 +1419,22 @@ function companiesHTML(all) {
   // user "it will be researched" would be a lie.
   const empties = emptyMarkets(all.markets);
   const scheduled = Boolean(all.status?.schedInstalled);
+  // How the last research pass ended. The button used to promise "reload this page to see the
+  // companies appear" and then never mention it again, so a pass that could not start at all — no
+  // claude on the PATH the app hands its children — was indistinguishable from one still working.
+  // Whatever it says, it is read from the script's own status file rather than assumed.
+  const mr = all.marketsRun;
+  const mrAt = String(mr?.finished || mr?.started || "").slice(0, 16).replace("T", " ");
+  const marketRunBlock = !mr
+    ? ""
+    : mr.state === "running"
+      ? `<div class="alert"><b>Researching ${esc(mr.market || "a market")} now.</b>
+           Started ${esc(mrAt)} — it takes a few minutes. Reload to see the companies appear.</div>`
+      : mr.state === "ok"
+        ? ""
+        : `<div class="alert bad"><b>Researching ${esc(mr.market || "a market")} did not finish.</b>
+             ${esc(mr.detail || "No detail recorded.")}
+             <span class="muted">Tried ${esc(mrAt)} — the full output is in <code>data/.markets-run.log</code>.</span></div>`;
   const emptyBlock = empties.length
     ? `<div class="alert warn">
          <b>${empties.map(esc).join(", ")} ${empties.length === 1 ? "has" : "have"} no companies yet.</b>
@@ -1437,7 +1464,7 @@ It runs in the background — reload this page to see the results.">
     : "";
 
   if (!entries.length)
-    return `${emptyBlock}<p class="empty">No companies yet. Add a market under <b>Setup</b> to get started.</p>`;
+    return `${marketRunBlock}${emptyBlock}<p class="empty">No companies yet. Add a market under <b>Setup</b> to get started.</p>`;
 
   const dismissedCount = (all.boards?.rows ?? []).filter((r) => String(r.dismissed || "").trim()).length;
 
@@ -1611,6 +1638,7 @@ They stay in data/boards.md and can be restored.">
         dismissedCount ? ` · <b>${dismissedCount} removed</b> — kept in <code>data/boards.md</code>, restore with <code>record.mjs restore-board "Company"</code>` : ""
       }
     </p>
+    ${marketRunBlock}
     ${emptyBlock}
     ${batchHTML}
     ${queuedHTML}
@@ -2701,7 +2729,10 @@ function todayHTML(all, dueToday, appTok, appIds) {
   const b = all.browser;
   // Suppressed when the run banner is already reporting `browser-read` — the two say the same thing,
   // and the run banner says it better because it names the run and when it happened.
-  const runCoversBrowser = run?.state === "partial" && (run.gaps || []).includes("browser-read");
+  // `failed` carries gaps just as `partial` does: a run that died with Chrome unreadable listed the
+  // same gap and got both banners, one under the other, saying it twice.
+  const runCoversBrowser =
+    (run?.state === "partial" || run?.state === "failed") && (run.gaps || []).includes("browser-read");
   const browserBanner =
     !runCoversBrowser && b && b.capabilities && !b.capabilities.read_page_content
       ? notice({
@@ -2730,14 +2761,24 @@ function todayHTML(all, dueToday, appTok, appIds) {
   const runBanner = (() => {
     if (!run) return "";
     if (run.state === "failed") {
+      // "scheduled" was asserted rather than read, so a run the user had just started by hand from
+      // the wizard was reported as a scheduled one — which reads as somebody else's problem.
+      const which = run.source === "manual" ? "run you started" : "scheduled run";
+      // A failed run carries the same `gaps` a partial one does. Listing them is also what earns
+      // the right to suppress the browser banner below: without this the specific one-time fix was
+      // only in the notice being hidden.
+      const gaps = Array.isArray(run.gaps) ? run.gaps : [];
+      const blockers = run.coverage?.blockers ?? [];
       return notice({
         // Keyed on the run itself, so dismissing one failure never hides the next one.
         key: `run:failed:${run.started || run.finished || ""}`,
         kind: "bad",
-        title: "The last scheduled run failed.",
+        title: `The last ${which} failed.`,
         body: `${esc(run.detail || "")} <span class="muted">(started ${esc(run.started || "?")})</span>
-           — check <code>data/.job-run.log</code>.`,
-        summary: `Scheduled run failed (started ${run.started || "?"}) — ${run.detail || "no detail recorded"}`,
+           — check <code>data/.job-run.log</code>.
+           ${gaps.length ? `<ul class="gaplist">${gaps.map((g) => `<li>${esc(GAP_SAYS[g] || g)}</li>`).join("")}</ul>` : ""}
+           ${blockers.length ? `<div class="ti-sub">${esc(String(blockers[0]).slice(0, 400))}</div>` : ""}`,
+        summary: `The last ${which} failed (started ${run.started || "?"}) — ${run.detail || "no detail recorded"}`,
         dismissed: NX,
       });
     }
@@ -6077,6 +6118,10 @@ async function welcomeState({ schedule = false } = {}) {
   return {
     cfg,
     criteria,
+    // The parsed CV itself, not merely whether there is one: welcomeProfileRows renders these
+    // fields, and without them here it rendered an empty box on every successful parse — the step
+    // said "Read by Claude" and then showed nothing it had read.
+    profile,
     profileParsed: Boolean(String(profile.titles || "").trim()) && !/No CV parsed yet/i.test(profileText),
     cvFiles,
     cvStatus,
@@ -6217,8 +6262,16 @@ const PICK_BTN = `<button type="submit" formaction="/pick-cv" formnovalidate cla
 
 function welcomeCVCard(st) {
   const running = st.cvStatus?.state === "running";
-  const failed = st.cvStatus?.state === "failed";
   const parsed = st.profileParsed;
+  // A failure stands only while it is still the LATEST thing that happened to the CV. Nothing but
+  // scripts/parse-cv.sh writes this status file, so `/parse-cv` run from chat — or any other path
+  // that fills data/profile.md — leaves the old "failed" behind untouched. Checking the status
+  // first meant a perfectly good profile was reported as unreadable for as long as the stale file
+  // survived, and the reader's reasonable conclusion was that the CV step is broken.
+  const failedAt = Date.parse(st.cvStatus?.finished || "");
+  const parsedAt = Date.parse(st.profile?.parsed_at || "");
+  const superseded = parsed && (Number.isNaN(failedAt) || (!Number.isNaN(parsedAt) && parsedAt >= failedAt));
+  const failed = st.cvStatus?.state === "failed" && !superseded;
   const newest = st.cvFiles.length ? st.cvFiles[st.cvFiles.length - 1] : "";
 
   if (!st.cvFiles.length) {

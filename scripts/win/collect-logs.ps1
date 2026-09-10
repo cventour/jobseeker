@@ -208,6 +208,11 @@ Skeleton "run now"                  (Join-Path $DATA ".run-now.log") 40
 Show     "run now status"           (Join-Path $DATA ".run-now.status.json") 20
 Skeleton "job run"                  (Join-Path $DATA ".job-run.log") 40
 Show     "job run status"           (Join-Path $DATA ".job-run.status.json") 30
+# Market research is spawned detached with its output discarded, so this log is the ONLY record
+# that it ran at all -- and it was the one log this bundle did not collect. A report of "I asked it
+# to research my markets and nothing happened" was unanswerable for exactly that reason.
+Skeleton "market research"          (Join-Path $DATA ".markets-run.log") 40
+Show     "market research status"   (Join-Path $DATA ".markets-run.status.json") 20
 Show     "browser status"           (Join-Path $DATA ".browser-status.json") 40
 Skeleton "bridge"                   (Join-Path $DATA ".bridge.log") 40
 Show     "installer"                (Join-Path $env:TEMP "jobseeker-install.log") 80

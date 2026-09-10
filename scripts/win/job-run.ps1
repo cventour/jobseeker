@@ -243,8 +243,10 @@ function ConvertTo-JsonString([string]$s) {
 function Write-Status { # state, attempts_used, detail, gaps_json
   param([string]$State, [int]$AttemptsUsed, [string]$Detail, [string]$GapsJson = "[]")
   if (-not $GapsJson) { $GapsJson = "[]" }
+  $sourceVal = $env:JOBRUN_SOURCE; if (-not $sourceVal) { $sourceVal = "scheduled" }
   $body = "{`n" +
     '  "state": "' + $State + "`",`n" +
+    '  "source": "' + $sourceVal + "`",`n" +
     '  "started": "' + $script:STARTED + "`",`n" +
     '  "finished": "' + (Get-IsoNow) + "`",`n" +
     '  "attempts": ' + $AttemptsUsed + ",`n" +

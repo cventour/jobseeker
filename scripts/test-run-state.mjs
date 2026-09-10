@@ -24,7 +24,7 @@
 // Task Scheduler task, so JOBSEEKER_TASK_NAME pins it to JobSeeker\JobRunTest (never the real
 // \JobSeeker\JobRun) and cleanup unregisters it.
 
-import { promises as fs } from "fs";
+import { promises as fs, existsSync } from "fs";
 import { execFile } from "child_process";
 import path from "path";
 import os from "os";
@@ -101,8 +101,9 @@ const env = (dir, extra = {}) => ({
   ...extra,
 });
 
-// Put the sandbox into a named coverage state, then run job-run.sh and read back its verdict.
-async function runWith(dir, { canRead, digest, exitCode = 0, boards = 0 }) {
+// Put the sandbox into a named coverage state. Split out from runWith so the run-now cases can
+// stage exactly the same run and then start it through the other entry point.
+async function seedRun(dir, { canRead, digest, exitCode = 0, boards = 0 }) {
   await fs.writeFile(path.join(dir, "data", ".browser-status.json"), JSON.stringify({
     chrome_running: true,
     capabilities: { read_page_content: canRead, read_mechanism: canRead ? "apple-events" : "none" },
@@ -128,7 +129,11 @@ async function runWith(dir, { canRead, digest, exitCode = 0, boards = 0 }) {
        'echo {"result":"ran","total_cost_usd":0}']
   ).concat(`exit /b ${exitCode}`).join("\r\n") + "\r\n";
   await writeStub(dir, "claude", bashStub, cmdStub);
+}
 
+// …then run job-run.sh and read back its verdict.
+async function runWith(dir, opts) {
+  await seedRun(dir, opts);
   await runScript(dir, "job-run");
   try {
     return JSON.parse(await fs.readFile(path.join(dir, "data", ".job-run.status.json"), "utf8"));
@@ -185,6 +190,92 @@ async function main() {
   await runWith(dir, { canRead: true, digest: "delivered: whatsapp" });
   const prev = JSON.parse(await fs.readFile(path.join(dir, "data", ".job-run.last.json"), "utf8"));
   check(prev.state === "failed", "the previous run's verdict is kept, not overwritten", prev.state);
+
+  console.log("\nrun now — the verdict the dashboard shows\n");
+
+  // The dashboard's "Run now" pill is rendered from data/.run-now.status.json, and for job-run that
+  // file used to be written from job-run's EXIT CODE alone. job-run deliberately exits 0 while
+  // recording `failed` for a run that wrote no digest, so the pill read "Full daily run — finished"
+  // over a run whose own status file, one directory along, said the deliverable was missing. Every
+  // case below asserts the two files agree.
+  const runNowWith = async (opts) => {
+    await seedRun(dir, opts);
+    await runScript(dir, "run-now", ["job-run"]);
+    try {
+      return JSON.parse(await fs.readFile(path.join(dir, "data", ".run-now.status.json"), "utf8"));
+    } catch (e) {
+      return { state: "UNREADABLE", error: String(e.message) };
+    }
+  };
+
+  let rn = await runNowWith({ canRead: true, digest: "delivered: whatsapp" });
+  check(rn.state === "ok", "a clean run is reported as ok", rn.state);
+
+  rn = await runNowWith({ canRead: true, digest: null });
+  check(rn.state === "failed", "a run that wrote no digest is NOT reported as finished", rn.state);
+  check(/no digest/i.test(String(rn.detail || "")), "…and the pill carries job-run's own words", rn.detail);
+
+  rn = await runNowWith({ canRead: false, digest: "delivered: whatsapp" });
+  check(rn.state === "partial", "a run that could not read pages is reported as partial", rn.state);
+
+  // Freshness. A job-run that dies before writing anything must not hand back the verdict of the
+  // run before it — "ok" from an hour ago is a worse answer than no answer at all.
+  {
+    await seedRun(dir, { canRead: true, digest: "delivered: whatsapp" });
+    await runScript(dir, "run-now", ["job-run"]);   // leaves a genuine `ok` on disk
+    const jobRun = plat.scriptCommand("job-run").args[0];
+    const saved = await fs.readFile(jobRun, "utf8");
+    await fs.writeFile(jobRun, IS_WIN ? "exit 3\r\n" : "#!/usr/bin/env bash\nexit 3\n");
+    try {
+      await runScript(dir, "run-now", ["job-run"]);
+      const after = JSON.parse(await fs.readFile(path.join(dir, "data", ".run-now.status.json"), "utf8"));
+      check(after.state === "failed", "a job-run that wrote nothing does not inherit the last verdict", after.state);
+    } finally {
+      await fs.writeFile(jobRun, saved);
+    }
+  }
+
+  console.log("\nmarket research\n");
+
+  // Researching a market is spawned detached with its output discarded, so this status file is the
+  // only thing that can ever reach the screen. Before it existed the button promised the companies
+  // would appear on reload and then said nothing whatsoever, however the pass ended.
+  const researchWith = async (extraEnv = {}) => {
+    await fs.rm(path.join(dir, "data", ".markets-run.status.json"), { force: true });
+    await runScript(dir, "research-market", ["Fintech"], extraEnv);
+    try {
+      return JSON.parse(await fs.readFile(path.join(dir, "data", ".markets-run.status.json"), "utf8"));
+    } catch (e) {
+      return { state: "UNREADABLE", error: String(e.message) };
+    }
+  };
+
+  await writeStub(dir, "claude", `#!/bin/bash\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`,
+    '@echo off\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n');
+  let mk = await researchWith();
+  check(mk.state === "ok", "a research pass that worked says so", mk.state);
+  check(mk.market === "Fintech", "…and names the market it was asked for", mk.market);
+
+  // The run lock, which this script never took: a research pass on top of a daily run put two
+  // agents in the same Chrome, which is the one thing AGENT-RULES §13 exists to forbid.
+  await fs.writeFile(path.join(dir, "data", ".run-now.lock"), `${process.pid} job-run 2026-09-10T07:00:00Z\n`);
+  mk = await researchWith();
+  await fs.rm(path.join(dir, "data", ".run-now.lock"), { force: true });
+  check(mk.state === "skipped-busy", "a pass refused because something else holds the lock says so", mk.state);
+
+  // The failure that started all this: `claude` not on the PATH a GUI app hands its children. Only
+  // skipped where a system-wide install would make the stub-free PATH reach a REAL claude — the
+  // test must never spend money to prove a point about not spending money.
+  const systemClaude = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+    .filter((p) => existsSync(p));
+  if (systemClaude.length) {
+    console.log(`  skip  claude-not-found case — a real claude at ${systemClaude[0]} would be found and run`);
+  } else {
+    await fs.rm(path.join(dir, "bin", IS_WIN ? "claude.cmd" : "claude"), { force: true });
+    mk = await researchWith({ PATH: `${path.join(dir, "bin")}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${IS_WIN ? "C:\\Windows\\System32" : "/usr/bin:/bin"}` });
+    check(mk.state === "failed", "a pass that could not find claude reports failed, not silence", mk.state);
+    check(/Claude Code CLI/i.test(String(mk.detail || "")), "…and says that is why", mk.detail);
+  }
 
   console.log("\nschedule ladder\n");
 

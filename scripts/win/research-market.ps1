@@ -14,10 +14,11 @@
 # the monthly ceiling is honoured, the actual cost is recorded to the same ledger, and a run that
 # cannot be measured says so instead of quietly counting as free.
 #
-# The bash carries its own copies of the config reader and the spend snippets rather than sourcing
-# lib/claude-run.sh. This twin dot-sources the library for that plumbing (the snippets are the same
-# bytes either way) but keeps the bash's own messages, its own exit codes, and — like the bash — no
-# run lock.
+# Both twins now take the run lock and write data/.markets-run.status.json. Neither did before: the
+# dashboard spawns this detached with its output discarded, so a pass that could not start said
+# nothing at all while the page promised the companies would appear on reload. The bash side also
+# carried its own hand-copied spend snippets and a bare `command -v claude`; it sources the shared
+# library now, as this side always has.
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 
@@ -34,11 +35,25 @@ if (-not $Market) {
 . "$PSScriptRoot\lib\claude-run.ps1"
 
 $Log = [IO.Path]::Combine($Repo, "data", ".markets-run.log")
+$Status = [IO.Path]::Combine($Repo, "data", ".markets-run.status.json")
 
-# Same reader as job-run: config is the source of truth so the dashboard can change the caps.
-$Budget = Read-Cfg max_spend_per_run_usd
-if (-not $Budget) { $Budget = "5" }
-$MonthCap = Read-Cfg max_spend_per_month_usd
+# The one thing the dashboard can read back. Written at every exit that matters, because the only
+# state worse than "failed" on this screen is nothing at all -- which is what it said before.
+function Write-Status { # state, detail
+  param([string]$State, [string]$Detail)
+  $json = @"
+{
+  "market": "$(ConvertTo-JsonString $Market)",
+  "state": "$State",
+  "started": "$Started",
+  "finished": "$(Get-UtcStamp)",
+  "detail": "$(ConvertTo-JsonString $Detail)"
+}
+"@
+  Write-Utf8File $Status ($json + "`n")   # the bash heredoc ends with a newline; match it byte for byte
+}
+
+$Started = Get-UtcStamp
 
 New-Item -ItemType Directory -Path ([IO.Path]::Combine($Repo, "data")) -Force | Out-Null
 $script:LogFile = $Log
@@ -46,51 +61,47 @@ $rc = 1
 try {
   Write-RunLog "==================== research-market '$Market' $(Get-LocalStamp) ===================="
 
-  $script:ClaudeBin = Resolve-ClaudeBin
-  if (-not $script:ClaudeBin) {
-    Write-RunLog "ERROR: 'claude' CLI not found on PATH — cannot research a market without it."
+  Write-Status "running" "researching $Market"
+
+  # Require-Claude prints where it looked, and puts the directory it found on PATH so anything
+  # claude itself shells out to can find its neighbours.
+  if (-not (Require-Claude)) {
+    Write-Status "failed" "The Claude Code CLI could not be found on this machine."
     exit 127
+  }
+
+  # One claude-driven run at a time, whatever started it. This script never took the lock, so the
+  # research pass could land on top of a daily run and the two read each other's Chrome tabs
+  # (AGENT-RULES §13) -- the exact thing the lock exists to stop.
+  if (-not (Take-RunLock "markets")) {
+    Write-Status "skipped-busy" "another run was already in progress, so $Market was not researched"
+    exit 75
   }
 
   # Refuse BEFORE spending, exactly as the daily run does. A ceiling that only applies to the
   # scheduled path would be a ceiling with a hole in it.
-  if ($MonthCap) {
-    $Spent = Get-MonthSpent
-    $Over = Test-SpendOver $Spent $MonthCap
-    if ($Over -eq "1") {
-      Write-RunLog "MONTHLY CEILING REACHED: `$$Spent of `$$MonthCap — not researching '$Market'."
-      exit 0
-    }
+  if (Test-MonthCeiling) {
+    Write-Status "skipped-budget" "monthly spend ceiling reached; $Market was not researched"
+    exit 0
   }
 
-  $Started = Get-UtcStamp
-  # stdout only — stderr into this file would break the JSON parse and lose the cost, which is
-  # exactly how the daily run's ledger stayed empty for five runs.
-  $run = Invoke-Claude "/markets $Market" $Budget
-  $Resp = $run.ResponseFile
-  $rc = [int]$run.ExitCode
-  try {
-    if ($run.StderrText) { Write-RunLog $run.StderrText.TrimEnd("`n", "`r") }
-    Read-ClaudeResponse $Resp
-
-    $costFile = "$Resp.cost"
-    if ((Test-Path -LiteralPath $costFile) -and (Get-Item -LiteralPath $costFile).Length -gt 0) {
-      $Cost = [IO.File]::ReadAllText($costFile, $Utf8NoBom).Trim()
-      if ($rc -eq 0) { $outcome = "ok" } else { $outcome = "failed" }
-      $json = '{"started":"' + $Started + '","cost_usd":' + $Cost + ',"outcome":"' + $outcome + '","detail":"market research: ' + $Market + '"}'
-      if (Invoke-Record @("add-spend", $json)) { Write-RunLog "spend recorded: `$$Cost" }
-    } else {
-      Write-RunLog "spend NOT recorded — no cost returned"
-    }
-  } finally {
-    Remove-Item -LiteralPath $Resp, "$Resp.cost" -Force -ErrorAction SilentlyContinue
-  }
+  $Budget = Get-RunBudget "5"
+  $rc = Invoke-ClaudeRun "/markets $Market" $Budget "market research: $Market"
 
   [void](Invoke-Record @("log", "markets", "Market research for '$Market' finished (exit $rc), started from the dashboard"))
+
+  if ($rc -eq 0) {
+    Write-Status "ok" "$Market researched"
+  } else {
+    Write-Status "failed" "the research pass exited $rc — see data/.markets-run.log"
+  }
 
   Write-RunLog "==================== done $(Get-LocalStamp) (exit $rc) ===================="
   exit $rc
 } catch {
   Write-RunLog "ERROR: $($_.Exception.Message)"
+  try { Write-Status "failed" "$($_.Exception.Message)" } catch { }
   exit 1
+} finally {
+  Release-RunLock
 }

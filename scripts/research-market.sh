@@ -13,11 +13,20 @@
 # so it carries the same guards as the scheduled run rather than a lighter version of them:
 # the monthly ceiling is honoured, the actual cost is recorded to the same ledger, and a run that
 # cannot be measured says so instead of quietly counting as free.
+#
+# It used to carry hand-copied versions of that plumbing and its own bare `command -v claude`. The
+# copy went stale: every other paid path resolves the CLI through resolve_claude, which also looks
+# where the installer actually puts it, and this one did not. A GUI app hands its children launchd's
+# PATH -- /usr/bin:/bin:/usr/sbin:/sbin -- so the button exited 127 before spending a cent on every
+# machine where claude lives in ~/.local/bin, which is most of them. Nothing said so: the dashboard
+# spawns this detached with stdio ignored and then promises the companies will appear on reload.
+# Hence the shared library below, and the status file this now writes.
 
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO" || exit 1
+. "$REPO/scripts/lib/claude-run.sh"
 
 MARKET="${1:-}"
 if [ -z "$MARKET" ]; then
@@ -26,75 +35,67 @@ if [ -z "$MARKET" ]; then
 fi
 
 LOG="$REPO/data/.markets-run.log"
-NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
+STATUS="$REPO/data/.markets-run.status.json"
 
-# Same reader as job-run.sh: config is the source of truth so the dashboard can change the caps.
-read_cfg() {
-  "$NODE_BIN" -e '
-    const fs=require("fs");
-    try{
-      const t=fs.readFileSync("config/job-seeker.config.md","utf8");
-      const m=new RegExp("^"+process.argv[1]+":[ \t]*(.*)$","m").exec(t);
-      process.stdout.write(m && m[1] ? m[1].trim() : "");
-    }catch{ process.stdout.write(""); }
-  ' "$1" 2>/dev/null
+# The one thing the dashboard can read back. Written at every exit that matters, because the only
+# state worse than "failed" on this screen is nothing at all -- which is what it said before.
+write_status() { # state, detail
+  cat > "$STATUS.tmp" <<JSON
+{
+  "market": "$(printf '%s' "$MARKET" | sed 's/"/\\"/g')",
+  "state": "$1",
+  "started": "$STARTED",
+  "finished": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "detail": "$(printf '%s' "$2" | sed 's/"/\\"/g')"
+}
+JSON
+  # Atomic. A reader that catches this half-written sees invalid JSON and reports nothing at all,
+  # which looks identical to a market nobody ever researched.
+  mv "$STATUS.tmp" "$STATUS"
 }
 
-BUDGET="$(read_cfg max_spend_per_run_usd)"; [ -n "$BUDGET" ] || BUDGET=5
-MONTH_CAP="$(read_cfg max_spend_per_month_usd)"
+STARTED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
+mkdir -p "$REPO/data"
 {
   echo "==================== research-market '$MARKET' $(date '+%Y-%m-%d %H:%M:%S') ===================="
 
-  if ! command -v claude >/dev/null 2>&1; then
-    echo "ERROR: 'claude' CLI not found on PATH — cannot research a market without it."
+  write_status "running" "researching $MARKET"
+
+  # require_claude prints where it looked, and puts the directory it found on PATH so anything
+  # claude itself shells out to can find its neighbours.
+  if ! require_claude; then
+    write_status "failed" "The Claude Code CLI could not be found on this machine."
     exit 127
+  fi
+
+  # One claude-driven run at a time, whatever started it. This script never took the lock, so the
+  # research pass could land on top of a daily run and the two read each other's Chrome tabs
+  # (AGENT-RULES §13) -- the exact thing the lock exists to stop.
+  if ! take_run_lock "markets"; then
+    write_status "skipped-busy" "another run was already in progress, so $MARKET was not researched"
+    exit 75
   fi
 
   # Refuse BEFORE spending, exactly as the daily run does. A ceiling that only applies to the
   # scheduled path would be a ceiling with a hole in it.
-  if [ -n "$MONTH_CAP" ]; then
-    SPENT="$("$NODE_BIN" "$REPO/server/record.mjs" list-spend 2>/dev/null \
-      | "$NODE_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-          try{process.stdout.write(String(JSON.parse(s).month_total_usd||0))}catch{process.stdout.write("0")}})')"
-    OVER="$("$NODE_BIN" -e 'process.stdout.write(Number(process.argv[1])>=Number(process.argv[2])?"1":"0")' "$SPENT" "$MONTH_CAP")"
-    if [ "$OVER" = "1" ]; then
-      echo "MONTHLY CEILING REACHED: \$$SPENT of \$$MONTH_CAP — not researching '$MARKET'."
-      exit 0
-    fi
+  if month_ceiling_blocks; then
+    write_status "skipped-budget" "monthly spend ceiling reached; $MARKET was not researched"
+    exit 0
   fi
 
-  STARTED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  RESP="$(mktemp)"
-  # stdout only — stderr into this file would break the JSON parse and lose the cost, which is
-  # exactly how the daily run's ledger stayed empty for five runs.
-  claude -p "/markets $MARKET" --max-budget-usd "$BUDGET" --output-format json > "$RESP"
+  BUDGET="$(run_budget 5)"
+  run_claude "/markets $MARKET" "$BUDGET" "market research: $MARKET"
   rc=$?
-
-  "$NODE_BIN" -e '
-    const fs=require("fs");
-    const raw=fs.readFileSync(process.argv[1],"utf8");
-    const parse=(s)=>{ try { return JSON.parse(s); } catch { return null; } };
-    let d=parse(raw);
-    if(!d){ const lines=raw.split("\n").filter(l=>l.trim().startsWith("{"));
-            for(let i=lines.length-1;i>=0&&!d;i--) d=parse(lines[i]); }
-    if(!d){ process.stdout.write(raw); process.exit(0); }
-    if(d.result) process.stdout.write(d.result+"\n");
-    if(typeof d.total_cost_usd==="number") fs.writeFileSync(process.argv[2], String(d.total_cost_usd));
-  ' "$RESP" "$RESP.cost" 2>/dev/null || cat "$RESP"
-
-  if [ -s "$RESP.cost" ]; then
-    COST="$(cat "$RESP.cost")"
-    "$NODE_BIN" "$REPO/server/record.mjs" add-spend \
-      "{\"started\":\"$STARTED\",\"cost_usd\":$COST,\"outcome\":\"$([ $rc -eq 0 ] && echo ok || echo failed)\",\"detail\":\"market research: $MARKET\"}" >/dev/null 2>&1 \
-      && echo "spend recorded: \$$COST"
-  else
-    echo "spend NOT recorded — no cost returned"
-  fi
-  rm -f "$RESP" "$RESP.cost"
 
   "$NODE_BIN" "$REPO/server/record.mjs" log markets \
     "Market research for '$MARKET' finished (exit $rc), started from the dashboard" >/dev/null 2>&1
+
+  if [ $rc -eq 0 ]; then
+    write_status "ok" "$MARKET researched"
+  else
+    write_status "failed" "the research pass exited $rc — see data/.markets-run.log"
+  fi
 
   echo "==================== done $(date '+%Y-%m-%d %H:%M:%S') (exit $rc) ===================="
   exit $rc

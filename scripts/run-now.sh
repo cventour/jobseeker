@@ -64,6 +64,25 @@ JSON
 
 STARTED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
+JOBRUN_STATUS="$REPO/data/.job-run.status.json"
+
+# One field out of the status file job-run.sh writes. Whether that file belongs to the run WE
+# started is decided by the caller comparing its contents before and after, not by comparing
+# timestamps: these stamps have one-second resolution, so a job-run that died instantly would
+# sometimes carry the same second as our own start and be accepted as fresh. Handing back last
+# hour's "ok" is worse than handing back nothing at all, and it is the same class of bug as the one
+# this whole change is about.
+jobrun_field() { # field -> value, or nothing
+  "$NODE_BIN" -e '
+    const fs=require("fs");
+    try{
+      const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+      if(s.state === "running") process.exit(0);   // still in flight; not a verdict
+      process.stdout.write(String(s[process.argv[2]] ?? ""));
+    }catch{}
+  ' "$JOBRUN_STATUS" "$1" 2>/dev/null
+}
+
 mkdir -p "$REPO/data"
 {
   echo "==================== run-now '$SLUG' $(date '+%Y-%m-%d %H:%M:%S') ===================="
@@ -91,16 +110,40 @@ mkdir -p "$REPO/data"
     # The daily pipeline has hardening the other commands do not need — a watchdog, one retry, a
     # memory guard, a full wake before it touches Chrome. Delegate rather than reimplement a
     # weaker copy of it here; it writes its own log and its own status file.
+    # Snapshot the verdict already on disk, so "job-run wrote one" can be told from "job-run died
+    # before it could". Contents, not timestamps — see jobrun_field.
+    JR_BEFORE="$(cat "$JOBRUN_STATUS" 2>/dev/null)" || JR_BEFORE=""
     JOBRUN_SOURCE=manual bash "$REPO/scripts/job-run.sh"
     rc=$?
     echo "job-run.sh exited $rc (its own output is in data/.job-run.log)"
+    # And its status file is the verdict, not its exit code. job-run.sh deliberately records
+    # `failed` for a run that finished but wrote no digest — the one deliverable it exists to
+    # produce — while still exiting 0, so trusting rc here reported "Full daily run completed" for
+    # a run whose own status file, written seconds earlier, said the opposite. That is what "it
+    # said it finished and nothing appeared" is: not a run that lied, a verdict thrown away by
+    # the caller that displayed it.
+    JR_AFTER="$(cat "$JOBRUN_STATUS" 2>/dev/null)" || JR_AFTER=""
+    if [ -n "$JR_AFTER" ] && [ "$JR_AFTER" != "$JR_BEFORE" ]; then
+      JR_STATE="$(jobrun_field state)"
+      JR_DETAIL="$(jobrun_field detail)"
+    fi
   else
     run_claude "$PROMPT" "$BUDGET" "$LABEL (dashboard)"
     rc=$?
   fi
 
   "$NODE_BIN" "$REPO/server/record.mjs" log run-finish "$LABEL finished (exit $rc)" >/dev/null 2>&1
-  if [ $rc -eq 0 ]; then write_status "ok" "$LABEL completed"; else write_status "failed" "$LABEL exited $rc"; fi
+  if [ -n "${JR_STATE:-}" ]; then
+    write_status "$JR_STATE" "$LABEL ${JR_DETAIL:-finished}"
+    # Keep the exit code and the status agreeing. Nothing consumes this one — the dashboard reads
+    # the file — but a script whose exit code contradicts what it just wrote down is how this bug
+    # got here in the first place.
+    [ "$JR_STATE" = "ok" ] || [ "$JR_STATE" = "partial" ] || rc=1
+  elif [ $rc -eq 0 ]; then
+    write_status "ok" "$LABEL completed"
+  else
+    write_status "failed" "$LABEL exited $rc"
+  fi
 
   echo "==================== done $(date '+%Y-%m-%d %H:%M:%S') (exit $rc) ===================="
   exit $rc

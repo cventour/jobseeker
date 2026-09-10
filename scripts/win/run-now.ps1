@@ -71,9 +71,36 @@ function Write-Status { # state, detail
 
 $Started = Get-UtcStamp
 
+$JobRunStatus = [IO.Path]::Combine($Repo, "data", ".job-run.status.json")
+
+function Read-JobRunStatus { # raw text, or "" when there is none
+  if (-not (Test-Path -LiteralPath $JobRunStatus -PathType Leaf)) { return "" }
+  try { return (Get-Content -LiteralPath $JobRunStatus -Raw -Encoding UTF8) } catch { return "" }
+}
+
+# One field out of the status file job-run.ps1 writes. Whether that file belongs to the run WE
+# started is decided by the caller comparing its contents before and after, not by comparing
+# timestamps: these stamps have one-second resolution, so a job-run that died instantly would
+# sometimes carry the same second as our own start and be accepted as fresh. Handing back last
+# hour's "ok" is worse than handing back nothing at all, and it is the same class of bug as the one
+# this whole change is about.
+function Get-JobRunField { # field -> value, or ""
+  param([string]$Field)
+  $raw = Read-JobRunStatus
+  if (-not $raw) { return "" }
+  try {
+    $s = $raw | ConvertFrom-Json
+    if ($s.state -eq "running") { return "" }   # still in flight; not a verdict
+    if ($null -eq $s.$Field) { return "" }
+    return [string]$s.$Field
+  } catch { return "" }
+}
+
 New-Item -ItemType Directory -Path ([IO.Path]::Combine($Repo, "data")) -Force | Out-Null
 $script:LogFile = $Log
 $rc = 1
+$jrState = ""
+$jrDetail = ""
 try {
   Write-RunLog "==================== run-now '$Slug' $(Get-LocalStamp) ===================="
 
@@ -100,6 +127,9 @@ try {
     # The daily pipeline has hardening the other commands do not need — a watchdog, one retry, a
     # memory guard, a full wake before it touches Chrome. Delegate rather than reimplement a
     # weaker copy of it here; it writes its own log and its own status file.
+    # Snapshot the verdict already on disk, so "job-run wrote one" can be told from "job-run died
+    # before it could". Contents, not timestamps — see Get-JobRunField.
+    $jrBefore = Read-JobRunStatus
     $jobRun = [IO.Path]::Combine($Repo, "scripts", "win", "job-run.ps1")
     if (Test-Path -LiteralPath $jobRun -PathType Leaf) {
       $env:JOBRUN_SOURCE = "manual"
@@ -114,12 +144,34 @@ try {
       $rc = 127
     }
     Write-RunLog "job-run.ps1 exited $rc (its own output is in data/.job-run.log)"
+    # And its status file is the verdict, not its exit code. job-run deliberately records `failed`
+    # for a run that finished but wrote no digest — the one deliverable it exists to produce —
+    # while still exiting 0, so trusting $rc here reported "Full daily run completed" for a run
+    # whose own status file, written seconds earlier, said the opposite. That is what "it said it
+    # finished and nothing appeared" is: not a run that lied, a verdict thrown away by the caller
+    # that displayed it.
+    $jrAfter = Read-JobRunStatus
+    if ($jrAfter -and $jrAfter -ne $jrBefore) {
+      $jrState = Get-JobRunField "state"
+      $jrDetail = Get-JobRunField "detail"
+    }
   } else {
     $rc = Invoke-ClaudeRun $Prompt $Budget "$Label (dashboard)"
   }
 
   [void](Invoke-Record @("log", "run-finish", "$Label finished (exit $rc)"))
-  if ($rc -eq 0) { Write-Status "ok" "$Label completed" } else { Write-Status "failed" "$Label exited $rc" }
+  if ($jrState) {
+    if (-not $jrDetail) { $jrDetail = "finished" }
+    Write-Status $jrState "$Label $jrDetail"
+    # Keep the exit code and the status agreeing. Nothing consumes this one — the dashboard reads
+    # the file — but a script whose exit code contradicts what it just wrote down is how this bug
+    # got here in the first place.
+    if ($jrState -ne "ok" -and $jrState -ne "partial") { $rc = 1 }
+  } elseif ($rc -eq 0) {
+    Write-Status "ok" "$Label completed"
+  } else {
+    Write-Status "failed" "$Label exited $rc"
+  }
 
   Write-RunLog "==================== done $(Get-LocalStamp) (exit $rc) ===================="
   exit $rc

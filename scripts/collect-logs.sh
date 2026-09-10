@@ -266,6 +266,11 @@ skeleton "run now" "$DATA/.run-now.log" 40
 show "run now status" "$DATA/.run-now.status.json" 20
 skeleton "job run" "$DATA/.job-run.log" 40
 show "job run status" "$DATA/.job-run.status.json" 30
+# Market research is spawned detached with its output discarded, so this log is the ONLY record
+# that it ran at all -- and it was the one log this bundle did not collect. A report of "I asked it
+# to research my markets and nothing happened" was unanswerable for exactly that reason.
+skeleton "market research" "$DATA/.markets-run.log" 40
+show "market research status" "$DATA/.markets-run.status.json" 20
 show "browser status" "$DATA/.browser-status.json" 40
 skeleton "bridge" "$DATA/.bridge.log" 40
 

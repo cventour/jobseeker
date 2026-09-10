@@ -145,6 +145,7 @@ write_status() { # state, attempts_used, detail, gaps_json
   cat > "$STATUS.tmp" <<EOF
 {
   "state": "$1",
+  "source": "${JOBRUN_SOURCE:-scheduled}",
   "started": "$STARTED",
   "finished": "$(iso_now)",
   "attempts": $2,
