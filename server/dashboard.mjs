@@ -394,8 +394,8 @@ const FEEDBACK_MODAL = `
       <ul class="fb-manifest">
         <li><span class="fb-mk yes">+</span><span>What you wrote above</span></li>
         <li><span class="fb-mk yes">+</span><span>Version, OS and browser</span></li>
-        <li><span class="fb-mk yes">+</span><span>The last 300 lines of each app log &mdash; always included, with
-          names, emails, phone numbers and company names masked</span></li>
+        <li><span class="fb-mk yes">+</span><span>The same log report <code>npm run logs</code> writes &mdash; always
+          included, with names, emails, phone numbers and company names masked</span></li>
         <li><span class="fb-mk no">&minus;</span><span>Never: your <code>data/</code> tables, CV, contacts,
           message text or any credential</span></li>
       </ul>
@@ -3376,8 +3376,6 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
         <form method="POST" action="/check-update" class="inline">
           <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="setup">
           <button type="submit" class="verbtn" title="Ask GitHub whether there is a newer release">Check for updates</button>
-          <button type="submit" formaction="/report-problem" class="verbtn"
-            title="Write one file to your Desktop with everything needed to explain a problem">Report a problem</button>
         </form></span>`
     : ""
 }</footer>
@@ -7804,31 +7802,6 @@ async function handlePickCV(form) {
   return done({ kind: "ok", msg: `Reading ${name} — this takes about half a minute.` });
 }
 
-// Collect the logs, for someone who will never open a terminal.
-//
-// scripts/collect-logs.sh already does the work and is the same thing `npm run logs` runs. It
-// existed first as a script because it was written to be emailed to one tester -- but the people
-// who most need it are exactly the people for whom "run this command" is the end of the road, so
-// it needs a button too. One implementation, two doors.
-//
-// Awaited rather than detached, unlike the update: it finishes in seconds, changes nothing, and
-// the whole point is to hand back the path it wrote.
-async function handleReportProblem() {
-  const r = await platform.runScript("collect-logs", [], { timeout: 180_000 });
-  const out = `${r.out || ""}\n${r.err || ""}`;
-  const m = /Wrote\s+(.+?)\s*(?:\(|$)/m.exec(out);
-  if (!r.ok && !m) {
-    return { kind: "bad", msg: "The logs could not be collected. From a terminal: npm run logs" };
-  }
-  const file = m ? m[1].trim() : "";
-  return {
-    kind: "ok",
-    msg: file
-      ? `Wrote ${file} — it is on your Desktop and revealed in ${platform.IS_WIN ? "Explorer" : "Finder"}. Send that one file. Your CV, profile and contacts are not in it.`
-      : "The logs were collected — look on your Desktop for jobseeker-logs.",
-  };
-}
-
 // Ask GitHub now, rather than waiting for the next background check.
 //
 // The background check runs every six hours, which is right for a courtesy and wrong for the two
@@ -8457,8 +8430,8 @@ async function handleFeedback(req, res) {
         userAgent: String(body.userAgent || "").slice(0, 300),
         page: String(body.page || "").slice(0, 200),
       },
-      dataDir: DATA,
-      configFile: CONFIG,
+      // The log body comes from scripts/collect-logs.sh, the same collector `npm run logs` runs.
+      runScript: platform.runScript,
     });
     await logActivity("feedback", `Problem report written to ${path.basename(out.file)}`);
     res.writeHead(200, { "content-type": "application/json" });
@@ -8615,9 +8588,6 @@ async function handlePost(req, res, url) {
   }
   if (url.pathname === "/check-update") {
     return redirect(res, await handleCheckUpdate());
-  }
-  if (url.pathname === "/report-problem") {
-    return redirect(res, await handleReportProblem());
   }
   if (url.pathname === "/pick-cv") {
     const r = await handlePickCV(form);

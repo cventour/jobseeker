@@ -22,187 +22,36 @@ import os from "os";
 import path from "path";
 import zlib from "zlib";
 import { promisify } from "util";
-import { redactPatterns } from "./redact.mjs";
 
 const deflateRaw = promisify(zlib.deflateRaw);
 
-// Every log the app writes. Named rather than globbed: a glob would sweep up whatever a future
-// feature drops in data/, and this list is a promise about what leaves the machine.
-export const LOG_FILES = [
-  ".run-now.log",
-  ".job-run.log",
-  ".markets-run.log",
-  ".approvals.log",
-  ".bridge.log",
-  ".spawn.log",
-];
+/* ------------------------------------------------------------------ the log body */
 
-// Per log. Enough to see what a run did, small enough that nobody has to scroll for an hour.
-const TAIL_LINES = 300;
-
-/* ------------------------------------------------------------------ redaction */
-
-// Two layers, and the order matters.
+// One collector, two doors.
 //
-// 1. The SHAPES that are sensitive wherever they appear — an address, a phone number, a token, the
-//    home directory. That layer is server/redact.mjs, already shared by `npm run logs` and its
-//    Windows twin, and imported rather than reimplemented here: two answers to "what is safe to
-//    send" is one too many, and the one that drifts is always the copy.
-// 2. The NAMES that are only sensitive because they are this user's — their contacts, and the
-//    companies they are chasing. No pattern can find "Aegis Networks" in a log line; a list built
-//    from data/ can. This layer is new, and it is the one that actually protects a job search.
+// scripts/collect-logs.sh (and its Windows twin) is what `npm run logs` and the Settings button
+// already run, and it answers questions this module never could: which Claude CLI is on PATH and
+// whether a GUI app could see it, what the updater did, whether the app bundle was rebuilt. It also
+// redacts on the way out, through server/redact.mjs, with the name dictionary now passed in.
 //
-const GENERIC_WORDS = new Set(
-  ("group holdings networks security systems solutions technologies technology software global " +
-   "international limited digital services partners labs cyber data cloud consulting corporation " +
-   "company ventures capital media health energy financial finance bank insurance retail " +
-   // Second words that are also ordinary English. The distinctive half of the name is masked either
-   // way, so dropping these costs no privacy and buys a log a person can still read.
-   "trust protect shield guard point wave works edge core link gate prime next first vendor " +
-   "example sample test demo")
-    .split(" ")
-);
-
-// Table headers and record keys. They arrive looking exactly like a one-word value, and masking
-// "name" or "status" would replace those words everywhere they legitimately appear in a log.
-const COLUMN_WORDS = new Set(
-  ("name date company role status notes type detail kind channel source market tier reason " +
-   "timestamp title link stage venue owner action email phone")
-    .split(" ")
-);
-
-/** Reject ids, timestamps, separator rules, and anything with no capital letter in it.
- *  A person or a company is a proper noun; everything a markdown table puts in the same position
- *  and is NOT sensitive — a column header, a record id, a date — is not. */
-function looksLikeAName(t) {
-  if (t.length < 4 || t.length > 80) return false;
-  if (!/[A-Z]/.test(t)) return false;
-  if (!/[A-Za-z]{3}/.test(t)) return false;
-  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return false; // a date or an ISO timestamp
-  if (/^[a-z]+_[a-z0-9]+$/i.test(t)) return false; // app_ag02, comm_e1, contact_example
-  if (/^-+$/.test(t)) return false; // a table rule
-  if (COLUMN_WORDS.has(t.toLowerCase())) return false;
-  return true;
-}
-
-/**
- * Strings that are only sensitive because they are THIS user's. Read from data/ and config/, never
- * guessed. Anything that does not look like a proper noun is dropped: masking "name" or "2026-08-01"
- * would shred the log into noise without protecting anything.
- */
-export async function buildDictionary(dataDir, configFile) {
-  const terms = new Set();
-  const add = (s) => {
-    const t = String(s || "").trim().replace(/^\[|\]$/g, "");
-    if (!looksLikeAName(t)) return;
-    terms.add(t);
-    // "Aegis Networks" in the log is easy; "Aegis" on its own is the one that gets missed.
-    if (t.includes(" ")) {
-      for (const word of t.split(/\s+/)) {
-        const w = word.replace(/[^\w&-]/g, "");
-        if (w.length >= 4 && /[A-Z]/.test(w) && !GENERIC_WORDS.has(w.toLowerCase())) terms.add(w);
-      }
-    }
-  };
-
-  const readSafe = async (p) => {
-    try {
-      return await fs.readFile(p, "utf8");
-    } catch {
-      return "";
-    }
-  };
-
-  // Companies, from the markets tables.
-  const marketsDir = path.join(dataDir, "markets");
-  let marketFiles = [];
+// So this does not gather logs itself. It runs that script, pointed at a temp file instead of the
+// Desktop (JOBSEEKER_LOGS_OUT, which also suppresses the Finder reveal), and puts the text it wrote
+// into the bundle. Duplicating any of it here would mean two collectors drifting apart on what a
+// bug report is worth reading.
+export async function collectLogs({ runScript, timeoutMs = 180_000 } = {}) {
+  const file = path.join(os.tmpdir(), `jobseeker-report-${Date.now()}.txt`);
   try {
-    marketFiles = (await fs.readdir(marketsDir)).filter((f) => f.endsWith(".md"));
-  } catch {
-    /* no markets yet */
+    await runScript("collect-logs", [], { timeout: timeoutMs, env: { JOBSEEKER_LOGS_OUT: file } });
+    const text = await fs.readFile(file, "utf8");
+    if (text.trim()) return text;
+    return "The log collector produced nothing.\n";
+  } catch (e) {
+    // A report that says the collector failed is worth more than no report: the message the user
+    // typed is still the point, and "collect-logs would not run" is itself a bug worth hearing.
+    return `The log collector could not be run, so this report has no logs in it.\n\n${e?.message || e}\n`;
+  } finally {
+    await fs.rm(file, { force: true }).catch(() => {});
   }
-  for (const f of marketFiles) {
-    for (const line of (await readSafe(path.join(marketsDir, f))).split("\n")) {
-      const m = /^\|\s*([^|]+?)\s*\|/.exec(line); // first cell of each row is the company
-      if (m) add(m[1]);
-    }
-  }
-
-  // Companies and referrers from every application, lead and proposal. These matter most: a company
-  // you are actively applying to is the one a run's log will be full of, and it reaches data/
-  // through the records long before it reaches a market table.
-  for (const sub of ["applications", "proposals"]) {
-    let files = [];
-    try {
-      files = (await fs.readdir(path.join(dataDir, sub))).filter((f) => f.endsWith(".md"));
-    } catch {
-      continue;
-    }
-    for (const f of files) {
-      const text = await readSafe(path.join(dataDir, sub, f));
-      for (const m of text.matchAll(/^\s*(?:company|referrer|contact|recruiter|employer)\s*:\s*(.+)$/gim)) {
-        add(m[1].replace(/["']/g, ""));
-      }
-    }
-  }
-
-  // People, and whatever the tables put beside them.
-  for (const file of ["contacts.md", "communications.md", "applications.md"]) {
-    for (const line of (await readSafe(path.join(dataDir, file))).split("\n")) {
-      const cells = line.split("|").map((c) => c.trim());
-      if (cells.length < 3) continue;
-      add(cells[1]);
-      add(cells[2]);
-    }
-  }
-
-  const cfg = await readSafe(configFile);
-  for (const m of cfg.matchAll(/^\s*[-*]?\s*(?:name|full_name|company|employer)\s*:\s*(.+)$/gim)) {
-    add(m[1].replace(/["']/g, ""));
-  }
-  // company_aliases folds alternate spellings into one entry; every spelling is a real company name.
-  for (const m of cfg.matchAll(/^\s*[-*]\s*(.+?)\s*:\s*(.+)$/gm)) {
-    add(m[1]);
-    for (const alt of m[2].split(",")) add(alt);
-  }
-
-  return [...terms].sort((a, b) => b.length - a.length); // longest first, so "Aegis Networks" beats "Aegis"
-}
-
-const RX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
-
-/** The shared shape rules first, then this user's own names. */
-export function redact(text, dictionary = []) {
-  let out = redactPatterns(String(text ?? ""), os.homedir());
-  for (const term of dictionary) {
-    out = out.replace(new RegExp(term.replace(RX_ESCAPE, "\\$&"), "gi"), "<redacted-name>");
-  }
-  return out;
-}
-
-/* ------------------------------------------------------------------ logs */
-
-function tail(text, lines) {
-  const all = text.split("\n");
-  return all.length <= lines ? text : all.slice(-lines).join("\n");
-}
-
-/** Every log's tail, redacted, with a header per file. Missing logs are named, not skipped —
- *  "this log does not exist" is itself a useful fact in a bug report. */
-export async function collectLogs(dataDir, dictionary) {
-  const parts = [];
-  for (const name of LOG_FILES) {
-    const file = path.join(dataDir, name);
-    let body;
-    try {
-      const raw = await fs.readFile(file, "utf8");
-      body = raw.trim() ? tail(raw.trimEnd(), TAIL_LINES) : "(empty)";
-    } catch {
-      body = "(not present)";
-    }
-    parts.push(`===== ${name} — last ${TAIL_LINES} lines =====\n${redact(body, dictionary)}`);
-  }
-  return parts.join("\n\n") + "\n";
 }
 
 /* ------------------------------------------------------------------ zip */
@@ -336,9 +185,7 @@ const MAX_PNG_BYTES = 12 * 1024 * 1024;
  * @param {string} o.dataDir
  * @param {string} o.configFile
  */
-export async function buildBundle({ message, png, meta, dataDir, configFile, when = new Date() }) {
-  const dictionary = await buildDictionary(dataDir, configFile);
-
+export async function buildBundle({ message, png, meta, runScript, when = new Date() }) {
   const text =
     [
       "JobSeeker problem report",
@@ -357,16 +204,17 @@ export async function buildBundle({ message, png, meta, dataDir, configFile, whe
       "",
       "--- note ----------------------------------------------------------------",
       "",
-      "app.log is redacted: names, email addresses, phone numbers, company names and",
-      "the home directory are masked. No data/ table, CV, contact or message body is",
-      "in this file. The screenshot, if present, is a render of the dashboard page",
-      "itself and will show whatever was on it.",
+      "app.log is the same report `npm run logs` writes, redacted the same way:",
+      "names, email addresses, phone numbers, company names and the home directory",
+      "are masked. No data/ table, CV, contact or message body is in it. The",
+      "screenshot, if present, is a render of the dashboard page itself and will",
+      "show whatever was on it.",
       "",
     ].join("\n") + "\n";
 
   const entries = [
     { name: "feedback.txt", data: Buffer.from(text, "utf8") },
-    { name: "app.log", data: Buffer.from(await collectLogs(dataDir, dictionary), "utf8") },
+    { name: "app.log", data: Buffer.from(await collectLogs({ runScript }), "utf8") },
   ];
   if (png && png.length && png.length <= MAX_PNG_BYTES) {
     entries.push({ name: "screenshot.png", data: png, store: true });

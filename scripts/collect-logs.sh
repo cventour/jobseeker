@@ -45,8 +45,18 @@ cd "$REPO" || exit 1
 DATA="${JOBSEEKER_DATA_DIR:-$REPO/data}"
 
 STAMP="$(date '+%Y-%m-%d_%H%M')"
-OUT="$HOME/Desktop/jobseeker-logs_${STAMP}.txt"
-[ -d "$HOME/Desktop" ] || OUT="$HOME/jobseeker-logs_${STAMP}.txt"
+# The Desktop, unless a caller names somewhere else. The dashboard's Report a problem does name
+# somewhere else: it folds this report into a zip alongside the reporter's own words and, if they
+# allowed one, a picture of the page — so it wants the text, not a second loose file on the Desktop
+# and not a Finder window opening behind its dialog. JOBSEEKER_LOGS_OUT also suppresses the reveal
+# below, because a caller that gave a path is not asking to be shown it.
+if [ -n "${JOBSEEKER_LOGS_OUT:-}" ]; then
+  OUT="$JOBSEEKER_LOGS_OUT"
+  mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
+else
+  OUT="$HOME/Desktop/jobseeker-logs_${STAMP}.txt"
+  [ -d "$HOME/Desktop" ] || OUT="$HOME/jobseeker-logs_${STAMP}.txt"
+fi
 
 NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
 
@@ -82,7 +92,11 @@ process.stdin.on("end", () => {
 });
 FALLBACK
 fi
-redact() { "$NODE_BIN" "$REDACTOR" "$HOME"; }
+# $DATA and the config are what let the redactor mask the names in this user's own tracker — the
+# companies they are chasing and the people they are talking to. No pattern can recognise those; a
+# list read from data/ can. Harmless when they do not exist (a tester running an emailed copy): the
+# redactor falls back to the shape rules alone.
+redact() { "$NODE_BIN" "$REDACTOR" "$HOME" "$DATA" "$REPO/config/job-seeker.config.md"; }
 
 if ! "$NODE_BIN" --version >/dev/null 2>&1; then
   echo "Node is not installed on this Mac, and this script needs it to strip personal details out"
@@ -329,4 +343,4 @@ echo "Email or message that one file back. It is plain text — open it first if
 echo "exactly what it says. Your CV, your profile and your contacts are not in it; email"
 echo "addresses, phone numbers, keys and your home folder name are replaced."
 echo ""
-open -R "$OUT" 2>/dev/null || true
+[ -n "${JOBSEEKER_LOGS_OUT:-}" ] || open -R "$OUT" 2>/dev/null || true

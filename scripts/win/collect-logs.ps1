@@ -42,15 +42,26 @@ if (-not $node) {
 }
 
 $stamp = Get-Date -Format "yyyy-MM-dd_HHmm"
-$desk  = [Environment]::GetFolderPath("Desktop")
-if (-not $desk) { $desk = $env:USERPROFILE }
-$OUT   = Join-Path $desk "jobseeker-logs_$stamp.txt"
+# The Desktop, unless a caller names somewhere else -- see the note in the bash twin. The
+# dashboard's Report a problem folds this text into a zip and does not want a loose file on the
+# Desktop or an Explorer window opening behind its dialog, so a given path suppresses the reveal.
+if ($env:JOBSEEKER_LOGS_OUT) {
+  $OUT = $env:JOBSEEKER_LOGS_OUT
+  $dir = Split-Path -Parent $OUT
+  if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+} else {
+  $desk = [Environment]::GetFolderPath("Desktop")
+  if (-not $desk) { $desk = $env:USERPROFILE }
+  $OUT  = Join-Path $desk "jobseeker-logs_$stamp.txt"
+}
 Set-Content -Path $OUT -Value "" -Encoding UTF8
 
 $REDACT = Join-Path $REPO "server\redact.mjs"
 function Redact([string]$text) {
   if ($null -eq $text -or $text -eq "") { return "" }
-  return ($text | & $node $REDACT $env:USERPROFILE) -join "`n"
+  # $DATA and the config let the redactor mask this user's own companies and contacts as well as
+  # the shapes -- see the note in the bash twin.
+  return ($text | & $node $REDACT $env:USERPROFILE $DATA (Join-Path $REPO "config\job-seeker.config.md")) -join "`n"
 }
 # Home swapped out here, not at each call site -- see the note in the bash twin. One forgotten call
 # site puts the tester's real name in a file that promises it is not there.
@@ -214,4 +225,4 @@ Write-Host "Email or message that one file back. It is plain text - open it firs
 Write-Host "exactly what it says. Your CV, your profile and your contacts are not in it; email"
 Write-Host "addresses, phone numbers, keys and your user folder name are replaced."
 Write-Host ""
-Start-Process explorer.exe "/select,`"$OUT`""
+if (-not $env:JOBSEEKER_LOGS_OUT) { Start-Process explorer.exe "/select,`"$OUT`"" }

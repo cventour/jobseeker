@@ -11,8 +11,8 @@ import os from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { buildDictionary, redact, makeZip, collectLogs, bundleName } from "../server/feedback.mjs";
-import { redactPatterns } from "../server/redact.mjs";
+import { makeZip, collectLogs, bundleName } from "../server/feedback.mjs";
+import { buildDictionary, redactPatterns, redactAll } from "../server/redact.mjs";
 
 const run = promisify(execFile);
 let failed = 0;
@@ -42,6 +42,7 @@ const configFile = path.join(tmp, "job-seeker.config.md");
 await fs.writeFile(configFile, "name: Christos Ventouris\n");
 
 const dict = await buildDictionary(data, configFile);
+const redact = (t, d = []) => redactAll(t, os.homedir(), d);
 
 console.log("\nredaction — the shape layer is server/redact.mjs, shared with `npm run logs`");
 ok(
@@ -57,6 +58,16 @@ ok("phone numbers are masked", redact("rang +30 694 123 4567 twice").includes("<
 ok("token=... in a URL is masked", redact("GET https://x.test/a?token=abc123").includes("<redacted>"));
 ok("provider keys are masked", redact("using sk-ab12cd34ef56gh78").includes("<redacted-token>"));
 ok("the home directory becomes ~", redact(`read ${os.homedir()}/Downloads/x`).startsWith("read ~/"));
+ok(
+  "the bare username is masked too",
+  !redact(`node 505 ${path.basename(os.homedir())} 12u IPv4`).includes(path.basename(os.homedir())),
+  "lsof and ps print it in a column, with no path around it for the home rule to catch"
+);
+ok(
+  "a username inside a longer word survives",
+  redact("the same word").includes("same"),
+  "word-bounded, so a short username does not shred the log"
+);
 ok("short words survive", redact("the run had 2 ATS hits", dict).includes("ATS"), "3-letter terms must not be shredded");
 ok("ordinary log text survives", redact("curate finished in 41s", dict) === "curate finished in 41s");
 ok("companies in applications/ are masked", !redact("Aegis Networks returned 403", dict).includes("Aegis"));
@@ -73,21 +84,42 @@ ok("ISO timestamps survive", redact("at 2026-08-01T09:12:00Z", dict).includes("2
 ok("clock times survive", redact("ran at 14:22", dict).includes("14:22"));
 ok("a phone next to a date still goes", redact("on 2026-08-04 rang +30 694 123 4567", dict).includes("<redacted-phone>"));
 
-console.log("\nlogs");
-await fs.writeFile(path.join(data, ".run-now.log"), "starting curate\nSophos board returned 403\n");
-const logs = await collectLogs(data, dict);
-ok("a present log is included", logs.includes("starting curate"));
-ok("a present log is redacted", !logs.includes("Sophos"));
-ok("a missing log is named, not skipped", logs.includes(".bridge.log") && logs.includes("(not present)"));
-ok("every known log is accounted for", (logs.match(/=====/g) || []).length === 12);
+console.log("\nlogs — one collector, shared with `npm run logs`");
+{
+  // buildBundle does not read logs itself any more: it runs scripts/collect-logs.sh, pointed at a
+  // temp file. Asserted with a stand-in so the test stays fast and does not touch the Desktop.
+  let sawName = null;
+  let sawEnv = null;
+  const fakeRun = async (name, args, opts) => {
+    sawName = name;
+    sawEnv = opts?.env || {};
+    await fs.writeFile(sawEnv.JOBSEEKER_LOGS_OUT, "collector output here\n");
+    return { ok: true, out: "", err: "", code: 0 };
+  };
+  const body = await collectLogs({ runScript: fakeRun });
+  ok("it runs the shared collector", sawName === "collect-logs", String(sawName));
+  ok("it redirects the collector away from the Desktop", Boolean(sawEnv.JOBSEEKER_LOGS_OUT));
+  ok("it uses what the collector wrote", body.includes("collector output here"));
+  ok("the temp file is cleaned up", !(await fs.stat(sawEnv.JOBSEEKER_LOGS_OUT).catch(() => null)));
+
+  // A collector that will not run must not take the report down with it: the typed message is
+  // still the point, and "collect-logs failed" is itself worth reporting.
+  const boom = await collectLogs({
+    runScript: async () => {
+      throw new Error("collect-logs exploded");
+    },
+  });
+  ok("a broken collector still yields a report", boom.includes("collect-logs exploded"));
+}
 
 console.log("\nbundle");
 ok("the name sorts and carries a timestamp", /^jobseeker-feedback-\d{4}-\d{2}-\d{2}-\d{4}\.zip$/.test(bundleName()));
 
 const png = Buffer.from("89504e470d0a1a0a" + "00".repeat(64), "hex");
+const logBody = "collector output\n".repeat(120);
 const zip = await makeZip([
   { name: "feedback.txt", data: Buffer.from("hello\n".repeat(200), "utf8") },
-  { name: "app.log", data: Buffer.from(logs, "utf8") },
+  { name: "app.log", data: Buffer.from(logBody, "utf8") },
   { name: "screenshot.png", data: png, store: true },
 ]);
 const zipFile = path.join(tmp, "b.zip");
@@ -111,7 +143,7 @@ if (listed) {
   const back = await fs.readFile(path.join(out, "screenshot.png"));
   ok("the PNG survives the round trip byte for byte", back.equals(png));
   const text = await fs.readFile(path.join(out, "app.log"), "utf8");
-  ok("the log survives the round trip", text === logs);
+  ok("the log survives the round trip", text === logBody);
 }
 
 await fs.rm(tmp, { recursive: true, force: true });
