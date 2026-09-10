@@ -1,4 +1,4 @@
-# Update a JobSeeker that is too old to update itself.
+﻿# Update a JobSeeker that is too old to update itself.
 # macOS twin: scripts/update-now.sh — change both together.
 #
 #   powershell -ExecutionPolicy Bypass -File update-now.ps1

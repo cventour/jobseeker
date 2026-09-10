@@ -1,4 +1,4 @@
-# Gather everything needed to explain a failed run, into one file on the Desktop.
+﻿# Gather everything needed to explain a failed run, into one file on the Desktop.
 # macOS twin: scripts/collect-logs.sh — change both together. The redaction rules are NOT
 # duplicated here: both call server/redact.mjs, so the two cannot drift apart on the one thing
 # that must never differ between them.
