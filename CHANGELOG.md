@@ -4,6 +4,19 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.3 — 10 September 2026
+
+- **Report a problem** is now a bug icon at the top right of every page, not a button buried in Settings. Write what went wrong and JobSeeker saves one file into your Downloads folder for you to email.
+- A report can include a picture of the page you were on, if you tick the box and confirm you are happy with what is in it. The picture is drawn from the page itself, so it shows the tab, the filter and the theme you were actually looking at — and nothing outside the JobSeeker window.
+- Reports carry the same log file `npm run logs` writes, so they answer the same questions: which Claude Code it found, what the updater did, whether the app was rebuilt.
+- Company and contact names from your own tracker are now masked in those logs. Until now only things recognisable by shape, like an email address, were replaced — the companies you are chasing went out in the clear.
+- Fixed: your computer's username was in every log report, in the line listing what is using the port, even though the file says your home folder name is replaced.
+- Nothing is sent anywhere. The dialog gives you the file and the address to send it to; you attach it and send it yourself.
+- Settings in the header is now a gear icon, matching the other two buttons beside it.
+- Status pills in the Pipeline and Jobs tables are readable in the light theme again — they were dark text on a dark badge.
+
+---
+
 ## v0.7.2 — 10 September 2026
 
 - Added a Report a problem button to Settings. It writes one file to your Desktop with everything needed to explain what went wrong, and shows you the file. Your CV, your profile and your contacts are not in it.
@@ -11,13 +24,6 @@ Every release, in plain language. Newest first.
 
 ## v0.7.1 — 10 September 2026
 
-- Added **Report a problem** to the dashboard — the bug icon at the top right of every page. Write what went wrong, and JobSeeker saves one file into your Downloads folder for you to email. It is the same idea as `npm run logs`, for people who would rather not open a terminal.
-- A report can include a picture of the page you were on, if you tick the box and confirm you are happy with what is in it. The picture is drawn from the page itself, so it shows the tab, the filter and the theme you were actually looking at — and nothing outside the JobSeeker window.
-- Reports always include the app logs, with names, email addresses, phone numbers, company names and your home folder masked. Your `data/` tables, CV, contacts and message text are never included.
-- Company and contact names from your own tracker are now masked in bug reports too — `npm run logs` only ever masked things it could recognise by shape, like an email address.
-- Fixed: `npm run logs` put your computer's username in the report when it named where Claude Code was installed, even though the file says your home folder name is replaced.
-- Nothing is sent anywhere. The dialog gives you the file and the address to send it to; you attach it and send it yourself.
-- Settings in the header is now a gear icon, matching the other two buttons beside it.
 - Fixed: "choose a file" and "Try another file" did nothing on the CV step when JobSeeker was opened as an app rather than in a browser. The window it draws in cannot show a file chooser, so JobSeeker now opens your Mac's own one instead. Dragging a CV onto the page always worked and still does.
 
 ## v0.7.0 — 10 September 2026
