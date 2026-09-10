@@ -18,6 +18,11 @@ Every release, in plain language. Newest first.
 - Fixed: updating could stop with "the dashboard is still answering on port 4319 — nothing was changed" and leave you on the old version. JobSeeker only knew how to stop a dashboard it had started itself, so one you had started any other way was never asked to quit.
 - The update log now says whether JobSeeker was actually running, what was stopped, and — if something is still holding the port — which program it is.
 - Fixed: on Windows, the check that JobSeeker had really stopped never recognised your own install, so an update could replace the files while it was still running. It now checks properly, and stops what is holding the connection first.
+- Fixed: **Not now** on the new-version dialog silenced that version for good, so an install told once could sit several releases behind and never be asked again. It is now **Later**, and it means later — the offer comes back the next day, and a newer version always asks.
+- **Check for updates** in Settings now shows you the new version and what is in it, instead of a message telling you to find a button on a page it was not on. The dialog appears on Settings as well as on Today.
+- A dashboard left open now notices a new version by itself, rather than waiting for you to reload the page.
+- Release notes inside the update dialog no longer show their raw formatting marks, and are sorted into New, Changed and Fixed by what they say rather than by the punctuation they start with.
+- Fixed: on Windows, two of JobSeeker's own scripts were missing a marker PowerShell needs to read them as UTF-8, so dashes and accented characters in their output came out as gibberish.
 
 ---
 
