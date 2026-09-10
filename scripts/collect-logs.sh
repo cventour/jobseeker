@@ -250,6 +250,66 @@ show "job run status" "$DATA/.job-run.status.json" 30
 show "browser status" "$DATA/.browser-status.json" 40
 skeleton "bridge" "$DATA/.bridge.log" 40
 
+# ---- the updater ---------------------------------------------------------------------------
+# "I updated and nothing changed" is unanswerable without these. The update writes its own log and
+# status, and whether the Mac app was rebuilt turns on ONE condition: self-update.sh only stops,
+# rebuilds and reopens the app when it finds a JobSeeker.app whose repo-path.txt equals this
+# install's path exactly. When it does not match, the update still succeeds -- the tree is
+# replaced -- but the old app and the old running server are left alone, and the person sees no
+# change at all. So the comparison is made here rather than described.
+head2 "The updater"
+show "update status" "$DATA/.setup/update.json" 40
+show "update log" "$DATA/.setup/update.log" 120
+
+say ""
+say "--- the Mac app bundle ---"
+FOUND_APP=0
+for d in "$HOME/Applications" "/Applications"; do
+  APP="$d/JobSeeker.app"
+  [ -d "$APP" ] || continue
+  FOUND_APP=1
+  say "${APP/#$HOME/~}"
+  RP="$APP/Contents/Resources/repo-path.txt"
+  if [ -f "$RP" ]; then
+    POINTS="$(cat "$RP" 2>/dev/null)"
+    say "  points at   ${POINTS/#$HOME/~}"
+    if [ "$POINTS" = "$REPO" ]; then
+      say "  MATCHES this install — an update would stop, rebuild and reopen it"
+    else
+      say "  DOES NOT MATCH this install (${REPO/#$HOME/~})."
+      say "  An update would replace the files and then leave this app, and the server it started,"
+      say "  running the old code. That is what 'I updated and nothing changed' looks like."
+    fi
+  else
+    say "  no repo-path.txt — an update cannot tell this app belongs to this install, so it would"
+    say "  not be rebuilt or reopened."
+  fi
+  BIN="$APP/Contents/MacOS/JobSeeker"
+  [ -f "$BIN" ] && say "  built       $(date -r "$BIN" '+%Y-%m-%d %H:%M')"
+  say "  bundle ver  $(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo '(none set)')"
+  if pgrep -f "$BIN" >/dev/null 2>&1; then say "  running     yes"; else say "  running     no"; fi
+done
+[ "$FOUND_APP" = "1" ] || say "(no JobSeeker.app in ~/Applications or /Applications — this install is run from a terminal)"
+
+say ""
+say "--- what the running server actually is ---"
+# The version on disk and the version being served are different claims, and after an update that
+# replaced the files without restarting anything they disagree. That disagreement IS the diagnosis.
+WHO="$(curl -s -m 4 "http://127.0.0.1:$PORT/_whoami" 2>/dev/null)"
+if [ -n "$WHO" ]; then
+  say "$(printf '%s' "$WHO" | redact)"
+  SERVED="$(printf '%s' "$WHO" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+  ONDISK="$("$NODE_BIN" -p "require('$REPO/package.json').version" 2>/dev/null || echo '?')"
+  if [ -n "$SERVED" ] && [ "$SERVED" != "$ONDISK" ]; then
+    say ""
+    say "MISMATCH: the files on disk are $ONDISK but the server answering is $SERVED."
+    say "An update replaced the files and the old server is still running. Quit JobSeeker fully"
+    say "and open it again."
+  fi
+else
+  say "(nothing answering on port $PORT)"
+fi
+
 head2 "Settings (redacted)"
 show "config" "$REPO/config/job-seeker.config.md" 100
 

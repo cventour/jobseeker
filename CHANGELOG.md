@@ -4,6 +4,11 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.2 — 10 September 2026
+
+- Added a Report a problem button to Settings. It writes one file to your Desktop with everything needed to explain what went wrong, and shows you the file. Your CV, your profile and your contacts are not in it.
+- That report now also says what the updater did and whether the app was rebuilt — the two things that explain "I updated and nothing changed".
+
 ## v0.7.1 — 10 September 2026
 
 - Fixed: "choose a file" and "Try another file" did nothing on the CV step when JobSeeker was opened as an app rather than in a browser. The window it draws in cannot show a file chooser, so JobSeeker now opens your Mac's own one instead. Dragging a CV onto the page always worked and still does.
