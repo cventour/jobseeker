@@ -54,6 +54,7 @@
     "notes:site": "node scripts/release-notes.mjs --html ../jobseeker-site",
     "mock:wizard": "node scripts/mock-wizard.mjs",
     "test:platform": "node scripts/test-platform.mjs",
+  "test:feedback": "node scripts/test-feedback.mjs",
     "bridge": "node server/bridge.mjs --serve",
     "test:bridge": "node scripts/test-bridge.mjs",
     "diagnose": "node scripts/diagnose.mjs"

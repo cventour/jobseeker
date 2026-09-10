@@ -140,7 +140,10 @@ version-pinned binary and re-prompt after every update. The scheduled run is a *
 again, so it needs its own grant — `npm run setup` clears it while you are present.
 
 It needs **no** Screen Recording, **no** Accessibility, **no** Full Disk Access and **no** debugging
-port. Nothing is screenshotted, and no synthetic clicks or keystrokes are ever sent.
+port. Your screen is never captured, and no synthetic clicks or keystrokes are ever sent. The one
+image the system can produce — the optional picture in a problem report — is drawn by the page from
+its own DOM (`FEEDBACK_JS` in `server/dashboard.mjs`), never by an OS screen capture, which is
+exactly why that feature added no permission.
 
 `npm run browser:probe` reports exactly what works and names the fix for anything that does not.
 Full detail: [`PERMISSIONS.md`](PERMISSIONS.md).

@@ -340,7 +340,7 @@ apply on both platforms:
 
 | Not required | Why |
 |---|---|
-| **Screen Recording** | Nothing is ever screenshotted or captured. Page content is read from the DOM. |
+| **Screen Recording** | Your screen is never captured. Page content is read from the DOM — and so is the optional picture in a problem report, which the dashboard draws from its own DOM in your browser. Nothing outside the JobSeeker window is readable, with or without this permission. |
 | **Accessibility** | No synthetic clicks or keystrokes. The browser API here exposes navigation and extraction only — no click, type or submit. |
 | **Full Disk Access** | Only this repository's `data/` directory is read and written. |
 | **A Chrome debugging port** | Deliberately avoided — an open CDP port lets any local process drive your browser with your full logged-in identity. See the README. |

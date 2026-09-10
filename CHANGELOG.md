@@ -11,6 +11,12 @@ Every release, in plain language. Newest first.
 
 ## v0.7.1 — 10 September 2026
 
+- Added **Report a problem** to the dashboard — the bug icon at the top right of every page. Write what went wrong, and JobSeeker saves one file into your Downloads folder for you to email. It is the same idea as `npm run logs`, for people who would rather not open a terminal.
+- A report can include a picture of the page you were on, if you tick the box and confirm you are happy with what is in it. The picture is drawn from the page itself, so it shows the tab, the filter and the theme you were actually looking at — and nothing outside the JobSeeker window.
+- Reports always include the app logs, with names, email addresses, phone numbers, company names and your home folder masked. Your `data/` tables, CV, contacts and message text are never included.
+- Company and contact names from your own tracker are now masked in bug reports too — `npm run logs` only ever masked things it could recognise by shape, like an email address.
+- Nothing is sent anywhere. The dialog gives you the file and the address to send it to; you attach it and send it yourself.
+- Settings in the header is now a gear icon, matching the other two buttons beside it.
 - Fixed: "choose a file" and "Try another file" did nothing on the CV step when JobSeeker was opened as an app rather than in a browser. The window it draws in cannot show a file chooser, so JobSeeker now opens your Mac's own one instead. Dragging a CV onto the page always worked and still does.
 
 ## v0.7.0 — 10 September 2026

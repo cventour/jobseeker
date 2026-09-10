@@ -7,6 +7,7 @@
 
 import http from "http";
 import { promises as fs, default as fsSync } from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as platform from "./platform.mjs";
@@ -37,8 +38,16 @@ async function currentVersion() {
 import { findRepost, setCompanyAliases} from "./match.mjs";
 import { companyAliases } from "./config.mjs";
 import { DISMISS_TAGS } from "./record.mjs";
+import { buildBundle } from "./feedback.mjs";
 
 setCompanyAliases(await companyAliases());
+
+// Named in every problem report. Read from package.json rather than repeated here, so a release
+// bump cannot leave reports claiming a version that was never shipped.
+const APP_VERSION = await fs
+  .readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")
+  .then((t) => JSON.parse(t).version)
+  .catch(() => "unknown");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -203,8 +212,10 @@ const TOUR_JS = `${VIEWPORT_JS}(function(){
       body: 'A job search, a check of your channels, or your follow-ups — without waiting for the morning run.' },
     { sel: '#appearance', title: 'Light or dark',
       body: 'Follows your Mac by default. Click to pin it one way.' },
-    { sel: '.gearlink', title: 'Your CV and your targets',
-      body: 'Everything the agents read about you, and the boards they search, live in Settings.' }
+    { sel: 'a.moonbtn[href="/settings"]', title: 'Your CV and your targets',
+      body: 'Everything the agents read about you, and the boards they search, live in Settings.' },
+    { sel: '#bugbtn', title: 'Something broken?',
+      body: 'Writes a file describing what went wrong, into your Downloads. You look at it, then email it — nothing is sent for you.' }
   ];
   var TOUR_KEY = 'jobseeker.tour';
   var i = 0, veil, spot, bub, steps, key = TOUR_KEY;
@@ -316,6 +327,127 @@ const PAGE_HINTS = new Map([
 ]);
 
 const APPEARANCE_BTN = `<button type="button" id="appearance" class="moonbtn"></button>`;
+
+// Settings and Report-a-problem are the same 16px pill as Appearance, in that order: the thing you
+// touch every week, the thing you touch monthly, the thing you touch twice a year. The bug sits
+// furthest out because it is the rarest — and because a report button you brush past by accident is
+// worse than one you have to aim at.
+const SETTINGS_BTN = `<a class="moonbtn" href="/settings" title="Settings — criteria, markets, careers boards, CV" aria-label="Settings">
+  <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="10" cy="10" r="2.6"></circle>
+    <path d="M10 1.9v1.8M10 16.3v1.8M16.72 5.95l-1.56.9M4.84 13.15l-1.56.9M16.72 14.05l-1.56-.9M4.84 6.85l-1.56-.9"></path>
+    <circle cx="10" cy="10" r="7.1"></circle>
+  </svg>
+</a>`;
+
+const FEEDBACK_BTN = `<button type="button" id="bugbtn" class="moonbtn" title="Report a problem" aria-label="Report a problem">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="7.5" y="7" width="9" height="12.5" rx="4.5"></rect>
+    <path d="M9.6 7.3 8 4.6"></path><path d="M14.4 7.3 16 4.6"></path>
+    <path d="M7.5 11H4.6"></path><path d="M7.5 14.5H4"></path><path d="M7.9 18 5.4 19.9"></path>
+    <path d="M16.5 11h2.9"></path><path d="M16.5 14.5H20"></path><path d="M16.1 18l2.5 1.9"></path>
+    <path d="M12 11.5v5"></path>
+  </svg>
+</button>`;
+
+// The dialog itself. Injected into every page that has a header, so a problem can be reported from
+// wherever it happened rather than only from Today.
+//
+// Two things about the shape are deliberate:
+//   * The log is not a checkbox. It is redacted before it is written (server/feedback.mjs), so
+//     there is nothing to consent to, and a checkbox would only invite people to withhold the one
+//     artefact that makes a report actionable.
+//   * The screenshot IS, with an acknowledgement, because it is the single thing in the bundle that
+//     can carry the user's own data. It shows their dashboard, and their dashboard has their
+//     companies and contacts on it.
+const FEEDBACK_MODAL = `
+<div id="fbOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="fbTitle">
+  <div class="modal fb-modal">
+    <button type="button" class="mclose" id="fbClose" aria-label="Close">&times;</button>
+    <h3 id="fbTitle">Report a problem</h3>
+    <p class="fb-lede">This goes to the person who maintains JobSeeker. Nothing leaves your machine on
+      its own &mdash; you get a file, and you decide whether to send it.</p>
+
+    <label class="fb-fld" for="fbText">What went wrong?</label>
+    <textarea id="fbText" class="fb-ta" rows="4"
+      placeholder="What were you doing, and what happened instead?"></textarea>
+
+    <div class="fb-opts">
+      <label class="fb-opt">
+        <input type="checkbox" id="fbShot">
+        <span><span class="fb-t">Attach a picture of this page</span>
+        <span class="fb-d">Drawn from the page itself, exactly as you are looking at it now &mdash; this dialog
+          closes first, so it is not in the picture. Nothing outside the JobSeeker window is captured.</span></span>
+      </label>
+    </div>
+
+    <div class="fb-warn" id="fbWarn" hidden>
+      <div class="fb-wt">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 4.5 21 20H3Z"></path><path d="M12 10.5v4"></path><path d="M12 17.4v.1"></path>
+        </svg>
+        A picture of this page shows what is on it
+      </div>
+      <p>Company names, contacts and message text from your tracker will be visible in it. Open the file
+        and look before you send it &mdash; nothing else in the bundle carries your data.</p>
+      <label class="fb-ack">
+        <input type="checkbox" id="fbAck">
+        <span>I understand the picture may contain private information.</span>
+      </label>
+    </div>
+
+    <div class="fb-what">
+      <p class="fb-wh">What goes in the file</p>
+      <ul class="fb-manifest">
+        <li><span class="fb-mk yes">+</span><span>What you wrote above</span></li>
+        <li><span class="fb-mk yes">+</span><span>Version, OS and browser</span></li>
+        <li><span class="fb-mk yes">+</span><span>The last 300 lines of each app log &mdash; always included, with
+          names, emails, phone numbers and company names masked</span></li>
+        <li><span class="fb-mk no">&minus;</span><span>Never: your <code>data/</code> tables, CV, contacts,
+          message text or any credential</span></li>
+      </ul>
+    </div>
+
+    <div class="fb-acts">
+      <span class="fb-err" id="fbErr" hidden></span>
+      <button type="button" class="btn-secondary" id="fbCancel">Cancel</button>
+      <button type="button" id="fbSend" disabled>Create the file</button>
+    </div>
+  </div>
+</div>
+
+<div id="fbDone" class="overlay" role="dialog" aria-modal="true" aria-labelledby="fbDoneTitle">
+  <div class="modal fb-modal">
+    <button type="button" class="mclose" id="fbDoneClose" aria-label="Close">&times;</button>
+    <h3 id="fbDoneTitle">Your report is ready to send</h3>
+    <p class="fb-lede">It is saved on your machine and nowhere else. Open it, check you are happy with
+      what is in it, then attach it to an email.</p>
+
+    <div class="fb-file">
+      <div class="fb-fi">
+        <div class="fb-nm" id="fbName"></div>
+        <div class="fb-loc" id="fbLoc"></div>
+      </div>
+    </div>
+
+    <div class="fb-mail">
+      <p class="fb-mt">Send it to Christos</p>
+      <ol class="fb-steps">
+        <li>Start a new email to the address below.</li>
+        <li>Drag the file out of your Downloads folder and drop it into the message.</li>
+        <li>Send it. Anything you want to add in the body is welcome.</li>
+      </ol>
+      <div class="fb-addr">
+        <span class="fb-a" id="fbAddr">ventouris@gmail.com</span>
+        <button type="button" id="fbCopy">Copy the address</button>
+      </div>
+    </div>
+
+    <div class="fb-acts">
+      <button type="button" class="btn-secondary" id="fbDoneOk">Done</button>
+    </div>
+  </div>
+</div>`;
 
 // The ATS/careers-board registry (see server/record.mjs and AGENT-RULES §12). Mirrored here rather
 // than shelling out to record.mjs: handlePost already holds the data/ lock, and record.mjs takes
@@ -3107,7 +3239,8 @@ ${HEAD_ICONS}
   ${BRAND("Job Seeker")}
   <div class="head-actions">
     ${APPEARANCE_BTN}
-    <a class="gearlink" href="/settings" title="Criteria, markets, careers boards, CV">⚙ Settings</a>
+    ${SETTINGS_BTN}
+    ${FEEDBACK_BTN}
   </div>
 </header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
@@ -3184,8 +3317,9 @@ ${
     ? `<script>window.__tourHint=${JSON.stringify(all.hint).replace(/</g, "\\u003c")};</script>`
     : ""
 }
+${FEEDBACK_MODAL}
 <script>${TOUR_JS}</script>
-<script>${JS}</script>
+<script>${JS}${FEEDBACK_JS}</script>
 </body></html>`;
 }
 
@@ -3221,7 +3355,7 @@ ${HEAD_ICONS}
 </head><body>
 <header>
   ${BRAND("Settings")}
-  <div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="/">← Back to work</a></div>
+  <div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="/">← Back to work</a>${FEEDBACK_BTN}</div>
 </header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <div class="topbar">
@@ -3264,7 +3398,8 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
     </div>
   </div>
 </div>
-<script>${JS}</script>
+${FEEDBACK_MODAL}
+<script>${JS}${FEEDBACK_JS}</script>
 </body></html>`;
 }
 
@@ -3986,7 +4121,324 @@ a.btn{display:inline-block;background:var(--acc);color:#fff;padding:6px 12px;bor
 /* Nothing to collapse at narrow widths any more — the facts strip already wraps and the prose is
    capped by a character measure rather than a column, so both adapt on their own. */
 @media(max-width:600px){.modal{padding:0 16px 18px;max-height:calc(100vh - 32px)}.overlay{padding:16px 8px}}
+
+/* ---- Report a problem ------------------------------------------------------------------------
+   Narrower than the detail drawer (560 vs 760): this is a form to fill in, not a record to read,
+   and a short measure is what makes a form feel finishable. Everything below reuses the page's own
+   tokens, so it themes with the rest for free. */
+.fb-modal{max-width:560px;padding:22px 24px 20px}
+.fb-modal h3{margin:0 0 7px;font-size:17px}
+.fb-lede{margin:0 0 17px;font-size:13px;line-height:1.55;color:var(--mut);max-width:52ch}
+.fb-fld{display:block;font-size:12px;color:var(--mut);margin:0 0 6px}
+.fb-ta{width:100%;font-size:13.5px;line-height:1.6;min-height:104px;resize:vertical}
+.fb-opts{margin:15px 0 0;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:4px}
+.fb-opt{display:flex;gap:11px;padding:10px 11px;border-radius:8px;align-items:flex-start;cursor:pointer}
+.fb-opt:hover{background:var(--card)}
+.fb-opt input{margin:2px 0 0;accent-color:var(--acc);width:15px;height:15px;flex:0 0 auto}
+.fb-t{display:block;font-size:13px;font-weight:650}
+.fb-d{display:block;font-size:12px;color:var(--mut);line-height:1.5;margin-top:2px}
+.fb-warn{margin:11px 0 0;border:1px solid rgba(240,179,87,.42);background:rgba(240,179,87,.09);
+  border-radius:10px;padding:12px 13px}
+.fb-wt{color:#f0b357;font-size:12.5px;font-weight:700;display:flex;gap:7px;align-items:center;margin-bottom:6px}
+.fb-warn p{margin:0;font-size:12.5px;line-height:1.55;color:var(--mut)}
+.fb-ack{display:flex;gap:10px;align-items:flex-start;margin-top:11px;font-size:12.5px;color:var(--fg);
+  line-height:1.5;cursor:pointer}
+.fb-ack input{margin:1px 0 0;accent-color:var(--acc);width:15px;height:15px;flex:0 0 auto}
+.fb-what{margin:15px 0 0;border-top:1px solid var(--line);padding-top:13px}
+.fb-wh{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);font-weight:650;margin:0 0 8px}
+.fb-manifest{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.fb-manifest li{display:flex;gap:9px;font-size:12.5px;color:var(--mut);line-height:1.5;align-items:baseline}
+.fb-mk{flex:0 0 auto;font-size:13px;line-height:1.35;font-weight:700}
+.fb-mk.yes{color:#5fbf8f}.fb-mk.no{color:#c9788a}
+.fb-manifest code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
+.fb-acts{display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:18px}
+.fb-acts button[disabled]{opacity:.42;cursor:not-allowed;filter:none}
+.fb-err{margin-right:auto;font-size:12.5px;color:#e8879b;max-width:32ch;line-height:1.45}
+.fb-file{display:flex;align-items:center;gap:12px;border:1px solid var(--line);background:var(--bg);
+  border-radius:10px;padding:12px 13px;margin:16px 0 0}
+.fb-fi{flex:1;min-width:0}
+.fb-nm{font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;color:var(--fg)}
+.fb-loc{font-size:11.5px;color:var(--mut);margin-top:3px;overflow-wrap:anywhere}
+.fb-mail{margin:16px 0 0;border:1px solid var(--acc);border-radius:10px;background:var(--card);padding:14px 15px}
+.fb-mt{font-size:13px;font-weight:650;margin:0 0 4px}
+.fb-steps{margin:9px 0 0;padding:0 0 0 19px;display:flex;flex-direction:column;gap:6px}
+.fb-steps li{font-size:12.5px;color:var(--mut);line-height:1.55}
+.fb-steps li::marker{color:var(--acc);font-variant-numeric:tabular-nums}
+.fb-addr{display:flex;align-items:center;gap:10px;margin:11px 0 0;flex-wrap:wrap}
+.fb-a{font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg);background:var(--bg);
+  border:1px solid var(--line);border-radius:8px;padding:7px 11px;flex:1;min-width:180px;user-select:all}
+/* Same geometry as .flash, which has no neutral variant of its own. */
+.fb-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:1000;padding:11px 18px;
+  border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:13px;
+  box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;gap:10px;align-items:center}
+.fb-spin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--acc);
+  animation:fbsp .8s linear infinite;flex:0 0 auto}
+@keyframes fbsp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.fb-spin{animation:none}}
 `;
+
+// ---------------------------------------------------------------------------- report a problem
+//
+// The picture is drawn from the LIVE DOM, not re-fetched from the server. That is the whole point:
+// a bug report has to show the page the person was actually looking at -- the tab they had open,
+// the filter they had set, the row they had expanded, the theme they use -- and none of that
+// survives a round trip to "/". So the body is cloned in place, the live form state is written back
+// into the clone as attributes (a cloned <input> carries its ORIGINAL value attribute, not what was
+// typed into it), and the result is painted through an SVG <foreignObject> onto a canvas.
+//
+// Nothing outside this page can be reached by any of it. There is no OS screen capture here, which
+// is why JobSeeker still needs no Screen Recording permission on macOS -- see docs/PERMISSIONS.md.
+const FEEDBACK_JS = `(function(){
+  var overlay, done, shot, ack, warn, send, ta, err;
+
+  function $(id){ return document.getElementById(id); }
+  function show(el){ el.style.display='flex'; document.body.style.overflow='hidden'; }
+  function hide(el){ el.style.display='none'; document.body.style.overflow=''; }
+
+  // "Create the file" needs something to report, and -- if a picture is going in -- an explicit
+  // acknowledgement of what a picture of this page can contain.
+  function refresh(){
+    warn.hidden = !shot.checked;
+    if (!shot.checked) ack.checked = false;
+    send.disabled = !ta.value.trim() || (shot.checked && !ack.checked);
+  }
+
+  function fail(msg){
+    err.textContent = msg;
+    err.hidden = false;
+    send.disabled = false;
+    send.textContent = 'Create the file';
+  }
+
+  /* ---- the picture -------------------------------------------------------------------------- */
+
+  // A clone carries the markup, not the state: what someone typed lives in .value, which has no
+  // attribute behind it, and the same is true of checked, selected and scroll position. Written
+  // back here so the picture shows the form as it looked, not as it was served.
+  function syncState(live, copy){
+    var a = live.querySelectorAll('input,textarea,select');
+    var b = copy.querySelectorAll('input,textarea,select');
+    for (var i=0; i<a.length && i<b.length; i++){
+      var x=a[i], y=b[i];
+      if (x.tagName==='TEXTAREA'){ y.textContent = x.value; }
+      else if (x.tagName==='SELECT'){
+        var opts=y.querySelectorAll('option');
+        for (var j=0;j<opts.length;j++){ if(j===x.selectedIndex) opts[j].setAttribute('selected',''); else opts[j].removeAttribute('selected'); }
+      } else if (x.type==='checkbox' || x.type==='radio'){
+        if (x.checked) y.setAttribute('checked',''); else y.removeAttribute('checked');
+      } else {
+        y.setAttribute('value', x.value);
+      }
+    }
+  }
+
+  // Every <img> has to become a data: URI -- an SVG rendered into a canvas cannot fetch anything,
+  // and an image left as a URL silently paints nothing. Failures drop the image rather than the
+  // report; a picture missing a logo is still a useful picture.
+  function inlineImages(copy){
+    var imgs = Array.prototype.slice.call(copy.querySelectorAll('img'));
+    // <source srcset> would win over the <img> we just inlined, and it cannot be inlined itself.
+    Array.prototype.slice.call(copy.querySelectorAll('picture source')).forEach(function(n){ n.remove(); });
+    return Promise.all(imgs.map(function(img){
+      var src = img.getAttribute('src');
+      if (!src || src.indexOf('data:')===0) return null;
+      return fetch(src).then(function(r){ return r.blob(); }).then(function(b){
+        return new Promise(function(res){
+          var fr = new FileReader();
+          fr.onload = function(){ img.setAttribute('src', fr.result); res(); };
+          fr.onerror = function(){ img.remove(); res(); };
+          fr.readAsDataURL(b);
+        });
+      }).catch(function(){ img.remove(); });
+    }));
+  }
+
+  // Every colour in this stylesheet resolves through a custom property declared on :root -- and the
+  // clone has no :root. Read them off the live document and carry them on the wrapper, which also
+  // pins the theme: whatever the user is looking at now is what gets drawn, Auto or not.
+  var TOKENS = ['--bg','--card','--line','--fg','--mut','--acc','--gut','--maxw',
+    '--tbg-l','--tbg-c','--tfg-l','--tfg-c','--ton-bg-l','--ton-bg-c','--ton-fg-l','--ton-fg-c',
+    '--tring-l','--tring-c'];
+  function tokenStyle(){
+    var cs = getComputedStyle(document.documentElement);
+    var names = [];
+    try { for (var i=0;i<cs.length;i++){ if (cs[i].indexOf('--')===0) names.push(cs[i]); } } catch(e){}
+    if (!names.length) names = TOKENS;
+    var out = '';
+    names.forEach(function(n){ var v = cs.getPropertyValue(n); if (v) out += n + ':' + v.trim() + ';'; });
+    return out;
+  }
+
+  var MAX_H = 8000; // a very long Activity log is not worth a 40 MB attachment
+
+  function capture(){
+    var root = document.documentElement;
+    var w = Math.max(root.scrollWidth, document.body.scrollWidth, window.innerWidth || 0, 900);
+    var copy = document.body.cloneNode(true);
+
+    // The dialog that asked for this, the tour, and any toast: none of them are the page.
+    Array.prototype.slice.call(copy.querySelectorAll(
+      '#fbOverlay,#fbDone,.fb-toast,.flash,.tour-veil,.tour-spot,.tour-bub,script,link[rel=stylesheet]'
+    )).forEach(function(n){ n.remove(); });
+
+    syncState(document.body, copy);
+
+    return inlineImages(copy).then(function(){
+      // The page's own stylesheet, lifted whole. It is already inline in <head>, so there is
+      // nothing to fetch and nothing that can go missing.
+      var css = Array.prototype.slice.call(document.querySelectorAll('head style'))
+        .map(function(n){ return n.textContent; }).join('\\n');
+
+      var wrap = document.createElement('div');
+      copy.setAttribute('style','width:' + w + 'px;margin:0;');
+      wrap.appendChild(copy);
+
+      // How tall is the picture? Not the live page's scrollHeight -- that is the height of a
+      // document with a sticky header, a scrolled viewport and, on a backgrounded tab, no viewport
+      // at all (Settings reported 3733px for 935px of content, and the report came back four fifths
+      // empty). Ask the clone instead, by laying it out off-screen and measuring what it actually
+      // occupies. The page's own stylesheet is already applied to anything in the document, so the
+      // <style> below is added only for serialising -- adding it before the measurement would
+      // duplicate the whole sheet into the live page for a frame.
+      var tokens = tokenStyle();
+      wrap.setAttribute('style','position:absolute;left:-99999px;top:0;width:' + w + 'px;' + tokens);
+      document.body.appendChild(wrap);
+      var h = Math.min(wrap.scrollHeight, MAX_H);
+      wrap.remove();
+
+      wrap.setAttribute('style','width:' + w + 'px;height:' + h + 'px;' + tokens +
+        'background:' + getComputedStyle(document.body).backgroundColor + ';');
+      var st = document.createElement('style');
+      st.textContent = css;
+      wrap.insertBefore(st, wrap.firstChild);
+
+      // XMLSerializer already stamps the XHTML namespace on the wrapper, which is what makes the
+      // markup legal inside <foreignObject>. Adding one here as well produced a duplicate xmlns
+      // attribute, and the SVG then failed to parse -- silently, as a picture that never arrived.
+      var xml = new XMLSerializer().serializeToString(wrap);
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
+        '<foreignObject x="0" y="0" width="100%" height="100%">' + xml + '</foreignObject></svg>';
+
+      var scale = Math.min(2, window.devicePixelRatio || 1);
+      return new Promise(function(res, rej){
+        var img = new Image();
+        img.onload = function(){
+          var c = document.createElement('canvas');
+          c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+          var g = c.getContext('2d');
+          g.scale(scale, scale);
+          g.drawImage(img, 0, 0);
+          try { res(c.toDataURL('image/png')); } catch(e){ rej(new Error('the canvas could not be read')); }
+        };
+        img.onerror = function(){ rej(new Error('the page could not be drawn')); };
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      });
+    });
+  }
+
+  /* ---- the flow ----------------------------------------------------------------------------- */
+
+  // Which tab is open is part of "where I was", and it lives only in the DOM -- the URL says
+  // nothing about it once you have clicked around.
+  function whereAmI(){
+    // data-tab, not the label: the label carries its count badge with no space in front of it, so
+    // reading the text gave "People1".
+    var tab = document.querySelector('nav.tabs .tab.on');
+    return location.pathname + (tab ? ' — ' + tab.getAttribute('data-tab') + ' tab' : '') +
+      (window.scrollY > 40 ? ' — scrolled ' + Math.round(window.scrollY) + 'px' : '');
+  }
+
+  function toast(text){
+    var t = document.createElement('div');
+    t.className = 'fb-toast';
+    t.innerHTML = '<span class="fb-spin"></span><span></span>';
+    t.lastChild.textContent = text;
+    document.body.appendChild(t);
+    return t;
+  }
+
+  function submit(){
+    err.hidden = true;
+    send.disabled = true;
+    send.textContent = 'Working\\u2026';
+    var want = shot.checked;
+    var page = whereAmI();
+
+    // The dialog goes first, and only then the shutter -- otherwise every report is a picture of
+    // the report dialog. Two frames plus a beat is enough for the browser to have repainted.
+    hide(overlay);
+    var t = want ? toast('Drawing the page\\u2026') : null;
+
+    // Two frames plus a beat: long enough for the browser to have repainted without the dialog.
+    // Raced against a timer because requestAnimationFrame does not fire in a hidden tab -- without
+    // the race, reporting from a backgrounded window hung on "Working..." forever.
+    new Promise(function(res){
+      var settled = false;
+      var go = function(){ if (!settled){ settled = true; res(); } };
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ setTimeout(go, 250); }); });
+      setTimeout(go, 1200);
+    })
+      .then(function(){ return want ? capture().catch(function(){ return null; }) : null; })
+      .then(function(png){
+        if (t) t.remove();
+        return fetch('/feedback', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ message: ta.value, page: page, userAgent: navigator.userAgent, shot: png })
+        });
+      })
+      .then(function(r){ return r.ok ? r.json() : r.text().then(function(m){ throw new Error(m || 'the server refused it'); }); })
+      .then(function(d){
+        $('fbName').textContent = d.name;
+        $('fbLoc').textContent = d.dir + '  \\u00b7  ' + d.size + '  \\u00b7  ' + d.entries.join(', ');
+        send.textContent = 'Create the file';
+        show(done);
+      })
+      .catch(function(e){
+        if (t) t.remove();
+        show(overlay);
+        fail('It could not be saved: ' + (e && e.message ? e.message : 'unknown error'));
+      });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    overlay = $('fbOverlay'); done = $('fbDone');
+    if (!overlay) return;
+    shot = $('fbShot'); ack = $('fbAck'); warn = $('fbWarn');
+    send = $('fbSend'); ta = $('fbText'); err = $('fbErr');
+
+    var btn = $('bugbtn');
+    if (btn) btn.addEventListener('click', function(){
+      err.hidden = true; refresh(); show(overlay);
+      setTimeout(function(){ ta.focus(); }, 40);
+    });
+    ta.addEventListener('input', refresh);
+    shot.addEventListener('change', refresh);
+    ack.addEventListener('change', refresh);
+    $('fbCancel').addEventListener('click', function(){ hide(overlay); });
+    $('fbClose').addEventListener('click', function(){ hide(overlay); });
+    $('fbSend').addEventListener('click', submit);
+    $('fbDoneOk').addEventListener('click', function(){ hide(done); });
+    $('fbDoneClose').addEventListener('click', function(){ hide(done); });
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) hide(overlay); });
+    done.addEventListener('click', function(e){ if (e.target === done) hide(done); });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape'){ hide(overlay); hide(done); }
+    });
+
+    $('fbCopy').addEventListener('click', function(){
+      var b = $('fbCopy');
+      navigator.clipboard.writeText($('fbAddr').textContent.trim()).then(function(){
+        b.textContent = 'Copied';
+        setTimeout(function(){ b.textContent = 'Copy the address'; }, 1600);
+      }).catch(function(){
+        // No clipboard permission: select it instead, so Cmd-C still works.
+        var r = document.createRange(); r.selectNodeContents($('fbAddr'));
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      });
+    });
+  });
+})();`;
 
 const JS = `${VIEWPORT_JS}
   /* Refreshing should put you back exactly where you were.
@@ -6170,7 +6622,7 @@ function welcomeStandalonePage(st, key, back, flash) {
 ${HEAD_ICONS}
 <style>${CSS}${WELCOME_CSS}</style>
 </head><body class="wbody">
-<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a></div></header>
+<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}<a class="gearlink" href="${esc(b.url)}">← ${esc(b.label)}</a>${FEEDBACK_BTN}</div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
   <form method="POST" action="/welcome-step" class="wform">
@@ -6180,7 +6632,8 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
     ${welcomeStepHTML(key, st, { standalone: true, back })}
   </form>
 </main>
-<script>${JS}${WELCOME_JS}</script>
+${FEEDBACK_MODAL}
+<script>${JS}${FEEDBACK_JS}${WELCOME_JS}</script>
 </body></html>`;
 }
 
@@ -6218,7 +6671,7 @@ function welcomePage(st, key, flash) {
 ${HEAD_ICONS}
 <style>${CSS}${WELCOME_CSS}</style>
 </head><body class="wbody">
-<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}</div></header>
+<header>${BRAND("Job Seeker")}<div class="head-actions">${APPEARANCE_BTN}${FEEDBACK_BTN}</div></header>
 ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 <main class="wwrap">
   ${welcomeProgress(key)}
@@ -6228,7 +6681,8 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
     ${welcomeStepHTML(key, st)}
   </form>
 </main>
-<script>${JS}${WELCOME_JS}</script>
+${FEEDBACK_MODAL}
+<script>${JS}${FEEDBACK_JS}${WELCOME_JS}</script>
 </body></html>`;
 }
 
@@ -7951,6 +8405,12 @@ const server = http.createServer(async (req, res) => {
       // now (a scheduled /job-run writing while you click Advance). Take the same lock so the
       // two never interleave a read-modify-write. GET is unlocked — a slightly stale render is
       // harmless, and blocking page loads behind a long agent run would not be.
+      //
+      // A problem report is the exception. It writes nothing to data/ — it reads the logs and
+      // saves a file to Downloads — and the moment you most want to report something is the moment
+      // a run has wedged and the lock is held. Making the bug reporter wait on the bug would be a
+      // poor joke, so it is handled here, after the CSRF check and before the lock.
+      if (url.pathname === "/feedback") return await handleFeedback(req, res);
       return await withLock(() => handlePost(req, res, url));
     }
     res.writeHead(404, { "content-type": "text/plain" });
@@ -7960,6 +8420,69 @@ const server = http.createServer(async (req, res) => {
     res.end("Error: " + (e?.message || e));
   }
 });
+
+// Build the problem-report bundle and tell the page where it went.
+//
+// Reads logs, writes one file to Downloads, sends nothing anywhere. The screenshot arrives already
+// rendered by the page (FEEDBACK_JS) — this server never looks at the screen.
+async function handleFeedback(req, res) {
+  const raw = await readBody(req);
+  let body;
+  try {
+    body = JSON.parse(raw.toString("utf8"));
+  } catch {
+    res.writeHead(400, { "content-type": "text/plain" });
+    return res.end("the report could not be read");
+  }
+
+  const message = String(body.message || "").slice(0, 20000);
+  if (!message.trim()) {
+    res.writeHead(400, { "content-type": "text/plain" });
+    return res.end("there was nothing written to report");
+  }
+
+  // Only a PNG, and only one the page itself produced. Anything else is dropped rather than
+  // refused: a report without the picture still beats no report.
+  let png = null;
+  const shot = typeof body.shot === "string" ? body.shot : "";
+  if (shot.startsWith("data:image/png;base64,")) {
+    try {
+      png = Buffer.from(shot.slice("data:image/png;base64,".length), "base64");
+    } catch {
+      png = null;
+    }
+  }
+
+  try {
+    const out = await buildBundle({
+      message,
+      png,
+      meta: {
+        version: APP_VERSION,
+        platform: `${process.platform} ${process.arch} ${os.release()}`,
+        node: process.version,
+        userAgent: String(body.userAgent || "").slice(0, 300),
+        page: String(body.page || "").slice(0, 200),
+      },
+      dataDir: DATA,
+      configFile: CONFIG,
+    });
+    await logActivity("feedback", `Problem report written to ${path.basename(out.file)}`);
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(
+      JSON.stringify({
+        name: path.basename(out.file),
+        dir: out.dir,
+        size: `${Math.max(1, Math.round(out.bytes / 1024))} KB`,
+        entries: out.entries,
+      })
+    );
+  } catch (e) {
+    console.warn(`[feedback] ${e?.message || e}`);
+    res.writeHead(500, { "content-type": "text/plain" });
+    return res.end(e?.message || "the file could not be written");
+  }
+}
 
 async function handlePost(req, res, url) {
   if (url.pathname === "/upload-cv") {

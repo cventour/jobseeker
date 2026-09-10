@@ -49,8 +49,15 @@ Each of these is covered by a test — `npm run test:security`, `npm run test:co
 
 ## What it deliberately does not do
 
-- **No Screen Recording, Accessibility, or Full Disk Access.** Nothing is screenshotted, no synthetic
-  clicks or keystrokes are ever sent, and only this project's own directory is read and written.
+- **No Screen Recording, Accessibility, or Full Disk Access.** Your screen is never captured, no
+  synthetic clicks or keystrokes are ever sent, and only this project's own directory is read and
+  written. A problem report can include a picture of the dashboard, but the page draws that from its
+  own DOM in your browser — nothing outside the JobSeeker window can be in it.
+- **Problem reports are not sent anywhere.** "Report a problem" writes one file into your Downloads
+  folder and stops. You open it, read it, and email it yourself if you want to. The app logs it
+  packages are redacted first — names, email addresses, phone numbers, company names and your home
+  directory are masked (`server/feedback.mjs`), and no `data/` table, CV, contact or message body is
+  included at all.
 - **No Chrome remote-debugging port.** An open port lets any local process drive your browser with
   your full authenticated identity, with no per-site gate. JobSeeker refuses to open one, and the
   agent rules forbid recommending it.
