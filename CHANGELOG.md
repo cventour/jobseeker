@@ -4,6 +4,13 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.5 — 10 September 2026
+
+- Not now on the new-version dialog is an answer again. Yesterday it became Later and came back the next day; being asked the same question every morning is how an offer turns into noise, so a version you have said no to stays said no to. A newer release still asks, because that is a different question — and the offer is never lost by declining it: Settings carries it, with the same Update button.
+- Fixed: an old Windows script left over from before JobSeeker could update itself would have installed 0.6.0 over a newer version. It fetched a development branch instead of a release and never checked what version it was about to write. It is gone — the Update button and `npm run update` are the ways to update.
+
+---
+
 ## v0.7.4 — 10 September 2026
 
 - Fixed: a run could report "finished" and leave every page empty. The daily run already knew it had produced nothing — it records that for itself — but the "Run now" line beside the button read only whether the run had crashed, and a run that finishes empty does not crash. It now says what the run itself concluded, so "finished" means finished.

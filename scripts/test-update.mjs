@@ -277,6 +277,114 @@ try {
   check(refused.code === 2, "a git checkout is refused", `exit ${refused.code}`);
   const st2 = JSON.parse(await fs.readFile(path.join(inst, "data/.setup/update.json"), "utf8"));
   check(st2.phase === "refused" && /git pull/.test(st2.error || ""), "…and says to use git pull");
+
+// ---------------------------------------------------------------- what "Not now" means
+//
+// The behaviour the whole dialog turns on, and the one that cannot be checked by reading the code:
+// saying Not now must ANSWER the question, and a new release must ask it again.
+//
+// It is tested through a real dashboard because the failure mode is a disagreement between two
+// files -- the key the dialog writes and the allowlist that accepts it. Get those out of step and
+// the POST is rejected, the dismissal never lands, and the dialog returns on every single launch
+// with nothing in any log to say why.
+{
+  const home = path.join(tmp, "dlg");
+  const dataDir = path.join(home, "data");
+  await fs.mkdir(dataDir, { recursive: true });
+
+  // What the background check would have written, for a version that will never exist.
+  const offer = async (version) =>
+    fs.writeFile(
+      path.join(dataDir, ".update-check.json"),
+      JSON.stringify({
+        version,
+        tag: `v${version}`,
+        date: "2099-01-01",
+        url: "https://example.invalid/r",
+        bullets: ["Added a thing.", "Fixed another thing."],
+        checkedAt: new Date().toISOString(),
+      })
+    );
+  await offer("99.0.0");
+
+  // Enough of a job search to be past the first-run wizard: an empty data/ redirects to /welcome,
+  // and the dialog is a dashboard dialog.
+  await fs.writeFile(
+    path.join(dataDir, "criteria.md"),
+    "---\nmarkets: Cybersecurity\nroles: Product Management\n---\n"
+  );
+
+  const port = 4607;
+  const child = spawn("node", [path.join(ROOT, "server", "dashboard.mjs")], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      JOBSEEKER_DATA_DIR: dataDir,
+      // The background check fires four seconds after boot. Pointed at the real repository it would
+      // overwrite the offer this test just seeded, and the test would pass or fail on how fast the
+      // machine is. A slug that cannot exist makes the check a no-op: a failed check keeps the last
+      // good answer, which is exactly the one under test.
+      JOBSEEKER_REPO_SLUG: "cventour/jobseeker-no-such-repo-for-tests",
+    },
+    stdio: "ignore",
+  });
+  try {
+    // Wait for it to answer rather than guessing at a delay.
+    let up = false;
+    for (let i = 0; i < 40 && !up; i++) {
+      up = await fetch(`http://127.0.0.1:${port}/_whoami`).then((r) => r.ok).catch(() => false);
+      if (!up) await new Promise((r) => setTimeout(r, 250));
+    }
+    check(up, "a dashboard came up for the dialog tests");
+
+    // The signal the client reads to decide whether to open the dialog.
+    const signal = async (p = "/") => {
+      const html = await fetch(`http://127.0.0.1:${port}${p}`).then((r) => r.text());
+      const m = /window\.__UPDATE__=(\{.*?\});/.exec(html);
+      return m ? JSON.parse(m[1]) : null;
+    };
+    const dismiss = (key, summary) =>
+      fetch(`http://127.0.0.1:${port}/dismiss-notice`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `key=${encodeURIComponent(key)}&summary=${encodeURIComponent(summary)}`,
+        redirect: "manual",
+      }).then((r) => r.status);
+
+    const first = await signal();
+    check(first?.version === "99.0.0" && first.dismissed === false, "a new version is offered", JSON.stringify(first));
+
+    const html = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text());
+    check(/name="key" value="update:99\.0\.0"/.test(html), "the dialog writes the version's own key");
+    check(/>Not now</.test(html) && !/>Later</.test(html), "the button says Not now");
+
+    const status = await dismiss("update:99.0.0", "JobSeeker 99.0.0 is available");
+    check(status >= 300 && status < 400, "the dismissal is accepted, not rejected as an unknown key", `status ${status}`);
+
+    const after = await signal();
+    check(after?.dismissed === true, "…and the offer is not put in front of the user again", JSON.stringify(after));
+
+    // The point of keying it to the version: the next release is a different question.
+    await offer("99.1.0");
+    const next = await signal();
+    check(next?.version === "99.1.0" && next.dismissed === false, "a NEWER release asks again by itself", JSON.stringify(next));
+
+    // And the standing offer is still reachable, both by asking and from Settings.
+    await dismiss("update:99.1.0", "JobSeeker 99.1.0 is available");
+    const forced = await signal("/settings?upd=1");
+    check(forced?.forced === true && forced.dismissed === true,
+      "Check for updates opens the dialog anyway", JSON.stringify(forced));
+    const settings = await fetch(`http://127.0.0.1:${port}/settings`).then((r) => r.text());
+    check(/99\.1\.0 available/.test(settings), "…and Settings still carries the offer");
+
+    // A dismissed offer must not reload the page under someone to show a dialog that declines to open.
+    const rs = await fetch(`http://127.0.0.1:${port}/run-state`).then((r) => r.json());
+    check(rs.update === "", "/run-state stops advertising an answered offer", JSON.stringify(rs.update));
+  } finally {
+    child.kill("SIGKILL");
+  }
+}
 } finally {
   await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
 }

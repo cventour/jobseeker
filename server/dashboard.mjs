@@ -506,7 +506,6 @@ async function loadAll() {
   const markets = await loadMarkets();
   const marketAskDismissed = await readMarketAskDismissed();
   const dismissedNotices = await readDismissedNotices();
-  const updateDeferred = await readUpdateDeferred();
   const update = await updateState();
   // Read separately from `update`, not off it. The update check is a background job that has not
   // necessarily run yet -- on a first launch, offline, or within the first seconds -- and the
@@ -607,7 +606,6 @@ async function loadAll() {
     markets,
     marketAskDismissed,
     dismissedNotices,
-    updateDeferred,
     update,
     version,
     updateRun,
@@ -1972,8 +1970,12 @@ function tabStrip(tabs, activeId, trailingHTML = "") {
 //
 // Rendered on the page whether or not it is due; showing it is the script's decision, which keeps
 // the "have they already said not now" test in one place.
-function updateModal(u) {
+function updateModal(u, page = "") {
   if (!u || !u.available) return "";
+  // What "Not now" records. The summary is what Activity shows weeks later, so it is a whole
+  // sentence and it says where the offer went rather than only that there was one.
+  const key = updateNoticeKey(u.latest);
+  const summary = `JobSeeker ${u.latest} is available — install it from Settings whenever you want it.`;
   const group = (label, items) =>
     items.length
       ? `<div class="upd-group">
@@ -1996,9 +1998,11 @@ function updateModal(u) {
       <p class="upd-safe">Your applications, tasks, settings and CV are left exactly as they are.
         JobSeeker quits and reopens by itself, which takes about a minute.</p>
       <div class="actions confirm-acts">
-        <form method="POST" action="/defer-update" class="inline">
-          <input type="hidden" name="version" value="${esc(u.latest)}">
-          <button type="submit" class="btn-secondary">Later</button>
+        <form method="POST" action="/dismiss-notice" class="inline">
+          ${page === "settings" ? `<input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="setup">` : ""}
+          <input type="hidden" name="key" value="${esc(key)}">
+          <input type="hidden" name="summary" value="${esc(summary)}">
+          <button type="submit" class="btn-secondary">Not now</button>
         </form>
         <form method="POST" action="/update-now" class="inline">
           <input type="hidden" name="tag" value="${esc(u.tag)}">
@@ -2009,17 +2013,28 @@ function updateModal(u) {
   </div>`;
 }
 
+// The key an offer is dismissed under. One expression in one place, because the dialog writes
+// it, the page test reads it and /run-state has to agree with both -- three copies of a string
+// is three chances for a Not now that does not stick.
+function updateNoticeKey(version) {
+  return `update:${version}`;
+}
+
 // Whether the dialog is DUE, handed to the script that decides.
 //
-// `forced` is a manual "Check for updates": the user just asked the question out loud, so the
-// answer is the dialog itself and a deferral does not apply to it.
+// "Not now" is an answer, and it is remembered: the offer is not put back in front of the user
+// the next day, or the day after. It is keyed to the VERSION, so the next release is a
+// different question and asks itself; and the offer never disappears, it moves to the version
+// row in Settings, which carries the same Update button.
+//
+// `forced` is a manual "Check for updates": someone who asks the question out loud is not being
+// told they already answered it, so the dialog opens whatever they said before.
 function updateSignal(all, forced) {
   if (!all.update?.available) return "";
-  const until = (all.updateDeferred || {})[all.update.latest] || "";
-  const deferred = Boolean(until) && Date.parse(until) > Date.now();
+  const dismissed = Boolean((all.dismissedNotices || {})[updateNoticeKey(all.update.latest)]);
   return `<script>window.__UPDATE__=${JSON.stringify({
     version: all.update.latest,
-    deferred,
+    dismissed,
     forced: Boolean(forced),
   }).replace(/</g, "\\u003c")};</script>`;
 }
@@ -3439,7 +3454,7 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
     </div>
   </div>
 </div>
-${updateModal(all.update)}
+${updateModal(all.update, "settings")}
 ${updateSignal(all, forceUpdate)}
 ${FEEDBACK_MODAL}
 <script>${JS}${FEEDBACK_JS}</script>
@@ -4508,9 +4523,9 @@ const JS = `${VIEWPORT_JS}
   (function(){
     var u = window.__UPDATE__;
     var ov = document.getElementById('updateOverlay');
-    /* forced is a manual Check for updates -- a deferral is not an answer to a question the user
-       has just asked again. */
-    if (!u || !ov || (u.deferred && !u.forced)) return;
+    /* forced is a manual Check for updates -- a standing Not now is not an answer to a question
+       the user has just asked again. */
+    if (!u || !ov || (u.dismissed && !u.forced)) return;
     /* Not on top of something the user is already doing. */
     function busy(){
       var a = document.activeElement;
@@ -4526,8 +4541,9 @@ const JS = `${VIEWPORT_JS}
       var b = ov.querySelector('.btn-secondary');
       if (b) b.focus();
     }
-    /* Escape is "not now" for this session only -- it must not silently write the dismissal, because
-       a key pressed to get rid of a dialog is not an answer to the question it asked. */
+    /* Escape closes it for this session only. It must NOT write what the Not now button writes:
+       a key pressed to get a dialog off the screen is not an answer to the question it asked, and
+       the offer has to come back on the next launch. */
     document.addEventListener('keydown', function(e){
       if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none';
     });
@@ -7229,41 +7245,11 @@ async function readCVPrevious() {
 // count. When the underlying fact changes the key changes and the notice comes back, which is the
 // behaviour you want: dismissing "the 4 Sep run was partial" must not also hide "the 5 Sep run
 // failed".
-// "Later" on the update dialog.
 //
-// It used to write a permanent dismissal keyed to the version, the same mechanism a Today notice
-// uses. That is wrong for this dialog: a notice is a fact you have read, and an update is an offer
-// that stands until you take it. Waving it away once meant never being asked again, so an install
-// could sit three releases behind having been told once — which is exactly what happened.
-//
-// So Later defers, it does not dismiss. The offer comes back on the next launch after the deferral
-// runs out, and a NEW version resets it, because a different version is a different offer.
-const DEFER_UPDATE_MS = 24 * 60 * 60 * 1000;
-
-async function readUpdateDeferred() {
-  try {
-    const j = JSON.parse(await fs.readFile(NOTICES_FILE, "utf8"));
-    return j && typeof j.updateDeferred === "object" && j.updateDeferred ? j.updateDeferred : {};
-  } catch {
-    return {};
-  }
-}
-
-async function handleDeferUpdate(form) {
-  const version = String(form.version || "").trim();
-  if (!/^\d+\.\d+\.\d+$/.test(version)) return { kind: "bad", msg: "Unknown version — nothing changed." };
-  let file = {};
-  try {
-    file = JSON.parse(await fs.readFile(NOTICES_FILE, "utf8")) || {};
-  } catch {
-    /* first time */
-  }
-  // Only the current offer is kept: an old deferral for a version nobody can install any more is
-  // just a row that never expires.
-  file.updateDeferred = { [version]: new Date(Date.now() + DEFER_UPDATE_MS).toISOString() };
-  await writeFileAtomic(NOTICES_FILE, JSON.stringify(file, null, 2));
-  return { kind: "ok", msg: `Left for later. JobSeeker ${version} is in Settings whenever you want it.` };
-}
+// The new-version dialog shares this store, and for the same reason. "Not now" is an answer to
+// one question -- shall I install 0.7.5 -- and the key carries that version, so the next release
+// asks by itself while this one stays answered. The offer is not lost by saying no to it: the
+// version row in Settings carries it, with the same Update button.
 
 async function readDismissedNotices() {
   try {
@@ -7301,6 +7287,10 @@ async function handleDismissNotice(form) {
     await writeFileAtomic(NOTICES_FILE, JSON.stringify({ dismissed }, null, 2));
     await logActivity("notification", summary);
   }
+  // An update offer is not a notice you have read. Pointing at Activity would send someone to a
+  // log entry when what they want to hear is that the version is still there when they want it.
+  const offer = /^update:(\d+\.\d+\.\d+)$/.exec(key);
+  if (offer) return { kind: "ok", msg: `Not now. JobSeeker ${offer[1]} stays in Settings whenever you want it.` };
   return { kind: "ok", msg: "Dismissed — it is in Activity under Notifications." };
 }
 
@@ -8347,13 +8337,18 @@ const server = http.createServer(async (req, res) => {
       // The six-hourly check runs in this process, but a page that is already open would not learn
       // about it until someone happened to reload. This poll is already here and already cheap, so
       // it carries the answer: the client reloads once, and the dialog appears on the way back.
+      //
+      // Only an offer that has not been answered, though. Reporting a dismissed version would
+      // reload the page under someone to show them a dialog that then declines to open -- the one
+      // way a remembered Not now could still interrupt them.
       const upd = await updateState().catch(() => null);
+      const answered = upd?.available ? (await readDismissedNotices())[updateNoticeKey(upd.latest)] : null;
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return res.end(
         JSON.stringify({
           running: live ? { slug: live.slug, started: live.started } : null,
           finished: last?.finished || "",
-          update: upd?.available ? upd.latest : "",
+          update: upd?.available && !answered ? upd.latest : "",
         })
       );
     }
@@ -8712,9 +8707,6 @@ async function handlePost(req, res, url) {
   }
   if (url.pathname === "/apply-now") {
     return redirect(res, await handleApplyNow(form));
-  }
-  if (url.pathname === "/defer-update") {
-    return redirect(res, await handleDeferUpdate(form));
   }
   if (url.pathname === "/dismiss-notice") {
     return redirect(res, await handleDismissNotice(form));

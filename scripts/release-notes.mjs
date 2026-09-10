@@ -28,7 +28,14 @@ function parse(md) {
     out.push({
       version: m[1],
       date: m[2].trim(),
-      body: md.slice(start, next === -1 ? undefined : next).trim(),
+      // Up to the next heading, less the "---" that separates entries in the file. Left in, it
+      // doubled up with the rule the release body appends below, and every release page since the
+      // first has carried two horizontal rules with nothing between them.
+      body: md
+        .slice(start, next === -1 ? undefined : next)
+        .trim()
+        .replace(/\n*-{3,}\s*$/, "")
+        .trim(),
     });
   }
   return out;
