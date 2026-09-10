@@ -32,7 +32,7 @@
 //
 // This file is therefore a FACADE. The two transports are ./browser/applescript.mjs and
 // ./browser/extension.mjs; the site-agnostic composites (findTab, openConversation, withOwnedTab,
-// withBrowser…) are ./browser/snippets.mjs and run on whichever driver is picked here. Consumers
+// withScratchTab, withBrowser…) are ./browser/snippets.mjs and run on whichever driver is picked here. Consumers
 // import from THIS file and never see the difference. JOBSEEKER_BROWSER_DRIVER=applescript|extension
 // overrides the platform default.
 //
@@ -65,6 +65,7 @@ import {
   assertCanReadContent,
   openConversation,
   withOwnedTab,
+  withScratchTab,
   waitForLoad,
   waitForSelector,
   withBrowser,
@@ -96,6 +97,7 @@ export {
   assertCanReadContent,
   openConversation,
   withOwnedTab,
+  withScratchTab,
   waitForLoad,
   waitForSelector,
   withBrowser,

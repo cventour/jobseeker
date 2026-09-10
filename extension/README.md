@@ -75,7 +75,10 @@ Cannot:
   nothing on the extension side can widen that snippet.
 
 The method allowlist is in `background.js` (`METHODS`): `ping`, `listTabs`, `runSnippet`, `openTab`,
-`closeTabsByUrlPrefix`, `tabLoading`. Anything else is answered with `unknown method`. The snippet
+`navigateTab`, `closeTab`, `closeTabsByUrlPrefix`, `tabLoading`. Anything else is answered with
+`unknown method`. `navigateTab` and `closeTab` are refused for any tab the extension did not open
+itself (it keeps the ids of the ones it did), so reusing one tab across a sweep can never move or
+close a tab of yours. The snippet
 allowlist is `SNIPPETS` in `snippets.js`: `pageAlive`, `hasSelector`, `extractPageText`,
 `whatsappChatList`, `linkedinChatList`, `openConversationClick`, `readThreadMessages`. An unknown
 name is refused on both sides, with the list of real names.

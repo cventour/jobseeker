@@ -213,26 +213,30 @@ async function main() {
       throw e;
     });
 
-    for (const b of batch) {
-      let out = null;
-      let err = null;
-      try {
-        out = await ctx.withOwnedTab(b.url, async (tab) => {
+    // ONE tab for the whole batch, pointed at each board in turn. A tab per board meant forty tabs
+    // appearing and vanishing in the user's browser for a single sweep, which is what they noticed
+    // and complained about; the sweep only ever reads one page at a time, so one tab is enough.
+    await ctx.withScratchTab(async ({ visit }) => {
+      for (const b of batch) {
+        let out = null;
+        let err = null;
+        try {
+          const tab = await visit(b.url);
           // Careers pages are JS-rendered — that is why they are in this queue at all — so a
           // settling wait is not optional.
           await new Promise((r) => setTimeout(r, WAIT_S * 1000));
-          return ctx.snippetJson(tab, "extractPageText", { max: 60_000 });
-        });
-      } catch (e) {
-        err = String(e?.message || e);
+          out = await ctx.snippetJson(tab, "extractPageText", { max: 60_000 });
+        } catch (e) {
+          err = String(e?.message || e);
+        }
+        results.push({ board: b, out, err });
+        process.stdout.write(
+          `  read  ${b.company} — ${err ? "FAILED: " + err.slice(0, 90) : `${out?.length ?? 0} chars`}\n`
+        );
+        // Human-paced, one page per board, read-only (AGENT-RULES §7).
+        await new Promise((r) => setTimeout(r, 1500));
       }
-      results.push({ board: b, out, err });
-      process.stdout.write(
-        `  read  ${b.company} — ${err ? "FAILED: " + err.slice(0, 90) : `${out?.length ?? 0} chars`}\n`
-      );
-      // Human-paced, one page per board, read-only (AGENT-RULES §7).
-      await new Promise((r) => setTimeout(r, 1500));
-    }
+    });
   });
 
   let readable = 0;

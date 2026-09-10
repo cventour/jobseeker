@@ -167,7 +167,9 @@ const LIST_TABS_SCRIPT = [
   "    set ti to 0",
   "    repeat with t in tabs of w",
   "      set ti to ti + 1",
-  '      set out to out & wi & "\\t" & ti & "\\t" & ai & "\\t" & (URL of t) & "\\t" & (title of t) & "\\n"',
+  // `id of t` is Chrome's own tab id: stable across the user opening and closing other tabs, which
+  // an index is not. It rides along here so a tab can be re-addressed later (navigateTab, closeTab).
+  '      set out to out & wi & "\\t" & ti & "\\t" & ai & "\\t" & (id of t as string) & "\\t" & (URL of t) & "\\t" & (title of t) & "\\n"',
   "    end repeat",
   "  end repeat",
   "end tell",
@@ -178,11 +180,12 @@ function parseTabList(out) {
   return out
     .split("\n")
     .map((l) => l.split("\t"))
-    .filter((p) => p.length >= 4 && p[3])
-    .map(([w, t, a, url, title]) => ({
+    .filter((p) => p.length >= 5 && p[4])
+    .map(([w, t, a, id, url, title]) => ({
       window: Number(w),
       tab: Number(t),
       active: Number(t) === Number(a),
+      id: id || null,
       url,
       title: title || "",
       // Unread badges ride in the title ("(11) WhatsApp") and need NO extra permission, so this is
@@ -260,10 +263,44 @@ export async function runSnippet(tab, name, args = {}) {
 /** Open `url` in a new tab at the end of window 1 (creating a window if none) and return its address. */
 export async function openTab(url) {
   const open = await osa(
-    `tell ${CHROME}\n  if (count of windows) = 0 then make new window\n  set t to make new tab at end of tabs of window 1 with properties {URL:${asStr(url)}}\n  return (count of tabs of window 1)\nend tell`
+    `tell ${CHROME}\n  if (count of windows) = 0 then make new window\n  set t to make new tab at end of tabs of window 1 with properties {URL:${asStr(url)}}\n  return ((count of tabs of window 1) as string) & "\\t" & (id of t as string)\nend tell`
   );
   if (!open.ok) throw new Error(`could not open tab: ${open.err}`);
-  return { window: 1, tab: Number(open.out) };
+  const [tab, id] = String(open.out).split("\t");
+  return { window: 1, tab: Number(tab), id: id || null };
+}
+
+/**
+ * Point a tab we already opened at `url`, and return its (possibly moved) address.
+ *
+ * This is what lets a sweep of forty boards use ONE tab instead of forty: navigate, read, navigate
+ * again. The address it navigates by is Chrome's tab `id`, never the index — the user opens and
+ * closes tabs while we work, so an index goes stale, and navigating a stale index would send one of
+ * THEIR tabs somewhere. A tab whose id is no longer present is reported as gone, never guessed at
+ * by position; the caller reopens.
+ *
+ * One AppleScript quirk to know: tab ids do NOT compare as numbers here — `(id of t) = 159280993`
+ * is false even for the tab that has exactly that id — so both sides are compared as strings.
+ */
+export async function navigateTab(tab, url) {
+  if (!tab?.id) throw new Error("navigateTab needs a tab id (open the tab with openTab)");
+  const r = await osa(
+    `tell ${CHROME}\n  set wi to 0\n  repeat with w in windows\n    set wi to wi + 1\n    set ti to 0\n    repeat with t in tabs of w\n      set ti to ti + 1\n      if (id of t as string) = ${asStr(String(tab.id))} then\n        set URL of t to ${asStr(url)}\n        return (wi as string) & "\\t" & (ti as string)\n      end if\n    end repeat\n  end repeat\n  return "not-found"\nend tell`
+  );
+  if (!r.ok) throw new Error(`could not navigate tab: ${r.err}`);
+  if (String(r.out).trim() === "not-found") {
+    throw new Error(`tab ${tab.id} is no longer open (closed while we were working)`);
+  }
+  const [w, t] = String(r.out).split("\t");
+  return { window: Number(w), tab: Number(t), id: tab.id };
+}
+
+/** Close one tab BY ID. Best effort — never throws, and never touches a tab we did not open. */
+export async function closeTab(tab) {
+  if (!tab?.id) return;
+  await osa(
+    `tell ${CHROME}\n  repeat with w in windows\n    repeat with t in tabs of w\n      if (id of t as string) = ${asStr(String(tab.id))} then close t\n    end repeat\n  end repeat\nend tell`
+  ).catch(() => {});
 }
 
 /**
@@ -462,6 +499,8 @@ export const driver = {
   // it, but everything else routes through runSnippet so both platforms run the same page code.
   evalInTab,
   openTab,
+  navigateTab,
+  closeTab,
   closeTabsByUrl,
   tabLoading,
   probe,

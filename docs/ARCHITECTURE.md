@@ -106,7 +106,10 @@ user's tabs, and posts the result back.
   token into `data/.bridge.token` and pins the extension's `chrome-extension://` origin, so a web
   page that somehow learned the token still cannot poll for work.
 - **The method allowlist is the boundary**, enforced on both sides: `ping`, `listTabs`, `runSnippet`,
-  `openTab`, `closeTabsByUrlPrefix`, `tabLoading`. Anything else is refused before it is queued.
+  `openTab`, `navigateTab`, `closeTab`, `closeTabsByUrlPrefix`, `tabLoading`. Anything else is refused
+  before it is queued. `navigateTab` and `closeTab` work only on tabs the extension itself opened —
+  it remembers which those are — so a sweep can reuse one tab instead of opening one per page, and
+  can never steer or close a tab of yours.
   `runSnippet` names one of the functions the extension ships in `extension/snippets.js`; there is no
   way to send it code. Manifest V3 would refuse to evaluate a string in a page in any case.
 - **Two host-permission tiers.** WhatsApp Web and LinkedIn by default; reading careers pages needs

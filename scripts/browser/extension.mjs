@@ -10,7 +10,8 @@
 //   POST /bridge/call  {method, params, timeoutMs}  Authorization: Bearer <data/.bridge.token>
 //                                       → { ok, result } | { ok:false, error }; 503 = no extension
 //
-// Methods: ping, listTabs, runSnippet, openTab, closeTabsByUrlPrefix, tabLoading. The extension
+// Methods: ping, listTabs, runSnippet, openTab, navigateTab, closeTab, closeTabsByUrlPrefix,
+// tabLoading. The extension
 // JSON-stringifies any non-string page result, so runSnippet returns exactly what the AppleScript
 // path returns — a string — and the composites in ./snippets.mjs need no per-driver branches.
 //
@@ -414,6 +415,31 @@ export async function openTab(url) {
   return { id: r.tabId, window: Number(r.window) || 1, tab: Number(r.tab) || 0 };
 }
 
+/**
+ * Point a tab we already opened at `url`. The extension refuses this for any tab IT did not open,
+ * so a bridge call can never steer one of the user's own tabs; the caller reopens instead. Its
+ * ownership record lives in the service worker, so a worker restart mid-sweep costs one reopened
+ * tab rather than a wrong navigation.
+ */
+export async function navigateTab(tab, url) {
+  if (tab?.id == null) throw new Error("navigateTab needs a tab id (open the tab with openTab)");
+  const r = await call("navigateTab", { tabId: tab.id, url });
+  if (!r || r.tabId == null) throw new Error("could not navigate tab: bridge returned no tab");
+  return { id: r.tabId, window: Number(r.window) || 1, tab: Number(r.tab) || 0 };
+}
+
+/**
+ * Close one tab BY ID. The extension refuses any tab it did not open itself.
+ *
+ * This one is allowed to throw, and callers rely on that: a bridge extension too old to know the
+ * method answers "unknown method", and the caller falls back to closing by URL rather than leaving
+ * the tab behind.
+ */
+export async function closeTab(tab) {
+  if (tab?.id == null) return;
+  await call("closeTab", { tabId: tab.id });
+}
+
 export async function closeTabsByUrl(url) {
   await call("closeTabsByUrlPrefix", { prefix: url }).catch(() => {});
 }
@@ -499,6 +525,8 @@ export const driver = {
   runSnippet,
   evalInTab,
   openTab,
+  navigateTab,
+  closeTab,
   closeTabsByUrl,
   tabLoading,
   probe,

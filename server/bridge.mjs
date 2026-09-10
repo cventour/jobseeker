@@ -24,6 +24,8 @@
 //   listTabs             -> [{id, url, title, active, windowId}]
 //   evalInTab            -> run a read-only script in a tab, return its value
 //   openTab              -> open a URL, return the tab id
+//   navigateTab          -> point a tab WE opened at another URL (one tab per sweep, not one per page)
+//   closeTab             -> close a tab WE opened, by id
 //   closeTabsByUrlPrefix -> close tabs we opened
 //   tabLoading           -> is a tab still loading?
 // The extension enforces the same list on its side; this one is here so a bad caller is told no
@@ -52,7 +54,16 @@ export const BRIDGE_VERSION = "1";
 // isolated world rejects both eval and new Function, and the main world is bound by the page's own
 // policy), so the old `evalInTab` could never have worked there -- and naming what may run is the
 // better boundary regardless.
-export const METHODS = new Set(["ping", "listTabs", "runSnippet", "openTab", "closeTabsByUrlPrefix", "tabLoading"]);
+export const METHODS = new Set([
+  "ping",
+  "listTabs",
+  "runSnippet",
+  "openTab",
+  "navigateTab",
+  "closeTab",
+  "closeTabsByUrlPrefix",
+  "tabLoading",
+]);
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const BODY_LIMIT = 1024 * 1024;

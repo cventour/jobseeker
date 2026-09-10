@@ -183,6 +183,108 @@ export async function withOwnedTab(url, fn) {
   }
 }
 
+/** What a tab is showing, by id. `null` when the tab cannot be found or the driver cannot say. */
+async function urlOfTab(d, tab) {
+  try {
+    const row = (await d.listTabs()).find((t) => String(t.id) === String(tab?.id));
+    return row?.url || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wait until a navigated tab has stopped showing `fromUrl`.
+ *
+ * `loading` alone is not enough: for a moment after the URL is set, Chrome still reports the OLD
+ * page, complete and idle, so a naive waitForLoad returns immediately on stale content. Waiting for
+ * the URL to CHANGE — rather than to equal the target — is also what survives redirects: a careers
+ * page that bounces to a login wall or a regional domain still counts as having moved.
+ *
+ * Best effort. A tab that cannot be read, or a repeat visit to the same URL, falls through to the
+ * caller's own settling wait, which is all there was before this existed.
+ */
+async function waitForNavigation(d, tab, fromUrl, { timeoutMs = 15_000 } = {}) {
+  if (!fromUrl) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const now = await urlOfTab(d, tab);
+    if (now === null || now !== fromUrl) return;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+/**
+ * ONE tab, pointed at each URL in turn, then closed. The frugal alternative to withOwnedTab in a loop.
+ *
+ * withOwnedTab opens and closes a tab per URL, so a forty-board sweep makes forty tabs appear and
+ * vanish in the user's browser. That churn is what users actually complain about, and it buys
+ * nothing: a sweep reads one page at a time, so one tab is all it ever needs. Here the user sees a
+ * single tab that changes page, and one tab closing at the end.
+ *
+ * The callback gets `visit(url)`, which returns the tab handle to read from:
+ *
+ *   await withScratchTab(async ({ visit }) => {
+ *     for (const url of urls) {
+ *       const tab = await visit(url);
+ *       results.push(await snippetJson(tab, "extractPageText", { max: 60_000 }));
+ *     }
+ *   });
+ *
+ * Never point a scratch tab at WhatsApp Web (see withOwnedTab): it is single-session, and a tab that
+ * navigates away and back is a tab that can steal or drop the user's session.
+ */
+export async function withScratchTab(fn) {
+  const d = getDriver();
+  let tab = null;
+  let lastUrl = null;
+
+  const visit = async (url) => {
+    // Reuse when we can, reopen when we cannot. A scratch tab legitimately disappears mid-sweep —
+    // the user closes it, or the Windows extension's service worker restarts and forgets the tab
+    // was ours — and that must cost ONE reopen, not the rest of the sweep. It is also the fallback
+    // for an older bridge extension that has no navigateTab at all: it answers "unknown method",
+    // and the run degrades to exactly the tab-per-URL behaviour it had before.
+    if (tab && typeof d.navigateTab === "function") {
+      // What the tab shows RIGHT NOW, captured before we move it. A fresh tab cannot show you the
+      // previous page; a reused one can, for as long as Chrome takes to commit the navigation — so
+      // the previous URL is the thing to wait to stop seeing. Without this a sweep would happily
+      // attribute one company's careers page to the next company in the list.
+      const before = await urlOfTab(d, tab);
+      try {
+        tab = await d.navigateTab(tab, url);
+        await waitForNavigation(d, tab, before);
+      } catch {
+        tab = null;
+      }
+    } else {
+      tab = null;
+    }
+    if (!tab) tab = await d.openTab(url);
+    lastUrl = url;
+    await waitForLoad(tab);
+    return tab;
+  };
+
+  try {
+    return await fn({ visit });
+  } finally {
+    // Close by id, not by URL: after a sweep the tab is sitting on the LAST url it visited, and a
+    // URL-prefix close could take one of the user's tabs with it.
+    //
+    // The URL fallback is for one real case: a Windows bridge extension too old to know closeTab.
+    // It is the weaker close — a user tab on the same URL goes with ours — but leaving a tab behind
+    // every sweep is exactly the complaint this change exists to answer, so it is the better risk.
+    if (tab) {
+      try {
+        await d.closeTab(tab);
+      } catch {
+        if (lastUrl) await d.closeTabsByUrl(lastUrl).catch(() => {});
+      }
+    }
+  }
+}
+
 export async function waitForLoad(tab, { timeoutMs = 45_000 } = {}) {
   const d = getDriver();
   const deadline = Date.now() + timeoutMs;
@@ -226,6 +328,7 @@ export async function withBrowser(fn) {
       evalInTab,
       evalJson,
       withOwnedTab,
+      withScratchTab,
       waitForSelector,
       openConversation,
     });

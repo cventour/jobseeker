@@ -43,6 +43,7 @@
     "chat:sweep": "node scripts/browser-do.mjs chat-sweep",
     "board:sweep": "node scripts/browser-do.mjs board-sweep",
     "test:sweep": "node scripts/test-chat-sweep.mjs",
+    "test:scratch": "node scripts/test-scratch-tab.mjs",
     "test:security": "node scripts/test-security.mjs",
     "test:welcome": "node scripts/test-welcome.mjs",
     "test:runstate": "node scripts/test-run-state.mjs",

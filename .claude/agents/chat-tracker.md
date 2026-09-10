@@ -61,6 +61,11 @@ alters state** — you read and record only.
 - **Bail gracefully.** If a site isn't logged in (WhatsApp shows a QR code, LinkedIn shows a login
   wall), or a tool fails 2–3 times, STOP that site, tell the user to log in in Chrome, and move on.
   Do not loop or wander to unrelated pages.
+- **At most one tab per channel, and the user's own tabs are THEIRS** (AGENT-RULES §13). If a
+  WhatsApp Web or LinkedIn messaging tab is already open, read it where it is — never `navigate` it
+  somewhere else. WhatsApp Web is single-session: a second tab, or that tab sent elsewhere, costs the
+  user their linked session. Threads are opened by clicking inside the list, so a whole sweep needs
+  no second tab; if you do open one yourself, reuse it for the whole channel.
 - Interactive/local only — you need the user's Chrome. You won't be available in the headless
   scheduled run; that's expected.
 
@@ -154,7 +159,9 @@ voice note). You MUST cover **every** conversation that has new activity since t
 8. If the thread is waiting on the user's reply, flag a follow-up (see "Follow-ups").
 
 ## LinkedIn messaging  (if linkedin_enabled)
-1. Open a tab to `https://www.linkedin.com/messaging/`. If it shows a login wall → report + skip.
+1. Reuse an already-open `linkedin.com/messaging` tab if there is one; otherwise open ONE
+   (`tabs_context_mcp` + `navigate`) and use it for every conversation below. If it shows a login
+   wall → report + skip.
 2. Apply the SAME watermark completeness rule as WhatsApp: open **every** conversation with activity
    since the watermark and read it in full (do not judge from the list preview). The list is
    time-ordered; scroll only until you pass the watermark.
@@ -180,7 +187,9 @@ voice note). You MUST cover **every** conversation that has new activity since t
    opened+read, and any you could NOT read (voice notes, unsynced history, a channel not logged in).
    A run that skipped threads must say which — silent partial coverage is a failure.
 Then **return a concise summary**: which threads need a reply (who + channel + why), any new
-role/company surfaced, and anything needing a decision. Leave the browser tabs open for the user.
+role/company surfaced, and anything needing a decision. Leave the chat tabs open — one per channel,
+sitting on the messaging view: that is the state the next run reads for free, and it is what the user
+had before you started.
 
 ## Rules recap
 - Read-only, recent-only, job-related-only. Never send. All writes via `server/record.mjs`.

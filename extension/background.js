@@ -227,11 +227,42 @@ function mapScriptingError(msg) {
   return msg;
 }
 
+// The tabs THIS extension opened, and therefore the only ones it may steer or close.
+//
+// navigateTab exists so a sweep of forty careers pages uses one tab instead of forty — the loudest
+// complaint about a run. But "navigate a tab by id" is only safe while the id can be shown to be
+// ours: pointed at a tab the user opened, it would yank them off their own page, and at their
+// WhatsApp tab it would cost them the session. So ownership is tracked here, from the one call that
+// creates a tab, rather than trusted from the caller.
+//
+// The set lives in the service worker, so a worker restart forgets it. That is the safe direction to
+// fail: navigateTab then refuses and the caller opens a fresh tab — one extra tab, never a wrong one.
+const ownedTabs = new Set();
+chrome.tabs.onRemoved.addListener((id) => ownedTabs.delete(id));
+
 async function openTab({ url }) {
   if (typeof url !== "string" || !/^https?:\/\//i.test(url)) throw new Error("openTab: url must be http(s)");
   const tab = await chrome.tabs.create({ url, active: false });
+  ownedTabs.add(tab.id);
   const idx = await indicesFor(tab.id);
   return { tabId: tab.id, ...idx };
+}
+
+async function navigateTab({ tabId, url }) {
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) throw new Error("navigateTab: url must be http(s)");
+  const id = Number(tabId);
+  if (!ownedTabs.has(id)) throw new Error("navigateTab: not a tab this extension opened");
+  await chrome.tabs.update(id, { url });
+  const idx = await indicesFor(id);
+  return { tabId: id, ...idx };
+}
+
+async function closeTab({ tabId }) {
+  const id = Number(tabId);
+  if (!ownedTabs.has(id)) throw new Error("closeTab: not a tab this extension opened");
+  await chrome.tabs.remove(id);
+  ownedTabs.delete(id);
+  return { closed: 1 };
 }
 
 async function closeTabsByUrlPrefix({ prefix }) {
@@ -254,6 +285,8 @@ const METHODS = {
   listTabs: async () => listTabs(),
   runSnippet: async (p) => runSnippet(p || {}),
   openTab: async (p) => openTab(p || {}),
+  navigateTab: async (p) => navigateTab(p || {}),
+  closeTab: async (p) => closeTab(p || {}),
   closeTabsByUrlPrefix: async (p) => closeTabsByUrlPrefix(p || {}),
   tabLoading: async (p) => tabLoading(p || {}),
 };

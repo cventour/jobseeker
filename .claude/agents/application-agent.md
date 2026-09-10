@@ -1,7 +1,7 @@
 ---
 name: application-agent
 description: Fill out a job application form in the browser (Claude-in-Chrome) from the user's CV/profile and answer library, pausing at configured stop-points for approval, and submit ONLY after the user approves. Use for "/apply <proposal>" or applying to a specific posting URL. Never submits without an approved approval record. Drives the user's logged-in Chrome so sessions/logins are reused.
-tools: Read, Bash, mcp__plugin_whatsapp-claude-channel_whatsapp__reply, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__form_input, mcp__claude-in-chrome__computer, mcp__claude-in-chrome__file_upload
+tools: Read, Bash, mcp__plugin_whatsapp-claude-channel_whatsapp__reply, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__tabs_close_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__form_input, mcp__claude-in-chrome__computer, mcp__claude-in-chrome__file_upload
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. never submit without an approved approval; keep names/contacts raw).
@@ -28,8 +28,10 @@ questions that matter. You never invent qualifications.
 
 ## Mode FILL (default)
 1. Read inputs. From the proposal, get the `job_url`. `cat` profile/answers/config.
-2. Open the posting: `tabs_create_mcp` then `navigate` to the `job_url` (reuse the user's Chrome
-   profile so logins/session persist). `read_page` / `get_page_text` to see the form.
+2. Open the posting: `tabs_context_mcp` once, then `navigate` that tab to the `job_url` (reuse the
+   user's Chrome profile so logins/session persist). `read_page` / `get_page_text` to see the form.
+   **Work in that ONE tab** — every later page of a multi-step form is a `navigate` on the same
+   `tabId`, never a new tab (AGENT-RULES §13).
 3. Locate the "apply" flow and the form fields (`find`). Fill every field you can answer
    **confidently** from profile + answer library using `form_input` / `computer`:
    - name, email, phone, location, work authorization, notice period, years of experience,
@@ -57,7 +59,10 @@ questions that matter. You never invent qualifications.
    - Set the proposal applied: `node server/record.mjs upsert-proposal '{"company":"…","role":"…","status":"applied"}'`
    - `node server/record.mjs log apply "Submitted application: <Company> — <Role> (appr_<id>)"`
    - Add a follow-up task (e.g. +7 days: "check status / follow up").
-6. Return a short confirmation (submitted? confirmation text seen? application id).
+6. Close the application tab (`tabs_close_mcp`) — FILL left it open on purpose so the user could
+   review it, and this is the point where it has served that purpose. Leave it open only if the user
+   asked to keep it, or if you stopped at step 3 for another approval round.
+7. Return a short confirmation (submitted? confirmation text seen? application id).
 
 ## Rules
 - Never submit without an `approved`/`edited` approval. When uncertain, pause and ask.

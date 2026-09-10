@@ -4,6 +4,14 @@ Every release, in plain language. Newest first.
 
 ---
 
+## Unreleased
+
+- A run no longer fills Chrome with tabs. Reading forty careers pages opened forty tabs; it now opens one, moves that one from page to page, and closes it at the end. Looking through LinkedIn jobs and filling in an application work the same way: one tab, reused, closed when it is finished with.
+- Tabs you opened yourself stay yours. A WhatsApp Web or LinkedIn tab that is already open is read where it sits and never sent anywhere else — moving that tab is what would cost you your WhatsApp session — and JobSeeker's Chrome extension now refuses to steer or close any tab it did not open itself.
+- On Windows, reload the JobSeeker Bridge extension (it is now version 0.3.0) to get this. Until you do, everything still works exactly as before, one tab per page.
+
+---
+
 ## v0.7.5 — 10 September 2026
 
 - Not now on the new-version dialog is an answer again. Yesterday it became Later and came back the next day; being asked the same question every morning is how an offer turns into noise, so a version you have said no to stays said no to. A newer release still asks, because that is a different question — and the offer is never lost by declining it: Settings carries it, with the same Update button.

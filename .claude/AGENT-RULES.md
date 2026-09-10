@@ -429,6 +429,23 @@ unreadable, which makes the work *harder* to act on — the opposite of the poin
   logged-in browser. Two at once fight over tabs, misattribute pages to the wrong agent, and burn
   LinkedIn rate limits. Never launch two `mcp__claude-in-chrome__*` users concurrently. In a
   fan-out, do the LinkedIn pass **once**, serially, covering all markets together.
+- **ONE tab per Chrome-driving agent — reuse it, do not stack up new ones.** Users complained about
+  a run leaving a wall of tabs behind, and they were right: a curation pass opened a tab per search
+  and per posting and closed none of them. A browser agent reads one page at a time, so one tab is
+  all it ever needs.
+  * Call `tabs_context_mcp` **once** at the start, keep the `tabId`, and pass it to every
+    `navigate`. `tabs_create_mcp` is for the rare tab that must stay open ALONGSIDE the one you are
+    driving — not for the next URL.
+  * **Close what you opened before you finish** (`tabs_close_mcp`), unless the user asked to see the
+    page or is mid-approval on it.
+  * Two exceptions, both deliberate: a tab the user already had open is **theirs** — read it where it
+    is, never navigate it away (WhatsApp Web is single-session; moving that tab costs them the
+    session) — and `application-agent` keeps its posting tab open across an approval pause, because
+    the orchestrator re-invokes it by tab id.
+  * Scripts get this for free: `withScratchTab` in `scripts/browser.mjs` opens one tab, navigates it
+    per URL, and closes it at the end. Use it for any loop over URLs; `withOwnedTab` is for a single
+    page. It addresses the tab by Chrome's tab **id**, never its index, so a tab the user closed
+    mid-sweep costs one reopen instead of navigating one of THEIR tabs.
 - **Stateless web work parallelizes — up to the cap.** Vendor careers pages via WebFetch/WebSearch
   use no session, so they never contend with each other; that removes the *correctness* limit, not
   the 3-agent memory limit. Fan them out per market in waves of 3.
