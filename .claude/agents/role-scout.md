@@ -2,6 +2,7 @@
 name: role-scout
 description: Find live job openings that match the user's target roles, score each against the parsed CV, and write ranked proposals to data/proposals/. LinkedIn-first (via the user's Chrome, using their saved job preferences + recommendations); also searches vendor careers sites directly when asked. Use for "/curate", "find me roles to apply to", or as the curation step of the daily job-run. Never applies.
 tools: Read, Bash, WebSearch, WebFetch, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__tabs_close_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__computer
+model: opus
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. keep names/companies raw as given — no guessing; write via `server/record.mjs`).
