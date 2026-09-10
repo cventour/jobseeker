@@ -4,8 +4,17 @@ Every release, in plain language. Newest first.
 
 ---
 
-## Unreleased
+## v0.7.4 — 10 September 2026
 
+- Fixed: a run could report "finished" and leave every page empty. The daily run already knew it had produced nothing — it records that for itself — but the "Run now" line beside the button read only whether the run had crashed, and a run that finishes empty does not crash. It now says what the run itself concluded, so "finished" means finished.
+- A run that failed now lists what it could not do, in the same words as a run that only partly worked, and stops repeating the Chrome message underneath itself.
+- A run you started by hand is no longer described as a scheduled one.
+- Fixed: **Research this market now** could do nothing at all, silently. It looked for Claude Code only on the bare list of places a program inherits when JobSeeker is opened as an app — which is not where Claude Code installs itself — and then stopped before spending anything. Everything else here already looked in the right places; this one button did not.
+- Researching a market now reports how it ended, on the Companies page: still running, finished, refused because something else was running, or failed and why. Until now the page promised the companies would appear on reload and then never mentioned it again.
+- Researching a market now waits its turn instead of starting on top of a run already in progress. Two of them in the same Chrome read each other's tabs.
+- Fixed: the CV step could say "That file could not be read" about a CV it had read perfectly well. A CV parsed any other way — `/parse-cv` in chat, for instance — left the earlier failure sitting there, and it was the failure that got shown.
+- The CV step now shows what was actually read out of your CV — the titles, seniority and domains it found. That box has been empty since it was added.
+- Problem reports now include the market research log, which was the one log they left out.
 - Fixed: updating could stop with "the dashboard is still answering on port 4319 — nothing was changed" and leave you on the old version. JobSeeker only knew how to stop a dashboard it had started itself, so one you had started any other way was never asked to quit.
 - The update log now says whether JobSeeker was actually running, what was stopped, and — if something is still holding the port — which program it is.
 - Fixed: on Windows, the check that JobSeeker had really stopped never recognised your own install, so an update could replace the files while it was still running. It now checks properly, and stops what is holding the connection first.
