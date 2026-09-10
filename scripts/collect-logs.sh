@@ -59,7 +59,7 @@ NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
 # so it cannot assume the shared redactor is there. When it is not, a reduced one is written to a
 # temp file — because the alternative, sending logs through unredacted, is not an option, and
 # refusing to run at all wastes the round trip that this script exists to avoid.
-REDACTOR="$REPO/scripts/lib/redact.mjs"
+REDACTOR="$REPO/server/redact.mjs"
 if [ ! -f "$REDACTOR" ]; then
   REDACTOR="$(mktemp -t redact).mjs"
   cat > "$REDACTOR" <<'FALLBACK'
@@ -90,7 +90,12 @@ if ! "$NODE_BIN" --version >/dev/null 2>&1; then
   exit 1
 fi
 
-say()  { printf '%s\n' "$*" >> "$OUT"; }
+# The home directory is swapped out HERE rather than at each call site, because it only takes one
+# forgotten call site to put the tester's real name in a file that promises it is not there — which
+# is exactly what happened to the two lines naming where claude is installed. File contents go
+# through the full redactor separately; this is the one rule that also has to cover lines we compose
+# ourselves, and doing it in say() is what makes it impossible to forget in a line added later.
+say()  { printf '%s\n' "${*//$HOME/~}" >> "$OUT"; }
 head2() { say ""; say "=============================================================================="; say "$*"; say "=============================================================================="; }
 
 # Tail a file, redacted, or say plainly that it is not there. "(absent)" is an answer; silence

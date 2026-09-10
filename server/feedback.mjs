@@ -22,6 +22,7 @@ import os from "os";
 import path from "path";
 import zlib from "zlib";
 import { promisify } from "util";
+import { redactPatterns } from "./redact.mjs";
 
 const deflateRaw = promisify(zlib.deflateRaw);
 
@@ -43,26 +44,14 @@ const TAIL_LINES = 300;
 
 // Two layers, and the order matters.
 //
-// 1. PATTERNS catch the shapes that are sensitive wherever they appear — an address, a phone
-//    number, a home directory. These work on any machine with no knowledge of the user.
-// 2. The DICTIONARY catches what only this user's own data can tell us: their name, their
-//    contacts' names, the companies they are targeting. Pattern-matching cannot find "Sophos" in a
-//    log line; a list of the companies in data/ can.
+// 1. The SHAPES that are sensitive wherever they appear — an address, a phone number, a token, the
+//    home directory. That layer is server/redact.mjs, already shared by `npm run logs` and its
+//    Windows twin, and imported rather than reimplemented here: two answers to "what is safe to
+//    send" is one too many, and the one that drifts is always the copy.
+// 2. The NAMES that are only sensitive because they are this user's — their contacts, and the
+//    companies they are chasing. No pattern can find "Aegis Networks" in a log line; a list built
+//    from data/ can. This layer is new, and it is the one that actually protects a job search.
 //
-// Layer 2 is why redaction here is worth trusting. Layer 1 alone would leak every proper noun.
-const PATTERNS = [
-  [/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, "[email]"],
-  [/\+?\d[\d\s().-]{7,}\d/g, "[phone]"],
-  // Query strings carry ids, tokens and search terms. The path alone is enough to debug a fetch.
-  [/(https?:\/\/[^\s?#]+)[?#]\S*/g, "$1?[query]"],
-  [/\b(?:sk|pk|ghp|gho|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, "[token]"],
-  [/\b[A-Fa-f0-9]{32,}\b/g, "[hash]"],
-];
-
-// Words that are part of a company's name but are not the name. "Aegis Networks" must be masked;
-// "Networks" on its own appears in half the log lines of a security job search, and masking it
-// would leave a report nobody can read. The full name is always kept — only the split-out words are
-// filtered through this.
 const GENERIC_WORDS = new Set(
   ("group holdings networks security systems solutions technologies technology software global " +
    "international limited digital services partners labs cyber data cloud consulting corporation " +
@@ -182,33 +171,13 @@ export async function buildDictionary(dataDir, configFile) {
 
 const RX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 
-// Dates and clock times are the backbone of a log and identify nobody — but a hyphenated date has
-// the same shape as a phone number, and the phone rule was eating them. Shielded before the
-// patterns run, put back after.
-const DATELIKE = /\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)?\b|\b\d{2}:\d{2}(?::\d{2})?\b/g;
-const SHIELD = "\u0000D";
-
-/** Mask the patterns, then the dictionary, then the home directory. */
+/** The shared shape rules first, then this user's own names. */
 export function redact(text, dictionary = []) {
-  let out = String(text ?? "");
-
-  const dates = [];
-  out = out.replace(DATELIKE, (m) => {
-    dates.push(m);
-    return SHIELD + (dates.length - 1) + SHIELD;
-  });
-
-  for (const [rx, to] of PATTERNS) out = out.replace(rx, to);
+  let out = redactPatterns(String(text ?? ""), os.homedir());
   for (const term of dictionary) {
-    out = out.replace(new RegExp(term.replace(RX_ESCAPE, "\\$&"), "gi"), "[name]");
+    out = out.replace(new RegExp(term.replace(RX_ESCAPE, "\\$&"), "gi"), "<redacted-name>");
   }
-  // Last, because a home directory contains the username and the patterns above would not catch it.
-  const home = os.homedir();
-  if (home && home.length > 3) {
-    out = out.split(home).join("~");
-  }
-
-  return out.replace(new RegExp(SHIELD + "(\\d+)" + SHIELD, "g"), (_, i) => dates[Number(i)]);
+  return out;
 }
 
 /* ------------------------------------------------------------------ logs */

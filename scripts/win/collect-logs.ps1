@@ -1,6 +1,6 @@
 # Gather everything needed to explain a failed run, into one file on the Desktop.
 # macOS twin: scripts/collect-logs.sh — change both together. The redaction rules are NOT
-# duplicated here: both call scripts/lib/redact.mjs, so the two cannot drift apart on the one thing
+# duplicated here: both call server/redact.mjs, so the two cannot drift apart on the one thing
 # that must never differ between them.
 #
 #   npm run logs
@@ -47,12 +47,17 @@ if (-not $desk) { $desk = $env:USERPROFILE }
 $OUT   = Join-Path $desk "jobseeker-logs_$stamp.txt"
 Set-Content -Path $OUT -Value "" -Encoding UTF8
 
-$REDACT = Join-Path $REPO "scripts\lib\redact.mjs"
+$REDACT = Join-Path $REPO "server\redact.mjs"
 function Redact([string]$text) {
   if ($null -eq $text -or $text -eq "") { return "" }
   return ($text | & $node $REDACT $env:USERPROFILE) -join "`n"
 }
-function Say([string]$s = "") { Add-Content -Path $OUT -Value $s -Encoding UTF8 }
+# Home swapped out here, not at each call site -- see the note in the bash twin. One forgotten call
+# site puts the tester's real name in a file that promises it is not there.
+function Say([string]$s = "") {
+  if ($env:USERPROFILE) { $s = $s.Replace($env:USERPROFILE, "~") }
+  Add-Content -Path $OUT -Value $s -Encoding UTF8
+}
 function Head2([string]$s) {
   Say ""; Say ("=" * 78); Say $s; Say ("=" * 78)
 }
@@ -96,8 +101,8 @@ Say ""
 $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
 Say "Windows      $($os.Caption) $($os.Version) ($env:PROCESSOR_ARCHITECTURE)"
 Say "node         $(& node --version) at $node"
-Say "repo         $($REPO.Replace($env:USERPROFILE,'~'))"
-Say "data         $($DATA.Replace($env:USERPROFILE,'~'))"
+Say "repo         $REPO"
+Say "data         $DATA"
 Say "version      $(& node -p "require('$($REPO -replace '\\','/')/package.json').version" 2>$null)"
 Say "commit       $(& git -C $REPO rev-parse --short HEAD 2>$null)"
 Say "branch       $(& git -C $REPO rev-parse --abbrev-ref HEAD 2>$null)"

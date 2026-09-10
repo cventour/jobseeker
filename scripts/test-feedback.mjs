@@ -12,6 +12,7 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { buildDictionary, redact, makeZip, collectLogs, bundleName } from "../server/feedback.mjs";
+import { redactPatterns } from "../server/redact.mjs";
 
 const run = promisify(execFile);
 let failed = 0;
@@ -42,14 +43,19 @@ await fs.writeFile(configFile, "name: Christos Ventouris\n");
 
 const dict = await buildDictionary(data, configFile);
 
-console.log("\nredaction");
+console.log("\nredaction — the shape layer is server/redact.mjs, shared with `npm run logs`");
+ok(
+  "the shape layer really is the shared one",
+  redact("mail a@b.com") === redactPatterns("mail a@b.com", os.homedir()),
+  "server/feedback.mjs must not grow a second set of pattern rules"
+);
 ok("company names from data/markets are masked", !redact("Sophos rejected the fetch", dict).includes("Sophos"));
 ok("contact names from data/contacts are masked", !redact("emailed Amanda Whitfield", dict).includes("Amanda"));
 ok("the user's own name is masked", !redact("signed as Christos Ventouris", dict).includes("Ventouris"));
-ok("email addresses are masked", redact("to ventouris@gmail.com now").includes("[email]"));
-ok("phone numbers are masked", redact("rang +30 694 123 4567 twice").includes("[phone]"));
-ok("query strings are dropped", redact("GET https://x.test/a?token=abc123").includes("?[query]"));
-ok("bearer-shaped tokens are masked", redact("using sk-ab12cd34ef56gh78").includes("[token]"));
+ok("email addresses are masked", redact("to ventouris@gmail.com now").includes("<redacted-email>"));
+ok("phone numbers are masked", redact("rang +30 694 123 4567 twice").includes("<redacted-phone>"));
+ok("token=... in a URL is masked", redact("GET https://x.test/a?token=abc123").includes("<redacted>"));
+ok("provider keys are masked", redact("using sk-ab12cd34ef56gh78").includes("<redacted-token>"));
 ok("the home directory becomes ~", redact(`read ${os.homedir()}/Downloads/x`).startsWith("read ~/"));
 ok("short words survive", redact("the run had 2 ATS hits", dict).includes("ATS"), "3-letter terms must not be shredded");
 ok("ordinary log text survives", redact("curate finished in 41s", dict) === "curate finished in 41s");
@@ -65,7 +71,7 @@ ok("generic second words survive alone", redact("trust restored, systems green",
 ok("ISO dates survive", redact("applied on 2026-08-04", dict).includes("2026-08-04"));
 ok("ISO timestamps survive", redact("at 2026-08-01T09:12:00Z", dict).includes("2026-08-01T09:12:00Z"));
 ok("clock times survive", redact("ran at 14:22", dict).includes("14:22"));
-ok("a phone next to a date still goes", redact("on 2026-08-04 rang +30 694 123 4567", dict).includes("[phone]"));
+ok("a phone next to a date still goes", redact("on 2026-08-04 rang +30 694 123 4567", dict).includes("<redacted-phone>"));
 
 console.log("\nlogs");
 await fs.writeFile(path.join(data, ".run-now.log"), "starting curate\nSophos board returned 403\n");

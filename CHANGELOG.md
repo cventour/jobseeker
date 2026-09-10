@@ -15,6 +15,7 @@ Every release, in plain language. Newest first.
 - A report can include a picture of the page you were on, if you tick the box and confirm you are happy with what is in it. The picture is drawn from the page itself, so it shows the tab, the filter and the theme you were actually looking at — and nothing outside the JobSeeker window.
 - Reports always include the app logs, with names, email addresses, phone numbers, company names and your home folder masked. Your `data/` tables, CV, contacts and message text are never included.
 - Company and contact names from your own tracker are now masked in bug reports too — `npm run logs` only ever masked things it could recognise by shape, like an email address.
+- Fixed: `npm run logs` put your computer's username in the report when it named where Claude Code was installed, even though the file says your home folder name is replaced.
 - Nothing is sent anywhere. The dialog gives you the file and the address to send it to; you attach it and send it yourself.
 - Settings in the header is now a gear icon, matching the other two buttons beside it.
 - Fixed: "choose a file" and "Try another file" did nothing on the CV step when JobSeeker was opened as an app rather than in a browser. The window it draws in cannot show a file chooser, so JobSeeker now opens your Mac's own one instead. Dragging a CV onto the page always worked and still does.

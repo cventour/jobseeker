@@ -42,13 +42,6 @@ import { buildBundle } from "./feedback.mjs";
 
 setCompanyAliases(await companyAliases());
 
-// Named in every problem report. Read from package.json rather than repeated here, so a release
-// bump cannot leave reports claiming a version that was never shipped.
-const APP_VERSION = await fs
-  .readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")
-  .then((t) => JSON.parse(t).version)
-  .catch(() => "unknown");
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 // Overridable so the dashboard can be run against the sample dataset — for demos, for the
@@ -8458,7 +8451,7 @@ async function handleFeedback(req, res) {
       message,
       png,
       meta: {
-        version: APP_VERSION,
+        version: (await currentVersion()) || "unknown",
         platform: `${process.platform} ${process.arch} ${os.release()}`,
         node: process.version,
         userAgent: String(body.userAgent || "").slice(0, 300),
