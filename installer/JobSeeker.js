@@ -656,6 +656,27 @@ function tick() {
   if (phase === 'wait-ui') {
     if (wv.title.isNil() || !wv.title.js) return;   // page still parsing
     appendFile(FULLLOG, stamp() + '  ui loaded, window on screen: ' + onScreen() + '\n');
+    // Do not show a setup checklist to someone who is not setting anything up.
+    //
+    // The survey has to run on every launch -- it is the only thing that knows whether Node, Claude
+    // Code and the server are actually there. But it used to run in FRONT of the plan view, so
+    // reopening a Mac that has been set up for weeks meant watching "Here is everything that will
+    // happen" and six rows tick through before the dashboard appeared. The work was right; showing
+    // it was not.
+    //
+    // Whether this is a first run is answerable from two files, with no subprocess and no waiting:
+    // setupFinished() reads config/job-seeker.config.md and data/criteria.md. When it says yes, the
+    // window holds one quiet line while the survey runs behind it. When the survey then finds real
+    // work after all, decideWhatToDo puts the wizard back.
+    if (setupFinished()) {
+      quietStart = true;
+      state.view = 'work';
+      state.title = 'Starting JobSeeker';
+      state.subtitle = 'One moment.';
+      state.brandnote = '';
+      state.status = '';
+      state.busy = false;
+    }
     push();
     launchStep('check-all');
     phase = 'survey';
@@ -755,7 +776,9 @@ function decideWhatToDo() {
     return;
   }
   // There is real work to do, so open on the welcome rather than dropping someone straight into
-  // a list of things about to be installed on their Mac.
+  // a list of things about to be installed on their Mac. Whatever the quiet start assumed, this
+  // launch IS a setup run.
+  quietStart = false;
   state.view = 'welcome';
   state.status = 'Nothing has been installed yet.|';
   push();

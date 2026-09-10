@@ -5693,6 +5693,11 @@ function answerPick(f, current) {
 // separated because they cost wildly different things — saving the file is instant and local, and
 // understanding it is a Claude call that leaves the machine. Collapsing them into one spinner would
 // hide both facts.
+// A submit button aimed at /pick-cv, not a nested <form>: this card is rendered inside the
+// wizard's own form, and a form inside a form is dropped by every browser. formaction carries the
+// step and back fields that are already there, so the panel knows which page to come back to.
+const PICK_BTN = `<button type="submit" formaction="/pick-cv" formnovalidate class="linkbtn" name="_pick" value="1">`;
+
 function welcomeCVCard(st) {
   const running = st.cvStatus?.state === "running";
   const failed = st.cvStatus?.state === "failed";
@@ -5702,8 +5707,12 @@ function welcomeCVCard(st) {
   if (!st.cvFiles.length) {
     return `<div class="wdrop" id="wdrop">
         <div class="wdrop-big">Drop your CV here</div>
-        <div class="muted">PDF · <button type="button" class="linkbtn" id="wpick">or choose a file</button></div>
-        <input type="file" id="wfile" accept="application/pdf" class="hide">
+        <div class="muted">PDF · ${
+          platform.IS_WIN
+            ? `<button type="button" class="linkbtn" id="wpick">or choose a file</button>`
+            : `${PICK_BTN}or choose a file</button>`
+        }</div>
+        ${platform.IS_WIN ? `<input type="file" id="wfile" accept="application/pdf" class="hide">` : ""}
         <div class="wprog hide" id="wupprog"><i></i></div>
       </div>`;
   }
@@ -5720,9 +5729,13 @@ function welcomeCVCard(st) {
         <div class="wrow"><span class="wok">✓</span><span>Saved on this Mac<em>templates/cv/${esc(newest)}</em></span></div>
         <div class="wrow"><span class="wbad">!</span><span>Claude could not read it${at ? ` · tried ${esc(at)}` : ""}<em>${esc(st.cvStatus.detail || "")}</em></span></div>
       </div>
-      <p class="wnote"><button type="button" class="linkbtn" id="wreplace">Try another file</button></p>
+      <p class="wnote">${
+        platform.IS_WIN
+          ? `<button type="button" class="linkbtn" id="wreplace">Try another file</button>`
+          : `${PICK_BTN}Try another file</button>`
+      }</p>
       <div class="wprog hide" id="wupprog"><i class="anim"></i></div>
-      <input type="file" id="wfile" accept="application/pdf" class="hide">`;
+      ${platform.IS_WIN ? `<input type="file" id="wfile" accept="application/pdf" class="hide">` : ""}`;
   }
 
   return `<div class="wcard">
@@ -5737,8 +5750,12 @@ function welcomeCVCard(st) {
       </span></div>
     </div>
     ${running ? `<p class="wnote">Nothing here needs you. Walk on and it will be waiting, already filled in, by the time you reach the questions that use it.</p>` : ""}
-    <p class="wnote"><button type="button" class="linkbtn" id="wreplace">Use a different file</button> — or fix any line of it in Settings later.</p>
-    <input type="file" id="wfile" accept="application/pdf" class="hide">`;
+    <p class="wnote">${
+      platform.IS_WIN
+        ? `<button type="button" class="linkbtn" id="wreplace">Use a different file</button>`
+        : `${PICK_BTN}Use a different file</button>`
+    } — or fix any line of it in Settings later.</p>
+    ${platform.IS_WIN ? `<input type="file" id="wfile" accept="application/pdf" class="hide">` : ""}`;
 }
 
 function welcomeProfileRows(st) {
@@ -6398,8 +6415,17 @@ const WELCOME_JS = `
   if(pick && file) pick.addEventListener('click', function(){ file.click(); });
   if(replace && file) replace.addEventListener('click', function(){ file.click(); });
   if(file) file.addEventListener('change', function(){ upload(file.files[0]); });
+  // On a Mac there is no hidden file input to click -- the panel is opened by the server, through
+  // the submit button in the card -- so the drop zone hands the click to that button instead.
+  // Without this the zone would keep its pointer cursor and do nothing, which is the same lie the
+  // old picker told.
+  var pickSubmit = document.querySelector('button[formaction="/pick-cv"]');
   if(drop){
-    drop.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON' && file) file.click(); });
+    drop.addEventListener('click', function(e){
+      if(e.target.tagName === 'BUTTON') return;
+      if(file) { file.click(); return; }
+      if(pickSubmit) pickSubmit.click();
+    });
     ['dragenter','dragover'].forEach(function(ev){
       drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); });
     });
@@ -7203,6 +7229,77 @@ async function handleRunNow(form) {
   };
 }
 
+// Choose a CV through the Mac's own file panel, because the app cannot show the browser's.
+//
+// JobSeeker.app draws the dashboard in a WKWebView, and WKWebView only opens a file panel if the
+// host app implements WKUIDelegate's runOpenPanelWithParameters:. installer/JobSeeker.js does not,
+// so inside the app EVERY <input type="file"> click is a silent no-op -- no panel, no error, no
+// log line. Someone whose first CV failed could not choose a second one, and the button looked
+// broken because from where they sat it was.
+//
+// The panel is opened by the server instead, with osascript. That is not a workaround aimed at the
+// webview: the dashboard listens on 127.0.0.1 only, so the machine running this code is always the
+// machine sitting in front of the person clicking, and a panel it opens lands on their screen
+// whether they are in the app or in Chrome. One path, working everywhere, beats a hidden input
+// that works in one of the two places JobSeeker is normally read.
+//
+// Windows keeps the ordinary file input: there is no webview wrapper there, so it works.
+async function handlePickCV(form) {
+  // The button lives inside the wizard's own form and reaches here via formaction, so the fields
+  // that say where the reader is are already on the request -- no second source of truth for it.
+  const solo = String(form.return || "") === "standalone";
+  const backTo = BACK_TO.has(String(form.back || "")) ? String(form.back) : "settings";
+  const to = solo ? `/setup-step?step=cv&back=${encodeURIComponent(backTo)}` : "/welcome?step=cv";
+  const done = (flash) => ({ redirect: to, flash });
+
+  if (platform.IS_WIN) return done({ kind: "bad", msg: "Use the Choose a file button — nothing changed." });
+
+  // -e per line rather than one embedded newline string: an AppleScript passed as a single
+  // argument with literal newlines is the shape that breaks differently on every macOS.
+  const script = [
+    'set f to choose file with prompt "Choose your CV (a PDF)" of type {"com.adobe.pdf", "pdf"}',
+    "POSIX path of f",
+  ];
+  // Five minutes. The clock is a person deciding, not a computer working, and a panel that closes
+  // itself while someone is looking through Documents is worse than no panel.
+  const r = await platform.run("osascript", script.flatMap((l) => ["-e", l]), { timeout: 300_000 });
+
+  if (!r.ok) {
+    // Cancelling is a decision, not a fault, and must not be reported as one.
+    if (/User canceled|-128/.test(r.err || "")) return done(null);
+    return done({ kind: "bad", msg: "The file panel could not be opened. Drag your CV onto the page instead." });
+  }
+
+  const src = String(r.out || "").trim();
+  if (!src) return done(null);
+  if (!/\.pdf$/i.test(src)) {
+    return done({ kind: "bad", msg: "That is not a PDF. Export your CV as a PDF and choose it again." });
+  }
+
+  let buf;
+  try {
+    buf = await fs.readFile(src);
+  } catch (e) {
+    return done({ kind: "bad", msg: `That file could not be read (${e.code || e.message}). Nothing changed.` });
+  }
+  if (!buf.length) return done({ kind: "bad", msg: "That file is empty. Nothing changed." });
+  // Same sanitising as the upload route: the name reaches a path, so it never arrives unfiltered.
+  const name = path.basename(src).replace(/[^\w.\-]+/g, "_");
+
+  try {
+    await fs.mkdir(CV_DIR, { recursive: true });
+    await fs.writeFile(path.join(CV_DIR, name), buf);
+  } catch (e) {
+    return done({ kind: "bad", msg: `The CV could not be saved (${e.code || e.message}). Nothing changed.` });
+  }
+  await logActivity("cv-upload", `Chose CV: templates/cv/${name} (run /parse-cv)`);
+
+  await snapshotProfile();
+  platform.spawnScriptDetached("parse-cv");
+  await logActivity("cv-parse", "Reading the chosen CV, started from the wizard");
+  return done({ kind: "ok", msg: `Reading ${name} — this takes about half a minute.` });
+}
+
 // Ask GitHub now, rather than waiting for the next background check.
 //
 // The background check runs every six hours, which is right for a courtesy and wrong for the two
@@ -7920,6 +8017,14 @@ async function handlePost(req, res, url) {
   }
   if (url.pathname === "/check-update") {
     return redirect(res, await handleCheckUpdate());
+  }
+  if (url.pathname === "/pick-cv") {
+    const r = await handlePickCV(form);
+    const q = r.flash
+      ? `${r.redirect.includes("?") ? "&" : "?"}flash=${encodeURIComponent(r.flash.kind)}&msg=${encodeURIComponent(r.flash.msg)}`
+      : "";
+    res.writeHead(303, { Location: r.redirect + q });
+    return res.end();
   }
   if (url.pathname === "/apply-now") {
     return redirect(res, await handleApplyNow(form));

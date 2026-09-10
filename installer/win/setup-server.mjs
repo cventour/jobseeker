@@ -777,8 +777,14 @@ function decideWhatToDo() {
     startNext();
     return;
   }
-  // There is real work to do. The welcome is already on screen, so leave it there -- unless the
-  // user has already pressed Continue and is waiting on us.
+  // There is real work to do, so this launch IS a setup run whatever the quiet start assumed --
+  // put the welcome back, and the step rows with it.
+  quietStart = false;
+  if (state.view === "work") {
+    state.view = "welcome";
+    state.title = "";
+    state.subtitle = "";
+  }
   state.status = "Nothing has been installed yet.|";
   if (wantBegin) {
     wantBegin = false;
@@ -1568,6 +1574,21 @@ const server = createServer(async (req, res) => {
 function onClientArrived() {
   if (phase !== "boot") return;
   phase = "survey";
+  // Do not show a setup screen to someone who is not setting anything up. The survey has to run on
+  // every launch — it is the only thing that knows whether Node, Claude Code and the server are
+  // really there — but it used to run in FRONT of the welcome view, so reopening a machine that
+  // has been set up for weeks meant watching setup start before the dashboard appeared. Whether
+  // this is a first run is answerable from two files with no subprocess, so it is answered first.
+  // Twin: installer/JobSeeker.js, at the wait-ui -> survey transition.
+  if (setupFinished()) {
+    quietStart = true;
+    state.view = "work";
+    state.title = "Starting JobSeeker";
+    state.subtitle = "One moment.";
+    state.brandnote = "";
+    state.status = "";
+    state.busy = false;
+  }
   log("page is up, surveying what is installed");
   watchStarted();
   appendLog(FULLLOG, `${stamp()}  ui loaded\n`);

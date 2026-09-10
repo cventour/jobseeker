@@ -4,6 +4,10 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.1 — 10 September 2026
+
+- Fixed: "choose a file" and "Try another file" did nothing on the CV step when JobSeeker was opened as an app rather than in a browser. The window it draws in cannot show a file chooser, so JobSeeker now opens your Mac's own one instead. Dragging a CV onto the page always worked and still does.
+
 ## v0.7.0 — 10 September 2026
 
 - JobSeeker now updates itself. When a new version is out it tells you, shows you what changed, and updates on your say-so. Your CV, your settings and your tracker are never touched.
