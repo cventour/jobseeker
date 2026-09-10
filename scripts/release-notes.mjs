@@ -5,6 +5,7 @@
 //   node scripts/release-notes.mjs --version v0.4.0            print that release's notes
 //   node scripts/release-notes.mjs --latest                    print the newest release's notes
 //   node scripts/release-notes.mjs --html <site-dir>           write <site-dir>/whats-new.html
+//   node scripts/release-notes.mjs --html <dir> --limit 1      ... carrying only the newest
 //
 // Why generated rather than written twice: a release is the moment you are least inclined to
 // carefully re-word the same list in a second place, so the second place is where the drift starts.
@@ -68,6 +69,16 @@ async function main() {
       console.error("release-notes: --html needs the site directory");
       process.exit(64);
     }
+    // --limit N carries only the N newest. The page already ends by pointing at GitHub for the
+    // full history, so a site that wants to say "here is what just landed" rather than "here is
+    // everything we have ever done" does not need to grow a section per release forever.
+    const limitIdx = args.indexOf("--limit");
+    const limit = limitIdx === -1 ? 0 : Number(args[limitIdx + 1]);
+    if (limitIdx !== -1 && (!Number.isInteger(limit) || limit < 1)) {
+      console.error("release-notes: --limit needs a whole number of releases, 1 or more");
+      process.exit(64);
+    }
+    const shown = limit ? releases.slice(0, limit) : releases;
     // Rendered against the site's own stylesheet and nav, so it is a page of the site rather than a
     // dump of a text file inside one.
     const page = `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -104,7 +115,7 @@ async function main() {
       developers.</p>
   </section>
   <section class="rels">
-${releases
+${shown
   .map(
     (r, i) => `    <details class="rel"${i === 0 ? " open" : ""}>
       <summary>
@@ -132,7 +143,7 @@ ${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
 </body></html>
 `;
     await fs.writeFile(path.join(dest, "whats-new.html"), page);
-    console.log(`wrote ${path.join(dest, "whats-new.html")} — ${releases.length} release(s)`);
+    console.log(`wrote ${path.join(dest, "whats-new.html")} — ${shown.length} release(s)`);
     return;
   }
 

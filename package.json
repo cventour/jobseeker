@@ -51,7 +51,7 @@
     "app": "bash scripts/build-app.sh",
     "schedule": "node scripts/run.mjs set-schedule",
     "notes": "node scripts/release-notes.mjs",
-    "notes:site": "node scripts/release-notes.mjs --html ../jobseeker-site",
+    "notes:site": "node scripts/release-notes.mjs --html ../jobseeker-site --limit 1",
     "mock:wizard": "node scripts/mock-wizard.mjs",
     "test:platform": "node scripts/test-platform.mjs",
   "test:feedback": "node scripts/test-feedback.mjs",
