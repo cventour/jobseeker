@@ -280,7 +280,9 @@ const TOUR_JS = `${VIEWPORT_JS}(function(){
     spot = document.createElement('div'); spot.className = 'tour-spot';
     bub = document.createElement('div'); bub.className = 'tour-bub below';
     document.body.appendChild(veil); document.body.appendChild(spot); document.body.appendChild(bub);
-    requestAnimationFrame(function(){ veil.classList.add('on'); });
+    /* Guarded: stop() nulls veil, and a click, Escape, or a vanished target can stop the tour
+       before this frame runs. */
+    requestAnimationFrame(function(){ if (veil) veil.classList.add('on'); });
     window.addEventListener('resize', place);
     /* The Run now button rides in a sticky, horizontally scrollable tab strip, so the ring drifts
        off its target on any scroll unless it is re-measured. Capture phase, because the strip's own
@@ -3812,7 +3814,9 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .runmenu-btn:hover{border-color:var(--acc);color:var(--acc)}
 .runmenu-btn[aria-expanded=true]{border-color:var(--acc);color:var(--acc)}
 .runmenu-btn .caret{font-size:10px;opacity:.7}
-.pop-run{width:min(360px,calc(100vw - 32px))}
+/* Doubled selector, like .pop.pop-wide below: plain .pop-run has the same specificity as
+   .pop{width:320px} and loses to it on source order, and to the narrow-screen .pop override. */
+.pop.pop-run{width:min(360px,calc(100vw - 32px))}
 .runmenu-busy{display:flex;flex-direction:column;gap:5px;margin:0 0 10px;padding:9px 10px;
   border-radius:8px;background:rgba(214,138,0,.10)}
 .runmenu-busy .muted{font-size:11px;line-height:1.45}
