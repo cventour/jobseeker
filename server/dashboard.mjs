@@ -22,6 +22,18 @@ import {
   writeFileAtomic,
 } from "./md.mjs";
 import { withLock } from "./lock.mjs";
+import { updateState, startChecking, checkNow, TAG_OK } from "./update.mjs";
+
+let VERSION_CACHE = "";
+async function currentVersion() {
+  if (VERSION_CACHE) return VERSION_CACHE;
+  try {
+    VERSION_CACHE = String(JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8")).version || "");
+  } catch {
+    VERSION_CACHE = "";
+  }
+  return VERSION_CACHE;
+}
 import { findRepost, setCompanyAliases} from "./match.mjs";
 import { companyAliases } from "./config.mjs";
 import { DISMISS_TAGS } from "./record.mjs";
@@ -369,6 +381,29 @@ async function loadAll() {
   const markets = await loadMarkets();
   const marketAskDismissed = await readMarketAskDismissed();
   const dismissedNotices = await readDismissedNotices();
+  const update = await updateState();
+  // Read separately from `update`, not off it. The update check is a background job that has not
+  // necessarily run yet -- on a first launch, offline, or within the first seconds -- and the
+  // version of the thing you are looking at should not depend on whether GitHub answered.
+  const version = await currentVersion();
+  let updateRun = null;
+  try {
+    updateRun = JSON.parse(await fs.readFile(path.join(DATA, ".setup", "update.json"), "utf8"));
+  } catch {
+    /* nothing has ever been updated here */
+  }
+  // The extension's own version, which is not package.json's. Windows only: on a Mac Chrome is
+  // driven through the Apple Events broker and there is no extension to reload.
+  let extVersion = "";
+  if (platform.IS_WIN) {
+    try {
+      extVersion = String(
+        JSON.parse(await fs.readFile(path.join(ROOT, "extension", "manifest.json"), "utf8")).version || ""
+      );
+    } catch {
+      /* no manifest, no notice */
+    }
+  }
   // Roles left behind by a vertical dropped from criteria. Computed here because page() is
   // synchronous and this needs to read the proposal records.
   const orphans = await orphanedProposals().catch(() => ({ count: 0, ids: [], byMarket: {} }));
@@ -436,6 +471,10 @@ async function loadAll() {
     markets,
     marketAskDismissed,
     dismissedNotices,
+    update,
+    version,
+    updateRun,
+    extVersion,
     boards,
     orphans,
     lastRun,
@@ -1770,6 +1809,53 @@ function tabStrip(tabs, activeId, trailingHTML = "") {
     .join("")}${trailingHTML ? `<span class="tabs-end">${trailingHTML}</span>` : ""}</nav>`;
 }
 
+// A new version, and what is in it.
+//
+// Its own modal rather than uiConfirm: that one writes its body with textContent, deliberately, so
+// callers cannot smuggle markup into a confirmation. Three grouped lists are not prose, so this
+// gets purpose-built markup and keeps the same .overlay / .modal shell as every other dialog.
+//
+// Rendered on the page whether or not it is due; showing it is the script's decision, which keeps
+// the "have they already said not now" test in one place.
+function updateModal(u) {
+  if (!u || !u.available) return "";
+  const group = (label, items) =>
+    items.length
+      ? `<div class="upd-group">
+          <p class="upd-glabel">${esc(label)}</p>
+          <ul class="upd-list">${items.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
+        </div>`
+      : "";
+  return `<div id="updateOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="updTitle">
+    <div class="modal upd-modal">
+      <div class="upd-head">
+        <h3 id="updTitle">JobSeeker ${esc(u.latest)} is available</h3>
+        <span class="upd-have">You have ${esc(u.current)}</span>
+      </div>
+      ${u.date ? `<p class="upd-date">Released ${esc(u.date)}</p>` : ""}
+      <div class="upd-groups">
+        ${group("New", u.groups.new)}
+        ${group("Changed", u.groups.changed)}
+        ${group("Fixed", u.groups.fixed)}
+      </div>
+      <p class="upd-safe">Your applications, tasks, settings and CV are left exactly as they are.
+        JobSeeker quits and reopens by itself, which takes about a minute.</p>
+      <div class="actions confirm-acts">
+        <form method="POST" action="/dismiss-notice" class="inline">
+          <input type="hidden" name="_tab" value="today">
+          <input type="hidden" name="key" value="update:${esc(u.latest)}">
+          <input type="hidden" name="summary" value="${esc(`Skipped the update to ${u.latest}`)}">
+          <button type="submit" class="btn-secondary">Not now</button>
+        </form>
+        <form method="POST" action="/update-now" class="inline">
+          <input type="hidden" name="tag" value="${esc(u.tag)}">
+          <button type="submit">Update and restart</button>
+        </form>
+      </div>
+    </div>
+  </div>`;
+}
+
 // ---------- Notices ----------
 // The banners at the top of Today. Each one is a fact about the machinery — the run was partial,
 // the schedule switched itself off, Chrome cannot be read — and each one used to occupy a fifth of
@@ -2074,7 +2160,7 @@ function bridgePairingHTML(pair) {
     </div>`;
 }
 
-function setupHTML(st, criteria, marketNames = [], subReq = "") {
+function setupHTML(st, criteria, marketNames = [], subReq = "", upd = null) {
   if (!st) return `<p class="empty">Status unavailable.</p>`;
   const cfg = st.config || {};
   const b = st.browser;
@@ -2090,7 +2176,30 @@ function setupHTML(st, criteria, marketNames = [], subReq = "") {
 
   // --- what we can act on -------------------------------------------------------------------
   const canRead = Boolean(b?.capabilities?.read_page_content);
+  const updRow = (() => {
+    if (!upd) return null;
+    if (upd.available) {
+      return [
+        "JobSeeker",
+        `<span class="bad-pill">${esc(upd.latest)} available</span>`,
+        `<form method="POST" action="/update-now" class="inline">
+           <input type="hidden" name="tag" value="${esc(upd.tag)}">
+           <button type="submit" class="btn-small">Update</button></form>`,
+        `You are on ${esc(upd.current)}.${upd.date ? ` Released ${esc(upd.date)}` : ""}${
+          upd.url ? ` — <a href="${esc(upd.url)}" target="_blank" rel="noreferrer">what changed</a>.` : "."
+        }`,
+      ];
+    }
+    return [
+      "JobSeeker",
+      `<span class="ok-pill">up to date</span>`,
+      "",
+      `${esc(upd.current)}${upd.checkedAt ? `, checked ${esc(String(upd.checkedAt).slice(0, 16).replace("T", " "))}` : ""}.`,
+    ];
+  })();
+
   const rows = [
+    ...(updRow ? [updRow] : []),
     [
       "Browser access",
       pill(canRead, b?.capabilities?.read_mechanism || "working", "cannot read pages"),
@@ -2401,6 +2510,7 @@ async function systemStatus() {
 function todayHTML(all, dueToday, appTok, appIds) {
   const t = today();
   const NX = all.dismissedNotices || {};
+  const NX_VERSION = String(all.update?.current || "");
   const tasks = all.tasks.rows.filter((r) => r.status === "open");
   const overdue = tasks.filter((r) => r.due_date && r.due_date < t);
   const advances = all.applications.filter((a) => a.data.pending_stage);
@@ -2794,6 +2904,77 @@ function todayHTML(all, dueToday, appTok, appIds) {
              <button type="submit" class="btn-small"${busyAttrs(busy)}>Research ${esc(deferred[0].label)} now</button></form></div>`
       : "";
 
+  // How the last update ended.
+  //
+  // The updater cannot report its own death, so a run that is neither finished nor recent is read
+  // as having died — otherwise the page would sit on a phase like "swapping" for ever, which looks
+  // like something is still happening when nothing is.
+  const updateOutcome = (() => {
+    const r = all.updateRun;
+    if (!r || !r.phase || r.phase === "none" || r.seen) return "";
+    const to = String(r.to || "");
+    const done = ["done", "failed", "refused", "checked"].includes(r.phase);
+    const ageMin = r.updatedAt ? (Date.now() - Date.parse(r.updatedAt)) / 60000 : 0;
+
+    if (r.phase === "done" && to && to === NX_VERSION) {
+      return notice({
+        key: `update:done:${to}`,
+        kind: "",
+        title: `Updated to ${esc(to)}.`,
+        body: `<a href="https://github.com/cventour/jobseeker/releases/tag/${esc(r.tag || "v" + to)}"
+                 target="_blank" rel="noreferrer">See everything that changed</a>.`,
+        summary: `Updated to ${to}`,
+        dismissed: NX,
+      });
+    }
+    if (r.phase === "failed") {
+      return notice({
+        key: `update:failed:${to}`,
+        kind: "bad",
+        title: `The update to ${esc(to)} did not finish.`,
+        body: `JobSeeker is still running ${esc(r.from || NX_VERSION)} and nothing was lost.
+          ${r.error ? `<div class="ti-sub">${esc(r.error)}</div>` : ""}
+          ${r.rolledBack ? `<div class="ti-sub">What had already changed was put back.</div>` : ""}`,
+        summary: `Update to ${to} failed — ${r.error || "no reason recorded"}`,
+        dismissed: NX,
+      });
+    }
+    if (!done && ageMin > 10) {
+      return notice({
+        key: `update:stalled:${to}`,
+        kind: "warn",
+        title: `An update was started but never reported back.`,
+        body: `It stopped at "${esc(r.phase)}" and has said nothing since. JobSeeker is running
+          ${esc(NX_VERSION)}, which is what it was running before.`,
+        summary: `Update to ${to} stalled at ${r.phase}`,
+        dismissed: NX,
+      });
+    }
+    return "";
+  })();
+
+  // Chrome will not let a program reload an unpacked extension — measured, not assumed
+  // (extension/README.md). So when an update changes the extension's code, the only honest thing is
+  // to say so and give the two clicks. The pairing itself survives: the extension's id comes from
+  // its folder path, which an update does not move.
+  const extensionReload = (() => {
+    const r = all.updateRun;
+    if (!platform.IS_WIN || !r || r.phase !== "done" || !all.extVersion) return "";
+    if (!r.extFrom || r.extFrom === all.extVersion) return "";
+    return notice({
+      key: `update:ext:${all.extVersion}`,
+      kind: "warn",
+      title: "The Chrome extension changed — reload it once.",
+      body: `JobSeeker cannot do this for you; Chrome only lets a person load an unpacked extension.
+        <ol class="gaplist"><li>Open <code>chrome://extensions</code></li>
+        <li>Find <b>JobSeeker Bridge</b> and click the reload arrow</li></ol>
+        <div class="ti-sub">Your pairing is not affected — it stays connected. This is version
+        ${esc(all.extVersion)}; it was ${esc(r.extFrom)}.</div>`,
+      summary: `Chrome extension updated to ${all.extVersion} — reload it at chrome://extensions`,
+      dismissed: NX,
+    });
+  })();
+
   const boardsBlock = boardsNeeding
     ? notice({
         // The count is in the key: fix some, and the notice returns with the number that is left.
@@ -2815,6 +2996,8 @@ function todayHTML(all, dueToday, appTok, appIds) {
     ${advancesBlock}
     ${approvalsBlock}
     ${decidedBlock}
+    ${updateOutcome}
+    ${extensionReload}
     ${boardsBlock}
     ${
       // Dismissing must not mean losing. One muted line, and the way back, for however many notices
@@ -2985,6 +3168,14 @@ ${tabPanel("activity", on("activity"), sec("activity", `Activity <span class="mu
     </div>
   </div>
 </div>
+${updateModal(all.update)}
+${
+  // Whether the modal is DUE. The version is all the script needs: it checks it against the
+  // dismissed key it can see, and shows the dialog only if that version was never waved away.
+  all.update?.available
+    ? `<script>window.__UPDATE__=${JSON.stringify({ version: all.update.latest, dismissed: Boolean((all.dismissedNotices || {})[`update:${all.update.latest}`]) }).replace(/</g, "\\u003c")};</script>`
+    : ""
+}
 <script>window.__DETAILS__=${detailsJSON};</script>
 ${
   // Escaped the same way __DETAILS__ is: a literal "</script>" inside the JSON would end the block
@@ -3041,13 +3232,24 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
 ${tabStrip(TABS, active)}
 </div>
 <div id="panels">
-${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label), all.sub)))}
+${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label), all.sub, all.update)))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
 <footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a>${
   platform.IS_WIN
     ? ` <form method="POST" action="/quit" class="inline" style="display:inline"><button type="submit" class="quitbtn">Quit JobSeeker</button></form>`
+    : ""
+}${
+  // Which version this is, on every visit to Settings. The Setup tab already says so, but only
+  // once the background update check has answered -- and "which version am I on" is the first
+  // question of every bug report, so it cannot be conditional on GitHub being reachable.
+  all.version
+    ? `<span class="ver">JobSeeker ${esc(all.version)}
+        <form method="POST" action="/check-update" class="inline">
+          <input type="hidden" name="_page" value="settings"><input type="hidden" name="_tab" value="setup">
+          <button type="submit" class="verbtn" title="Ask GitHub whether there is a newer release">Check for updates</button>
+        </form></span>`
     : ""
 }</footer>
 <div id="confirmOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
@@ -3101,6 +3303,17 @@ header,.topbar>.statbar,.topbar>nav.tabs,#panels,body>footer{
 header{position:static}
 #panels{padding-top:22px;padding-bottom:72px}
 body>footer{padding-top:22px;padding-bottom:40px;border-top:1px solid var(--line);font-size:12px;line-height:1.7}
+/* The version sits at the far end of the footer: findable when someone is asked for it, quiet
+   enough that nobody reading the footer for anything else has to step over it. */
+body>footer .ver{float:right;opacity:.62;font-variant-numeric:tabular-nums;
+  display:inline-flex;align-items:baseline;gap:8px}
+body>footer .ver form{display:inline}
+/* A link, not a button. Checking for updates is a thing you may do idly and costs nothing, so it
+   should not carry the weight of the buttons that spend money or change the install. */
+body>footer .verbtn{background:transparent;border:0;padding:0;font:inherit;color:var(--acc);
+  cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+body>footer .verbtn:hover{opacity:.8}
+@media (max-width:640px){body>footer .ver{float:none;display:flex;margin-top:6px}}
 /* Sticky toolbar: the tab strip stays reachable while a long table scrolls. */
 .topbar{position:sticky;top:0;z-index:6;background:var(--bg);border-bottom:1px solid var(--line);
   box-shadow:0 1px 0 var(--line)}
@@ -3637,7 +3850,20 @@ tr.isnew td{background:rgba(46,160,110,.16)}tr.isnew td:first-child{box-shadow:i
 .sec .sechead h2{margin:0;flex:1}
 .sec .secbody{padding:2px 16px 16px}
 .secbody .board{margin-bottom:12px}
-.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:flex-start;justify-content:center;padding:32px 16px}
+/* The dim AND a blur, so what is behind reads as out of reach rather than merely darker — the
+   difference between "there is a dialog" and "the page is waiting on you". Every modal shares it:
+   one of these appearing differently from the others would read as a different kind of thing.
+   backdrop-filter is unsupported in a few engines; there the dim alone still carries it. */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);
+  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);
+  z-index:50;align-items:flex-start;justify-content:center;padding:32px 16px}
+@media (prefers-reduced-transparency:reduce){
+  .overlay{-webkit-backdrop-filter:none;backdrop-filter:none;background:rgba(0,0,0,.72)}
+}
+:root[data-theme="light"] .overlay{background:rgba(31,28,23,.38)}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]) .overlay{background:rgba(31,28,23,.38)}
+}
 /* The drawer scrolls ITSELF, capped to the viewport, so the header stays put and you are reading a
    panel rather than pushing the whole page around. */
 .confirm-modal{max-width:440px;padding:20px 22px 18px}
@@ -3645,6 +3871,18 @@ tr.isnew td{background:rgba(46,160,110,.16)}tr.isnew td:first-child{box-shadow:i
 .confirm-body p{margin:0 0 9px;font-size:13px;line-height:1.55;color:var(--mut)}
 .confirm-body p:last-child{margin-bottom:0}
 .confirm-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+/* A new version, and what is in it. */
+.upd-modal{max-width:520px;padding:22px 26px 20px}
+.upd-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.upd-head h3{margin:0;font-size:19px;line-height:1.35;letter-spacing:-.01em}
+.upd-have{font-size:12.5px;color:var(--mut);white-space:nowrap}
+.upd-date{margin:6px 0 0;font-size:12.5px;color:var(--mut)}
+.upd-groups{display:flex;flex-direction:column;gap:16px;margin-top:20px}
+.upd-group{display:flex;flex-direction:column;gap:7px}
+.upd-glabel{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);font-weight:600}
+.upd-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;font-size:13px;line-height:1.55}
+.upd-safe{margin:18px 0 0;padding-top:14px;border-top:1px solid var(--line);font-size:12px;line-height:1.5;color:var(--mut)}
+.upd-modal .confirm-acts form.inline{display:inline;margin:0}
 .btn-danger{background:#c0392b;border-color:#c0392b;color:#fff}
 .btn-danger:hover{background:#a93226;border-color:#a93226}
 .modal{background:var(--card);border:1px solid var(--line);border-radius:14px;max-width:760px;width:100%;
@@ -3710,6 +3948,37 @@ const JS = `${VIEWPORT_JS}
       history.replaceState(null, '', url);
     } catch(e){}
   }
+
+  /* The new-version dialog.
+     The server renders it whether or not it is due; this decides. Two reasons it lives here rather
+     than in the markup: the dismissed-key test is one expression, and a modal that appears during
+     the first paint of a page someone is already reading is a modal that gets dismissed blind. */
+  (function(){
+    var u = window.__UPDATE__;
+    var ov = document.getElementById('updateOverlay');
+    if (!u || !ov || u.dismissed) return;
+    /* Not on top of something the user is already doing. */
+    function busy(){
+      var a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+      if (document.querySelector('.pop:not(.hide)')) return true;
+      if (document.querySelector('.tour-bub, .busybub')) return true;
+      var c = document.getElementById('confirmOverlay');
+      return !!(c && getComputedStyle(c).display !== 'none');
+    }
+    function show(){
+      if (busy()) { setTimeout(show, 4000); return; }
+      ov.style.display = 'flex';
+      var b = ov.querySelector('.btn-secondary');
+      if (b) b.focus();
+    }
+    /* Escape is "not now" for this session only -- it must not silently write the dismissal, because
+       a key pressed to get rid of a dialog is not an answer to the question it asked. */
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none';
+    });
+    setTimeout(show, 900);
+  })();
 
   /* Cmd-R.
      In a browser this is free. In the app it is not: JobSeeker.app is a WebView with no menu bar,
@@ -5440,13 +5709,19 @@ function welcomeCVCard(st) {
   }
 
   if (failed) {
+    // The time is on screen for one reason: a second file that fails the same way renders a page
+    // identical to this one, and the reader concludes the button is broken rather than that the
+    // second file failed too. The stamp is the only thing that changes, so it has to be visible.
+    const fin = Date.parse(st.cvStatus.finished || "");
+    const at = Number.isNaN(fin) ? "" : new Date(fin).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     return `<div class="alert bad"><strong>That file could not be read.</strong>
         ${esc(st.cvStatus.detail || "")}</div>
       <div class="wcard">
         <div class="wrow"><span class="wok">✓</span><span>Saved on this Mac<em>templates/cv/${esc(newest)}</em></span></div>
-        <div class="wrow"><span class="wbad">!</span><span>Claude could not read it<em>${esc(st.cvStatus.detail || "")}</em></span></div>
+        <div class="wrow"><span class="wbad">!</span><span>Claude could not read it${at ? ` · tried ${esc(at)}` : ""}<em>${esc(st.cvStatus.detail || "")}</em></span></div>
       </div>
       <p class="wnote"><button type="button" class="linkbtn" id="wreplace">Try another file</button></p>
+      <div class="wprog hide" id="wupprog"><i class="anim"></i></div>
       <input type="file" id="wfile" accept="application/pdf" class="hide">`;
   }
 
@@ -6090,6 +6365,7 @@ const WELCOME_JS = `
   var file = document.getElementById('wfile');
   var pick = document.getElementById('wpick');
   var replace = document.getElementById('wreplace');
+  var prog = document.getElementById('wupprog');
 
   function upload(f){
     if(!f) return;
@@ -6100,6 +6376,11 @@ const WELCOME_JS = `
     if(drop){
       drop.innerHTML = '<div class="wdrop-big">Saving ' + f.name.replace(/[<>&]/g,'') + '…</div>' +
         '<div class="wprog"><i class="anim"></i></div>';
+    } else if(prog){
+      // The failure card has no drop zone to overwrite. Without this the click that chooses a
+      // replacement produces no visible change at all, and the button reads as dead.
+      prog.classList.remove('hide');
+      if(replace){ replace.textContent = 'Saving ' + f.name.replace(/[<>&]/g,'') + '…'; replace.disabled = true; }
     }
     fetch('/upload-cv?name=' + encodeURIComponent(f.name), { method:'POST', body:f })
       .then(function(r){ if(!r.ok) throw new Error('upload failed'); return fetch('/welcome-parse', {method:'POST', body:''}); })
@@ -6374,7 +6655,7 @@ async function readMarketAskDismissed() {
 // The key is checked against the shapes the page actually renders. Same-origin POSTs are already
 // enforced (see sameOrigin), but this file is the durable record of what the UI decided, and an
 // unconstrained key would let a stray form write arbitrary JSON keys into it.
-const NOTICE_KEY_OK = /^(run:(failed|partial)|ladder:(warned|off|tier[0-9]+)|browser:cannot-read|boards:needs-url|digest:undelivered)(:[\w :.+-]{0,80})?$/;
+const NOTICE_KEY_OK = /^(run:(failed|partial)|ladder:(warned|off|tier[0-9]+)|browser:cannot-read|boards:needs-url|digest:undelivered|update(:(done|failed|stalled|ext))?)(:[\w :.+-]{0,80})?$/;
 
 async function handleDismissNotice(form) {
   const key = String(form.key || "").trim();
@@ -6922,6 +7203,82 @@ async function handleRunNow(form) {
   };
 }
 
+// Ask GitHub now, rather than waiting for the next background check.
+//
+// The background check runs every six hours, which is right for a courtesy and wrong for the two
+// moments a person actually wants an answer: just after a release is announced, and while someone
+// is being talked through a problem on the phone. Both end in "check again" — so there has to be
+// something to press.
+//
+// Unlike the update itself this is safe to await: it is one HTTP GET with its own timeout, it
+// writes only the cache file, and the answer is the whole point of pressing the button.
+async function handleCheckUpdate() {
+  const before = await updateState();
+  const r = await checkNow({ timeoutMs: 8000 });
+  if (r?.error) {
+    return { kind: "bad", msg: `Could not check for updates — ${r.error}. Nothing changed.` };
+  }
+  const after = await updateState();
+  if (after?.available) {
+    // Only say "new" when it is news. Pressing the button twice should not announce a discovery
+    // the second time.
+    const known = before?.available && before.latest === after.latest;
+    return {
+      kind: "ok",
+      msg: `${known ? "Still on offer" : "New version"}: ${after.latest}. Use the Update button to install it.`,
+    };
+  }
+  return { kind: "ok", msg: `You are up to date — ${after?.current || ""} is the newest release.` };
+}
+
+// Start the update, and get out of the way.
+//
+// Everything real happens in scripts/self-update.sh (and its Windows twin), spawned DETACHED —
+// which matters more here than anywhere else in this file: the thing it is about to stop is this
+// process. spawnScriptDetached gives a POSIX child its own session, so nothing that happens to this
+// server can reach it.
+//
+// The refusals live here as well as in the script. A button that cannot be pressed beats an error
+// after the fact, and a script that refuses anyway covers the case where the button was pressed
+// from a stale page.
+async function handleUpdateNow(form) {
+  const tag = String(form.tag || "").trim();
+  if (!TAG_OK.test(tag)) return { kind: "bad", msg: "Unknown version — nothing was started." };
+
+  // A git checkout is a developer's working copy. Replacing the tree would throw away whatever is
+  // uncommitted, so this is never the right thing to do to it.
+  try {
+    await fs.access(path.join(ROOT, ".git"));
+    return {
+      kind: "bad",
+      msg: "This copy is a git checkout — update it with git pull, not from here. Nothing was changed.",
+    };
+  } catch {
+    /* not a checkout, which is the ordinary case */
+  }
+
+  const live = await readRunLock();
+  if (live) {
+    return {
+      kind: "bad",
+      msg: `${RUN_SLUGS.get(live.slug) || live.slug} is running — let it finish first, then update.`,
+    };
+  }
+
+  await fs.mkdir(path.join(DATA, ".setup"), { recursive: true }).catch(() => {});
+  await fs
+    .writeFile(
+      path.join(DATA, ".setup", "update.json"),
+      JSON.stringify({ phase: "starting", to: tag.replace(/^v/, ""), tag, pct: 0, startedAt: nowISO() }, null, 2)
+    )
+    .catch(() => {});
+  platform.spawnScriptDetached("self-update", [tag], {
+    logFile: path.join(DATA, ".setup", "update.spawn.log"),
+  });
+  await logActivity("update", `Updating to ${tag}`);
+  return { kind: "ok", msg: `Updating to ${tag.replace(/^v/, "")}. JobSeeker will quit and reopen.` };
+}
+
 // Fill one application form, then stop.
 //
 // Same spawn, lock and budget path as handleRunNow — deliberately, because it drives the same
@@ -7354,10 +7711,20 @@ const server = http.createServer(async (req, res) => {
     // already running" apart from "a DIFFERENT JobSeeker is squatting the port" -- a stale server
     // from another checkout answers a plain request identically, and the window then hands over to
     // somebody else's build, which looks exactly like the update having failed.
+    if (req.method === "GET" && url.pathname === "/update-status") {
+      let st = null;
+      try {
+        st = JSON.parse(await fs.readFile(path.join(DATA, ".setup", "update.json"), "utf8"));
+      } catch {
+        /* no update has ever been started here */
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify(st || { phase: "none" }));
+    }
     if (req.method === "GET" && url.pathname === "/_whoami") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8",
                            "cache-control": "no-store" });
-      return res.end(JSON.stringify({ app: "jobseeker", root: ROOT }));
+      return res.end(JSON.stringify({ app: "jobseeker", root: ROOT, version: await currentVersion() }));
     }
 
     if (req.method === "GET" && url.pathname === "/dismiss-impact") {
@@ -7548,6 +7915,12 @@ async function handlePost(req, res, url) {
   if (url.pathname === "/defer-market-ask") {
     return redirect(res, await handleDeferMarketAsk(form));
   }
+  if (url.pathname === "/update-now") {
+    return redirect(res, await handleUpdateNow(form));
+  }
+  if (url.pathname === "/check-update") {
+    return redirect(res, await handleCheckUpdate());
+  }
   if (url.pathname === "/apply-now") {
     return redirect(res, await handleApplyNow(form));
   }
@@ -7641,6 +8014,8 @@ server.on("error", async (e) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Job-seeker dashboard on http://127.0.0.1:${PORT}`);
+  // Ask GitHub whether there is a newer release — in the background, on a timer. Never in a request.
+  startChecking();
   if (!LOOPBACK.has(HOST)) {
     console.warn(
       `\n!! WARNING: bound to ${HOST}, not loopback. The dashboard has NO authentication, so your\n` +

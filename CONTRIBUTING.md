@@ -28,11 +28,25 @@ usage", never "coverage-derived partial state in write_status".
 Then generate rather than retype, because a release is precisely the moment nobody re-words the same
 list carefully in a second place, and the second place is where the drift begins:
 
+**Start each bullet with the verb that says what kind of change it is.** The dashboard's
+"what's new" dialog sorts them into New / Changed / Fixed by that first word — `Added…` and
+`You can now…` become New, `Fixed…`, `Stopped…` and `No longer…` become Fixed, and everything else
+becomes Changed. Nothing is stored to say which is which, so the sentence has to. A bullet phrased
+"Refreshing keeps your tab" lands under Changed; "Fixed refreshing so it keeps your tab" lands under
+Fixed, which is where the reader expects it.
+
+Then tag it. `.github/workflows/release.yml` publishes the release from the tag, using the same
+`npm run notes` output, after checking that the tag, `package.json` and `CHANGELOG.md` agree:
+
 ```bash
-npm run notes                 # the GitHub release body, from the newest CHANGELOG entry
 npm run notes:site            # regenerates whats-new.html in ../jobseeker-site
-gh release create vX.Y.Z dist/*.zip --title "vX.Y.Z — <short name>" --notes-file <(npm run --silent notes)
+git tag v0.7.0 && git push --tags
 ```
+
+There are no build artifacts to attach — GitHub serves a source tarball for every tag, and that is
+what `install.sh` and the updater both download. **A release that is never tagged is an update
+nobody is offered**: the dashboard checks `/releases/latest`, so skipping this step silently strands
+every install on the version before it.
 
 `whats-new.html` is generated. Editing it directly is safe only until the next release overwrites it.
 

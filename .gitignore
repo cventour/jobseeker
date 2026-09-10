@@ -24,3 +24,11 @@ templates/*.bak*
 # about the product rather than part of it.
 .design/
 design/
+
+# Impeccable working context (product record lives in the umbrella repo; live-mode state is transient).
+PRODUCT.md
+.impeccable/live/
+
+# Private dev tooling: scripts for resetting this Mac's install and re-running the setup wizard.
+# Personal to one machine and not part of the product.
+JobSeeker-devscripts/

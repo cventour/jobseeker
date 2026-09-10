@@ -4,6 +4,16 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.0 — 10 September 2026
+
+- JobSeeker now updates itself. When a new version is out it tells you, shows you what changed, and updates on your say-so. Your CV, your settings and your tracker are never touched.
+- When your CV cannot be read, JobSeeker now says why. It used to blame the file every time — even when the real reason was an expired Claude login, no credit left, or no internet.
+- Fixed: JobSeeker could not find Claude Code when it was opened from the app icon rather than from a terminal, and reported it as missing even though it was installed.
+- Trying a second CV now visibly does something. The screen showed nothing at all while the new file was read, so it looked as though the link were broken.
+- Settings now shows which version of JobSeeker you are on, in the corner of the page, with a Check for updates link beside it — so you do not have to wait for the twice-daily check.
+- Added a way to update an older JobSeeker that has no Update button yet, without reinstalling and without losing anything. Run `npm run update` and it fetches the new updater and uses it.
+- Added a way to send a bug report. Run `npm run logs` and JobSeeker writes one file to your Desktop with everything needed to explain what went wrong — your CV, your profile and your contacts are left out of it.
+
 ## v0.6.0 — 8 September 2026
 
 - JobSeeker now runs on Windows 10 and 11, as well as on a Mac.

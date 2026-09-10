@@ -36,6 +36,7 @@ jobs:
       # osascript, caffeinate and pgrep — job-run.sh kills WhatsApp processes and writes launch
       # agents, neither of which may touch the machine running the tests.
       - run: npm run test:runstate
+      - run: npm run test:update
 
   windows:
     runs-on: windows-latest

@@ -57,6 +57,44 @@ function existsSync(p) {
 }
 
 /**
+ * Everywhere the Claude Code installer puts its binary. Kept beside resolveBin because the same
+ * list has to serve two callers — resolving the path, and repairing the PATH of a child process —
+ * and a machine where those two disagreed is exactly how "not on this machine's PATH" reached
+ * someone who had it installed. Mirrors claude_search_dirs() in scripts/lib/claude-run.sh.
+ */
+export function claudeDirs() {
+  const home = homeDir();
+  if (IS_WIN) {
+    const d = [path.join(home, ".local", "bin")];
+    if (process.env.APPDATA) d.push(path.join(process.env.APPDATA, "npm"));
+    return d;
+  }
+  return [
+    path.join(home, ".local", "bin"),
+    path.join(home, ".claude", "local"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    path.join(home, ".bun", "bin"),
+    path.join(home, ".volta", "bin"),
+    path.join(home, ".npm-global", "bin"),
+  ];
+}
+
+/**
+ * The environment a child process should get. A GUI app launched from the Dock inherits launchd's
+ * PATH — /usr/bin:/bin:/usr/sbin:/sbin — and hands that same stunted PATH to everything it spawns,
+ * so a script that shells out to `claude` cannot find it even though the user's Terminal can. The
+ * dirs are appended, never prepended: whatever the user's own PATH already resolves stays winning.
+ */
+export function childEnv(extra) {
+  const parts = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const d of [path.dirname(process.execPath), ...claudeDirs()]) {
+    if (!parts.includes(d)) parts.push(d);
+  }
+  return { ...process.env, PATH: parts.join(path.delimiter), ...(extra || {}) };
+}
+
+/**
  * Where a binary lives, or null. "node" is always the running binary (a launchd/Task Scheduler
  * job has a minimal PATH, and the node that is executing us is by definition the right one).
  * "claude" is looked up on PATH first, then in the places its installer puts it.
@@ -69,9 +107,7 @@ export function resolveBin(name) {
   const exts = IS_WIN ? [".exe", ".cmd", ".bat", ""] : [""];
   const dirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
   if (name === "claude") {
-    dirs.push(path.join(homeDir(), ".local", "bin"));
-    if (IS_WIN && process.env.APPDATA) dirs.push(path.join(process.env.APPDATA, "npm"));
-    if (!IS_WIN) dirs.push("/opt/homebrew/bin", "/usr/local/bin");
+    for (const d of claudeDirs()) dirs.push(d);
   }
   if (name === "bun") {
     dirs.push(path.join(homeDir(), ".bun", "bin"));
@@ -120,7 +156,7 @@ export function run(cmd, args = [], { timeout = 8000, cwd = ROOT, maxBuffer = 16
     execFile(
       cmd,
       args,
-      { cwd, timeout, maxBuffer, windowsHide: true, env: env ? { ...process.env, ...env } : process.env },
+      { cwd, timeout, maxBuffer, windowsHide: true, env: childEnv(env) },
       (err, stdout, stderr) =>
         resolve({
           ok: !err,
@@ -170,7 +206,7 @@ function spawnDetached(cmd, args, { env, cwd = ROOT, logFile } = {}) {
     detached: !IS_WIN,
     stdio,
     windowsHide: true,
-    env: env ? { ...process.env, ...env } : process.env,
+    env: childEnv(env),
   });
   // The child holds its own duplicate of the handle, so the parent's copy is done with.
   if (fd !== null) {

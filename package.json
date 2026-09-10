@@ -1,6 +1,6 @@
 {
   "name": "jobseeker",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "A local-first job-search assistant. Reads your email, chats and calendar, finds roles worth your time, and each morning surfaces the few things that need you. Never applies or sends without your approval.",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -31,6 +31,9 @@
   "scripts": {
     "dashboard": "node server/dashboard.mjs",
     "audit": "node server/audit.mjs",
+    "logs": "node scripts/run.mjs collect-logs",
+    "update": "node scripts/run.mjs update-now",
+    "cv:probe": "node scripts/cv-probe.mjs",
     "check:urls": "node scripts/check-urls.mjs",
     "test:concurrency": "node scripts/test-concurrency.mjs",
     "guard": "node scripts/run.mjs rss-guard",
@@ -42,6 +45,7 @@
     "test:security": "node scripts/test-security.mjs",
     "test:welcome": "node scripts/test-welcome.mjs",
     "test:runstate": "node scripts/test-run-state.mjs",
+    "test:update": "node scripts/test-update.mjs",
     "browser:install-agent": "bash scripts/install-browser-agent.sh",
     "setup": "node scripts/run.mjs setup",
     "app": "bash scripts/build-app.sh",

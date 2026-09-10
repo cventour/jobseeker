@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-08T00:00:00Z",
+  "title": "Design System: JobSeeker Dashboard",
+  "extensions": {
+    "colorMeta": {
+      "instrument-blue": {
+        "role": "primary",
+        "displayName": "Instrument Blue",
+        "canonical": "#6ea8fe",
+        "lightCanonical": "#2f5fd0",
+        "tonalRamp": ["#0b1730", "#122448", "#17325f", "#1e4487", "#2f5fd0", "#4a80e8", "#6ea8fe", "#9cc6ff", "#d3e5ff"]
+      },
+      "bg": { "role": "neutral", "displayName": "Instrument Ground", "canonical": "#0f1220", "lightCanonical": "#f7f5f0", "tonalRamp": ["#070912", "#0f1220", "#181c2f", "#2a2f48", "#454c72", "#6b739c", "#9aa0bd", "#c6cadd", "#e7e9f3"] },
+      "card": { "role": "neutral", "displayName": "Panel", "canonical": "#181c2f", "lightCanonical": "#fffdf9" },
+      "line": { "role": "neutral", "displayName": "Hairline", "canonical": "#2a2f48", "lightCanonical": "#e8e3d9" },
+      "fg": { "role": "neutral", "displayName": "Readout", "canonical": "#e7e9f3", "lightCanonical": "#1f1c17" },
+      "mut": { "role": "neutral", "displayName": "Muted Readout", "canonical": "#9aa0bd", "lightCanonical": "#6b6355" },
+      "good": { "role": "tertiary", "displayName": "Confirmed Green", "canonical": "#3fb950", "tonalRamp": ["#04160e", "#0a2c1a", "#123f26", "#1a5a35", "#238045", "#2ea06e", "#3fb950", "#7fd48f", "#c6f0dc"] },
+      "warn": { "role": "tertiary", "displayName": "Unfinished Amber", "canonical": "#d68a00", "tonalRamp": ["#241700", "#3a2500", "#523400", "#6b4400", "#8a6100", "#b07300", "#d68a00", "#f0b357", "#f7dcb0"] },
+      "bad": { "role": "tertiary", "displayName": "Failure Red", "canonical": "#f85149", "tonalRamp": ["#2a0a0c", "#420f13", "#5c161b", "#7a1e24", "#9c2831", "#c0392b", "#f85149", "#ff9db0", "#ffc9d2"] },
+      "danger": { "role": "tertiary", "displayName": "Destructive Crimson", "canonical": "#d0224a" }
+    },
+    "typographyMeta": {
+      "h1": { "displayName": "App Title", "purpose": "The header title. Drops to 17px below 720px." },
+      "h2": { "displayName": "Section Heading", "purpose": "Panel and section headings." },
+      "metric": { "displayName": "Metric", "purpose": "KPI and spend figures. Always tabular." },
+      "body": { "displayName": "Body", "purpose": "The base size for prose and controls." },
+      "table": { "displayName": "Table", "purpose": "Every data row, at 9px 12px cell padding." },
+      "label": { "displayName": "Label", "purpose": "Uppercase muted block headings inside Today, modal sub-heads, advanced disclosure." },
+      "micro": { "displayName": "Micro", "purpose": "Hints, sub-lines, timestamps and counts. Most of the interface lives here." },
+      "mono": { "displayName": "Mono", "purpose": "Digests, transcripts, endpoint values and tour step counters - where characters are data, not prose." }
+    },
+    "shadows": [
+      { "name": "popover", "value": "0 12px 32px rgba(0,0,0,.45)", "purpose": "The .pop popover. Fixed-positioned, because it opens inside horizontally-scrolling tables that would clip an absolute child." },
+      { "name": "busy-bubble", "value": "0 14px 34px rgba(0,0,0,.34)", "purpose": "The smaller 'why did nothing happen?' balloon anchored to a disabled control." },
+      { "name": "tour-bubble", "value": "0 18px 44px -16px rgba(0,0,0,.55)", "purpose": "The first-run coach mark." },
+      { "name": "flash", "value": "0 6px 24px rgba(0,0,0,.35)", "purpose": "Transient top-centre toast." },
+      { "name": "spotlight-dark", "value": "0 0 0 4px var(--acc), 0 0 0 9999px rgba(8,10,20,.55)", "purpose": "Tour spotlight: a ring drawn around the target with a huge second spread, rather than a hole punched through a veil." },
+      { "name": "spotlight-light", "value": "0 0 0 4px var(--acc), 0 0 0 9999px rgba(31,28,23,.38)", "purpose": "The same spotlight against the warm paper theme." },
+      { "name": "inset-state-bar", "value": "inset 3px 0 0 <semantic colour>", "purpose": "The system's real depth device. Marks overdue rows, warning alerts, pending rows and impact notices, always with a 6-16% alpha wash." },
+      { "name": "pill-ring", "value": "inset 0 0 0 1px oklch(var(--tring-l) calc(var(--tring-c) * var(--tab-c)) var(--h))", "purpose": "Hover and active state on a tab pill. A ring, never a fill change." },
+      { "name": "tabs-end-fade", "value": "-10px 0 10px -6px var(--bg)", "purpose": "Masks the tab strip sliding under the sticky Run now control on narrow screens." }
+    ],
+    "motion": [
+      { "name": "state-transition", "value": "0.14s ease", "purpose": "Tab and pill background, colour and ring changes." },
+      { "name": "control-transition", "value": "0.15s ease", "purpose": "Toggle track and thumb." },
+      { "name": "position-transition", "value": "0.2s ease", "purpose": "Tour spotlight and bubble moving between targets." },
+      { "name": "flash-out", "value": "opacity .5s ease, transform .5s ease", "purpose": "The toast fades and rises rather than vanishing; .flash.hide deliberately overrides the global .hide." },
+      { "name": "run-pulse", "value": "1.6s ease-in-out infinite", "purpose": "The run badge dot, opacity 1 to .25. Removed under prefers-reduced-motion." },
+      { "name": "hover-brightness", "value": "filter: brightness(1.08)", "purpose": "The universal button hover - one rule that works correctly in both themes." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "720px" },
+      { "name": "modal", "value": "600px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Destination Tab",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "One hue per destination, declared as a single --h and derived in OKLCH. Active adds weight and an inset ring, never colour alone.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab on\" data-h=\"213\" style=\"--h:213\" aria-selected=\"true\">Today <span class=\"ds-tn\">4</span></button><button class=\"ds-tab\" style=\"--h:187\">Proposals <span class=\"ds-tn\">12</span></button><button class=\"ds-tab\" style=\"--h:152\">Pipeline <span class=\"ds-tn\">31</span></button><button class=\"ds-tab\" style=\"--h:30\">People <span class=\"ds-tn\">8</span></button><button class=\"ds-tab\" style=\"--h:228;--tab-c:.3\">Activity</button></nav>",
+      "css": ".ds-tabs{display:flex;gap:7px;padding-block:2px;--tbg-l:0.255;--tbg-c:0.055;--tfg-l:0.855;--tfg-c:0.095;--ton-bg-l:0.470;--ton-bg-c:0.120;--ton-fg-l:0.985;--ton-fg-c:0.020;--tring-l:0.640;--tring-c:0.130}.ds-tab{--h:228;--tab-c:1;appearance:none;border:0;border-radius:999px;font:550 13px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;padding:7px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:oklch(var(--tbg-l) calc(var(--tbg-c) * var(--tab-c)) var(--h));color:oklch(var(--tfg-l) calc(var(--tfg-c) * var(--tab-c)) var(--h));transition:background .14s ease,color .14s ease,box-shadow .14s ease}.ds-tab:hover{box-shadow:inset 0 0 0 1px oklch(var(--tring-l) calc(var(--tring-c) * var(--tab-c)) var(--h))}.ds-tab:focus-visible{outline:2px solid oklch(var(--tring-l) calc(var(--tring-c) * var(--tab-c)) var(--h));outline-offset:2px}.ds-tab.on{background:oklch(var(--ton-bg-l) calc(var(--ton-bg-c) * var(--tab-c)) var(--h));color:oklch(var(--ton-fg-l) calc(var(--ton-fg-c) * var(--tab-c)) var(--h));font-weight:700;box-shadow:inset 0 0 0 1px oklch(var(--tring-l) calc(var(--tring-c) * var(--tab-c)) var(--h))}.ds-tn{font-size:11px;font-variant-numeric:tabular-nums;opacity:.75;font-weight:600}.ds-tab.on .ds-tn{opacity:.95}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Instrument Blue, the single interactive signal. Hover is a brightness filter so one rule serves both themes.",
+      "html": "<button class=\"ds-btn\">Approve and send</button>",
+      "css": ".ds-btn{background:#6ea8fe;color:#fff;border:0;border-radius:8px;padding:8px 14px;font:14px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;cursor:pointer}.ds-btn:hover{filter:brightness(1.08)}.ds-btn:focus-visible{outline:2px solid #6ea8fe;outline-offset:2px}"
+    },
+    {
+      "name": "Small Button",
+      "kind": "button",
+      "refersTo": "button-small",
+      "description": "The row-level and toolbar control. Card ground, hairline border, borders in accent on hover.",
+      "html": "<button class=\"ds-btn-small\">Edit</button>",
+      "css": ".ds-btn-small{padding:5px 11px;font:12.5px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;border:1px solid #2a2f48;border-radius:7px;background:#181c2f;color:#e7e9f3;cursor:pointer}.ds-btn-small:hover{border-color:#6ea8fe}.ds-btn-small:focus-visible{outline:2px solid #6ea8fe;outline-offset:2px}"
+    },
+    {
+      "name": "Kind Tag",
+      "kind": "chip",
+      "refersTo": "tag-lead",
+      "description": "Lead versus application - the distinction the whole tracker is built to protect. Low-alpha tint, never a saturated fill.",
+      "html": "<span class=\"ds-kind ds-k-lead\">Lead</span> <span class=\"ds-kind ds-k-app\">Application</span>",
+      "css": ".ds-kind{display:inline-block;padding:2px 8px;border-radius:99px;font:650 11px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;letter-spacing:.02em}.ds-k-lead{background:rgba(110,168,254,.16);color:#6ea8fe}.ds-k-app{background:rgba(46,160,67,.18);color:#3fb950}"
+    },
+    {
+      "name": "Status Pills",
+      "kind": "chip",
+      "refersTo": "pill-ok",
+      "description": "Confirmed, unfinished, failed. A send on its way is neither good news nor bad, so it reads amber.",
+      "html": "<span class=\"ds-pill ds-ok\">Delivered</span> <span class=\"ds-pill ds-warn\">Sending</span> <span class=\"ds-runbadge\"><i class=\"ds-rdot\"></i>Run in progress</span>",
+      "css": ".ds-pill{display:inline-block;padding:2px 9px;border-radius:99px;font:12px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif}.ds-ok{background:rgba(46,160,67,.16);color:#3fb950}.ds-warn{background:rgba(214,138,0,.16);color:#d68a00}.ds-runbadge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;font:600 12px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;background:rgba(214,138,0,.16);color:#d68a00;white-space:nowrap}.ds-rdot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:ds-rpulse 1.6s ease-in-out infinite}@keyframes ds-rpulse{0%,100%{opacity:1}50%{opacity:.25}}@media (prefers-reduced-motion:reduce){.ds-rdot{animation:none}}"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Page ground inside a card panel, so a field reads as recessed without a shadow. Focus is an accent outline at negative offset with the border going transparent.",
+      "html": "<label class=\"ds-field\"><span>Company</span><input class=\"ds-input\" type=\"text\" value=\"Acme Robotics\"></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:5px;font:12.5px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;color:#9aa0bd;max-width:280px}.ds-input{padding:8px 10px;border:1px solid #2a2f48;border-radius:8px;background:#0f1220;color:#e7e9f3;font:14px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif}.ds-input:focus{outline:2px solid #6ea8fe;outline-offset:-1px;border-color:transparent}"
+    },
+    {
+      "name": "Toggle",
+      "kind": "input",
+      "description": "The real checkbox stays in the DOM, moved offscreen rather than display:none, so it keeps its tab order and its value. Track and thumb are painted from :checked.",
+      "html": "<label class=\"ds-tgl\"><input type=\"checkbox\" checked><span class=\"ds-tgl-track\"><span class=\"ds-tgl-thumb\"></span></span><span class=\"ds-tgl-text\"><b>Scheduled daily run</b><span class=\"ds-tgl-hint\">Queues approvals; never sends.</span></span></label>",
+      "css": ".ds-tgl{display:flex;align-items:flex-start;gap:11px;cursor:pointer;font:13px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;color:#e7e9f3;max-width:320px}.ds-tgl input{position:absolute;opacity:0;width:1px;height:1px;margin:0}.ds-tgl-track{flex:0 0 auto;width:38px;height:22px;border-radius:99px;background:#2a2f48;position:relative;transition:background .15s ease;margin-top:1px}.ds-tgl-thumb{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#e7e9f3;opacity:.55;transition:transform .15s ease,opacity .15s ease}.ds-tgl input:checked + .ds-tgl-track{background:#6ea8fe}.ds-tgl input:checked + .ds-tgl-track .ds-tgl-thumb{transform:translateX(16px);background:#fff;opacity:1}.ds-tgl input:focus-visible + .ds-tgl-track{outline:2px solid #6ea8fe;outline-offset:2px}.ds-tgl-text{display:flex;flex-direction:column;gap:2px;line-height:1.35}.ds-tgl-hint{font-size:11.5px;color:#9aa0bd}"
+    },
+    {
+      "name": "Data Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The KPI and panel surface. Tonal, hairline-bordered, no shadow at rest. Metrics are always tabular.",
+      "html": "<div class=\"ds-kpi\"><div class=\"ds-num\">31</div><div class=\"ds-lbl\">Open applications</div></div>",
+      "css": ".ds-kpi{background:#181c2f;border:1px solid #2a2f48;border-radius:12px;padding:14px 18px;min-width:140px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif}.ds-num{font-size:26px;font-weight:700;color:#e7e9f3;font-variant-numeric:tabular-nums}.ds-lbl{color:#9aa0bd;font-size:12px}"
+    },
+    {
+      "name": "Alert",
+      "kind": "custom",
+      "description": "The system's real depth device: a low-alpha wash plus a 3px inset left bar in the semantic colour. Never a cast shadow, never a saturated fill.",
+      "html": "<div class=\"ds-alert ds-alert-warn\"><strong>Partial run.</strong> LinkedIn did not complete, so its watermark did not advance.</div>",
+      "css": ".ds-alert{padding:11px 14px;border-radius:9px;font:13px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;color:#9aa0bd;max-width:600px}.ds-alert strong{color:#e7e9f3}.ds-alert-warn{background:rgba(214,138,0,.10);box-shadow:inset 3px 0 0 #d68a00}.ds-alert-bad{background:rgba(214,0,60,.10);box-shadow:inset 3px 0 0 #d0224a}"
+    },
+    {
+      "name": "Popover",
+      "kind": "custom",
+      "refersTo": "popover",
+      "description": "Fixed-positioned, because it opens inside horizontally-scrolling tables where an absolute child gets clipped. The arrow is a rotated square inheriting the real background and border.",
+      "html": "<div class=\"ds-pop\"><i class=\"ds-pop-arrow\"></i><p class=\"ds-pop-h\">Why dismiss this?</p><p class=\"ds-pop-sub\">Recorded on the proposal so it is not re-offered.</p><textarea class=\"ds-pop-ta\" rows=\"2\">Salary band well below target.</textarea><div class=\"ds-pop-acts\"><button class=\"ds-btn-small\">Cancel</button><button class=\"ds-btn\">Dismiss</button></div></div>",
+      "css": ".ds-pop{position:relative;width:320px;background:#181c2f;border:1px solid #2a2f48;border-radius:12px;padding:14px;box-shadow:0 12px 32px rgba(0,0,0,.45);font-family:-apple-system,'Segoe UI',Roboto,sans-serif}.ds-pop-arrow{position:absolute;top:-7px;right:18px;width:12px;height:12px;background:#181c2f;border-left:1px solid #2a2f48;border-top:1px solid #2a2f48;transform:rotate(45deg)}.ds-pop-h{margin:0 0 3px;font-size:13px;font-weight:700;color:#e7e9f3}.ds-pop-sub{margin:0 0 10px;font-size:11.5px;color:#9aa0bd;line-height:1.45}.ds-pop-ta{width:100%;resize:vertical;font:12.5px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;padding:8px 10px;border-radius:8px;border:1px solid #2a2f48;background:#0f1220;color:#e7e9f3}.ds-pop-ta:focus{outline:2px solid #6ea8fe;outline-offset:-1px;border-color:transparent}.ds-pop-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}"
+    },
+    {
+      "name": "Activity Timeline",
+      "kind": "custom",
+      "description": "One hairline down the side with entries hanging off it. Reads as history rather than as bullet points; run boundaries get the strongest treatment on the page.",
+      "html": "<ul class=\"ds-tline\"><li><p class=\"ds-tmeta\"><span class=\"ds-tdate\">2026-09-08 07:02</span> <span class=\"ds-atype ds-arun\" style=\"--h:213\">run.start</span></p><p class=\"ds-tbody\">Daily run began. Gmail, WhatsApp, LinkedIn, 41 boards.</p></li><li><p class=\"ds-tmeta\"><span class=\"ds-tdate\">2026-09-08 07:09</span> <span class=\"ds-atype\" style=\"--h:152\">application.moved</span></p><p class=\"ds-tbody\">Acme Robotics moved to interview.</p></li></ul>",
+      "css": ".ds-tline{list-style:none;margin:0;padding:0 0 0 16px;border-left:1px solid #2a2f48;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;--tbg-l:0.255;--tbg-c:0.055;--tfg-l:0.855;--tfg-c:0.095;--ton-bg-l:0.470;--ton-bg-c:0.120;--ton-fg-l:0.985;--ton-fg-c:0.020;--tring-l:0.640;--tring-c:0.130}.ds-tline li{position:relative;margin:0 0 16px;padding-left:4px}.ds-tline li::before{content:\"\";position:absolute;left:-21px;top:7px;width:7px;height:7px;border-radius:50%;background:#2a2f48}.ds-tmeta{margin:0 0 4px;font-size:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}.ds-tdate{color:#9aa0bd;font-variant-numeric:tabular-nums}.ds-atype{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:650;white-space:nowrap;background:oklch(var(--tbg-l) var(--tbg-c) var(--h));color:oklch(var(--tfg-l) var(--tfg-c) var(--h))}.ds-arun{background:oklch(var(--ton-bg-l) var(--ton-bg-c) var(--h));color:oklch(var(--ton-fg-l) var(--ton-fg-c) var(--h));box-shadow:inset 0 0 0 1px oklch(var(--tring-l) var(--tring-c) var(--h))}.ds-tbody{margin:0;font-size:13px;line-height:1.5;color:#e7e9f3}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Instrument Panel",
+    "overview": "This is a console read at a glance, once a morning, on a laptop that belongs to one person. It is dark by default because that is the surface a lit instrument reads best against, and it is calm because nothing on it should demand attention unless something is actually overdue. Every destination carries its own hue, every number is fixed-width, and every state that matters - a lead versus an application, a run in progress, an application that has gone quiet - is legible without opening anything.\n\nColour here is a filing system, not decoration. The tab strip runs eight hues around the wheel, and every colour derives from a single --h per tab, expressed in OKLCH rather than HSL because HSL lightness is not perceptual: at one HSL stop the greens read far brighter than the blues, and two tabs failed AA while their neighbours passed. One set of OKLCH lightness stops holds for all eight hues across both themes, and the worst case across hue x theme x active/resting is now 5.85:1 against a 4.50 bar. Colour is always an additional cue and never the only one - the active pill also carries heavier weight, an inset ring, and aria-selected.\n\nThe whole interface is one dependency-free Node file with no framework, no build step, and no web font. Density is the working constraint: a real dataset is tables of dozens of rows, so the system prefers hairline dividers over boxes, tight radii, tabular figures, and a hard character measure on every prose column. This is deliberately not enterprise ATS software - the grey chrome and undifferentiated blue-link soup the product exists to escape - and deliberately not the AI-product visual cliche: no sparkles, no glow orbs, no chat-bubble hero.",
+    "keyCharacteristics": [
+      "Dark-first (#0f1220) with a genuine warm-paper light theme (#f7f5f0), and a true three-state appearance control: Auto follows the OS, an explicit choice beats it in both directions.",
+      "One hue per destination, derived in OKLCH from a single --h custom property.",
+      "Tabular figures on every number that will be compared.",
+      "Hairline dividers (1px solid var(--line)) rather than boxed cells; cards are the exception, not the rule.",
+      "Status carried by low-alpha tinted pills, never by full-saturation fills.",
+      "Semantic colour reserved: amber for unfinished, green for confirmed, red for destructive only."
+    ],
+    "rules": [
+      { "name": "The One Signal Rule", "body": "Instrument Blue means interactive. It is never used for status, decoration, or emphasis - a status is a tinted pill, and emphasis is weight.", "section": "colors" },
+      { "name": "The Derived Hue Rule", "body": "A destination declares only --h. Every background, foreground and ring is oklch(<stop> <chroma x --tab-c> var(--h)), so a new destination is one line and both themes come for free. Never hand-write a second palette for the light theme.", "section": "colors" },
+      { "name": "The Scalars-On-Root Rule", "body": "Only lightness and chroma scalars live on :root. A var() inside a custom property declared on :root resolves on :root, where --h does not exist - which makes the whole token invalid and the pill transparent. The oklch() calls must sit in the rules where --h is in scope.", "section": "colors" },
+      { "name": "The Never-Only-Colour Rule", "body": "Colour is an additional cue. Every state that colour marks also carries weight, a ring, an icon, a word, or an ARIA attribute.", "section": "colors" },
+      { "name": "The Tabular Figures Rule", "body": "Any number a person will compare down a column - counts, percentages, ages, dates, spend - carries font-variant-numeric: tabular-nums. Digits that shift width between rows make a column impossible to scan.", "section": "typography" },
+      { "name": "The Measure Rule", "body": "Prose inside a data view is capped by a character measure: 74ch for modal prose, 64ch for a sub-line, 56ch with a 30ch floor for a clamped table cell. The floor is the important half - without it the browser starves a prose column into a one-word ribbon whenever a sibling column is longer.", "section": "typography" },
+      { "name": "The Weight-Before-Size Rule", "body": "Escalate weight before size. The interface is dense, and a size jump costs a row of vertical space on every screen it appears on.", "section": "typography" },
+      { "name": "The Inset Bar Rule", "body": "A row or block that needs a state edge gets box-shadow: inset 3px 0 0 <semantic colour> plus a 6-16% alpha wash - never a cast shadow and never a full-saturation background.", "section": "elevation" },
+      { "name": "The Ring, Not Fill Rule", "body": "Hover and focus on a pill are an inset 1px ring in the pill's own derived hue. A hover that changes fill makes a resting pill and a hovered pill look like two different states of the data.", "section": "elevation" },
+      { "name": "The Pill-Means-Category Rule", "body": "A fully-round shape means 'this is a label or a mode' - a status, a tab, a tag, a filter. A rectangle with a small radius means 'this is a surface or a control.' Do not mix them.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do declare a new destination with a single --h and let every colour derive from it in OKLCH.",
+      "Do keep the OKLCH lightness stops as they are. They were measured: the worst case across all eight hues x both themes x active/resting is 5.85:1 against a 4.50 AA bar.",
+      "Do put font-variant-numeric: tabular-nums on any number that will be read down a column.",
+      "Do mark state with a low-alpha wash plus box-shadow: inset 3px 0 0 <colour>, not with a saturated fill.",
+      "Do support all three appearance states: no data-theme means Auto and the media query alone decides, an explicit choice must beat the OS in both directions, and color-scheme rides along so scrollbars and form controls follow.",
+      "Do give every colour-carried state a second cue - weight, a ring, a word, or an ARIA attribute.",
+      "Do position popovers fixed and compute their coordinates on open; they live inside horizontally-scrolling tables that would otherwise clip them.",
+      "Do cap prose in a data view with both a max-width and a min-width character measure.",
+      "Do give every animation a prefers-reduced-motion: reduce branch.",
+      "Do keep the interface dependency-free: no framework, no build step, no web font, no icon package."
+    ],
+    "donts": [
+      "Don't put an oklch() call that reads --h on :root. It resolves there, where --h does not exist, and the token silently becomes invalid - a transparent pill.",
+      "Don't hand-write a second palette for the light theme. Change the lightness and chroma scalars instead.",
+      "Don't use Instrument Blue for status or emphasis. It means interactive, and nothing else.",
+      "Don't add a resting shadow to a card, panel, table, pill or button. Shadow belongs to popovers, bubbles, toasts and the tour spotlight.",
+      "Don't give a second pill row on the same page hue coding. One hue-coded navigation system per page.",
+      "Don't collapse distinct states into one colour to simplify a legend. Four board states exist because they are four different facts.",
+      "Don't let a destructive control look like an ordinary one; red is reserved for destruction and hard failure.",
+      "Don't let a date column wrap, and don't let a prose column run without a min-width floor.",
+      "Don't use display: none on a real form control to style it; move it offscreen so it keeps its tab order and its value.",
+      "Don't reach for enterprise-ATS grey chrome, or the AI-product visual cliches - sparkle icons, glow orbs, gradient panels."
+    ]
+  }
+}

@@ -327,13 +327,30 @@ function Get-RunBudget { # per-run cap, config first, then the passed default
 # ---- claude -----------------------------------------------------------------------------------
 $script:ClaudeBin = $null
 
-function Resolve-ClaudeBin { # PATH first, then where the installers put it; $null if nowhere
+# PATH first, then where the installers put it; $null if nowhere.
+#
+# A process started from a shortcut or a scheduled task does not get the PATH the user sees in a
+# terminal, so "it works when I type claude" never settles whether this will find it. Mirrors
+# claude_search_dirs() in scripts/lib/claude-run.sh — keep the two lists in step.
+function Get-ClaudeCandidates {
+  $c = @()
+  if ($env:USERPROFILE) {
+    $c += (Join-Path $env:USERPROFILE ".local\bin\claude.exe")
+    $c += (Join-Path $env:USERPROFILE ".local\bin\claude.cmd")
+    $c += (Join-Path $env:USERPROFILE ".claude\local\claude.exe")
+    $c += (Join-Path $env:USERPROFILE ".claude\local\claude.cmd")
+    $c += (Join-Path $env:USERPROFILE ".bun\bin\claude.exe")
+  }
+  if ($env:APPDATA)       { $c += (Join-Path $env:APPDATA "npm\claude.cmd") }
+  if ($env:LOCALAPPDATA)  { $c += (Join-Path $env:LOCALAPPDATA "Volta\bin\claude.exe") }
+  if ($env:ProgramFiles)  { $c += (Join-Path $env:ProgramFiles "nodejs\claude.cmd") }
+  return $c
+}
+
+function Resolve-ClaudeBin {
   $c = Get-Command claude -ErrorAction SilentlyContinue
   if ($c) { return $c.Source }
-  $candidates = @()
-  if ($env:USERPROFILE) { $candidates += (Join-Path $env:USERPROFILE ".local\bin\claude.exe") }
-  if ($env:APPDATA) { $candidates += (Join-Path $env:APPDATA "npm\claude.cmd") }
-  foreach ($p in $candidates) {
+  foreach ($p in Get-ClaudeCandidates) {
     if (Test-Path -LiteralPath $p) { return $p }
   }
   return $null
@@ -341,8 +358,15 @@ function Resolve-ClaudeBin { # PATH first, then where the installers put it; $nu
 
 function Require-Claude {
   $script:ClaudeBin = Resolve-ClaudeBin
-  if ($script:ClaudeBin) { return $true }
-  Write-RunLog "ERROR: 'claude' CLI not found on PATH — nothing can run without it."
+  if ($script:ClaudeBin) {
+    # Anything claude itself shells out to needs to find its neighbours, so the directory it came
+    # from joins PATH rather than only being used for this one call.
+    $dir = Split-Path -Parent $script:ClaudeBin
+    if ($dir -and ($env:PATH -split ';') -notcontains $dir) { $env:PATH = "$dir;$env:PATH" }
+    return $true
+  }
+  Write-RunLog "ERROR: 'claude' CLI not found. Looked on PATH and in:"
+  foreach ($p in Get-ClaudeCandidates) { Write-RunLog "  $p" }
   return $false
 }
 

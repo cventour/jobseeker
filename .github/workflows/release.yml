@@ -1,0 +1,63 @@
+# Publish a GitHub Release when a version tag is pushed.
+#
+# This exists because the updater depends on it. JobSeeker checks /releases/latest and downloads
+# that tag's tarball, so a release that is never published is an update nobody is ever offered --
+# and the hand-run recipe this replaces had already lapsed twice (package.json reached 0.6.0 while
+# the newest tag was v0.4.0).
+#
+# Releasing is now: bump package.json, write the CHANGELOG.md entry, commit, then
+#
+#     git tag v0.7.0 && git push --tags
+#
+# No build artifacts. GitHub serves a source tarball for every tag automatically, and that is
+# exactly what install.sh and the updater consume.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The tag and package.json must agree. If they do not, the updater would download a tag whose
+      # contents claim a different version, refuse it, and report a failure nobody could explain --
+      # so it is caught here instead, before anyone is offered it.
+      - name: The tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json $PKG" >&2
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME matches package.json"
+
+      # CHANGELOG.md is the single source for what a release contains, and scripts/release-notes.mjs
+      # already turns its newest entry into exactly the body a release wants.
+      - name: The changelog has an entry for this version
+        run: |
+          grep -q "^## ${GITHUB_REF_NAME} " CHANGELOG.md || {
+            echo "CHANGELOG.md has no '## ${GITHUB_REF_NAME} — <date>' entry" >&2
+            exit 1
+          }
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm run --silent notes > /tmp/notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/notes.md

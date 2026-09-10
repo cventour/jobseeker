@@ -90,10 +90,12 @@ run_budget() { # per-run cap, config first, then the passed default
 run_claude() {
   local prompt="$1" budget="$2" detail="$3"
   local started resp rc
+  [ -n "${CLAUDE_BIN:-}" ] || CLAUDE_BIN="$(resolve_claude)"
+  [ -n "$CLAUDE_BIN" ] || CLAUDE_BIN="claude"
   started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   resp="$(mktemp)"
   # stdout only — see the note at the top of this file.
-  claude -p "$prompt" --max-budget-usd "$budget" --output-format json > "$resp"
+  "$CLAUDE_BIN" -p "$prompt" --max-budget-usd "$budget" --output-format json > "$resp"
   rc=$?
 
   "$NODE_BIN" -e '
@@ -120,8 +122,51 @@ run_claude() {
   return $rc
 }
 
+# ---- finding claude ----------------------------------------------------------------------------
+# PATH first, then where the installers actually put it.
+#
+# The PATH of a script started by the app is NOT the PATH of the Terminal the user tested in. A GUI
+# app launched from the Dock inherits launchd's PATH -- /usr/bin:/bin:/usr/sbin:/sbin -- and so does
+# everything it spawns. None of the three places claude installs itself is on that list, so
+# `command -v claude` fails inside the app on a machine where typing `claude` in Terminal works
+# perfectly. That produced "The Claude Code CLI is not on this machine's PATH" from someone who had
+# it installed, which is a message that makes a person go and install it a second time.
+#
+# The Windows twin has had Resolve-ClaudeBin since it was written; this side never got it. Keep the
+# two lists in step.
+CLAUDE_BIN="${CLAUDE_BIN:-}"
+
+claude_search_dirs() {
+  printf '%s\n' \
+    "$HOME/.local/bin" \
+    "$HOME/.claude/local" \
+    "/opt/homebrew/bin" \
+    "/usr/local/bin" \
+    "$HOME/.bun/bin" \
+    "$HOME/.volta/bin" \
+    "$HOME/.npm-global/bin"
+}
+
+resolve_claude() { # prints the path, or nothing
+  local p
+  p="$(command -v claude 2>/dev/null)" && [ -n "$p" ] && { printf '%s' "$p"; return 0; }
+  while IFS= read -r d; do
+    [ -x "$d/claude" ] && { printf '%s' "$d/claude"; return 0; }
+  done <<EOF
+$(claude_search_dirs)
+EOF
+  return 1
+}
+
 require_claude() {
-  command -v claude >/dev/null 2>&1 && return 0
-  echo "ERROR: 'claude' CLI not found on PATH — nothing can run without it."
+  CLAUDE_BIN="$(resolve_claude)"
+  if [ -n "$CLAUDE_BIN" ]; then
+    # Anything claude itself shells out to needs to find its neighbours, so the directory it came
+    # from joins PATH rather than only being used for this one call.
+    case ":$PATH:" in *":$(dirname "$CLAUDE_BIN"):"*) ;; *) PATH="$(dirname "$CLAUDE_BIN"):$PATH"; export PATH ;; esac
+    return 0
+  fi
+  echo "ERROR: 'claude' CLI not found. Looked on PATH ($PATH) and in:"
+  claude_search_dirs | sed 's/^/  /'
   return 127
 }
