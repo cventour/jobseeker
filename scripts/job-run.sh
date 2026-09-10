@@ -21,6 +21,12 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
+# What this run is allowed to do, and how it reports a failure to the activity log. This script is
+# otherwise standalone -- it carries its own lock, budget and watchdog because the scheduled path
+# needs hardening the dashboard buttons do not -- but the permission list is shared, because a list
+# kept in two places is a list that drifts.
+. "$REPO/scripts/lib/claude-tools.sh"
+
 LOG_DIR="$REPO/data"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/.job-run.log"
@@ -228,9 +234,11 @@ reap_whatsapp_mcp() {
 # launchd gives a minimal PATH; resolve node once rather than at each call site.
 NODE_BIN="$(command -v node || echo /opt/homebrew/bin/node)"
 COST_FILE="$(mktemp)"
+# Which tools, if any, the run was refused. Written by the JSON reader below.
+DENIED_FILE="$(mktemp)"
 # Single EXIT trap for both cleanups — a second `trap ... EXIT` would silently REPLACE this one
 # rather than add to it, which is exactly how the caffeinate release would have gone missing.
-trap 'rm -f "$COST_FILE"; [ -n "$CAFFEINATE_PID" ] && kill "$CAFFEINATE_PID" 2>/dev/null' EXIT
+trap 'rm -f "$COST_FILE" "$DENIED_FILE"; [ -n "$CAFFEINATE_PID" ] && kill "$CAFFEINATE_PID" 2>/dev/null' EXIT
 
 # ---- spend caps -------------------------------------------------------------------------------
 # Read from config/job-seeker.config.md so the dashboard owns them. Falls back to a sane per-run cap
@@ -327,6 +335,9 @@ write_status "running" 0 "in progress"
   rc=1
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "---- attempt $attempt/$ATTEMPTS (timeout ${TIMEOUT_SECS}s, budget \$${MAX_BUDGET_USD}) ----"
+    # Per attempt, not per run: a retry that fails for its own reason must not inherit the previous
+    # attempt's verdict.
+    : > "$DENIED_FILE"; DENIED=""
     # -p runs a single prompt headlessly and exits. The pipeline queues approvals; it never
     # applies or sends on its own.
     # Tells /job-run this is the scheduled run rather than a manual one, so the run-start row in
@@ -343,10 +354,31 @@ write_status "running" 0 "in progress"
       # total_cost_usd 3.8 / 4.9 — which meant data/spend.md stayed empty, Settings reported
       # "$0.00 across 0 runs", and the monthly ceiling could never fire no matter what was spent.
       # stderr now goes to the run log, where it is readable but cannot corrupt the payload.
-      JOBRUN_SOURCE=scheduled \
-        run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
-          --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP"
-      rc=$?
+      # --permission-mode / --allowedTools: without them every tool the pipeline's agents need is
+      # refused, one at a time, and the run narrates its way to a clean exit 0 having done nothing.
+      # See scripts/lib/claude-tools.sh for the list and why it is not a settings file.
+      # CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0: -p mode's own default abandons outstanding background
+      # subagents (role-scout, the trackers, the reconciler) after ~10 minutes and ends the turn
+      # anyway — well inside a normal run, and regardless of the budget. A run on 2026-09-10 hit
+      # exactly this: role-scout was still working when the ceiling fired, so reconcile, supervise
+      # and the digest never ran, and the run "succeeded" with no data/.last-digest.md. That is the
+      # "completed but produced no digest" verdict below, and it was never the model's fault.
+      # run_with_timeout IS the real ceiling here ($TIMEOUT_SECS, 45 minutes) — a wedged run should
+      # die to this script's own budget, not to an internal default with no relation to it.
+      if claude_perms_supported; then
+        JOBRUN_SOURCE=scheduled CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
+          run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
+            --permission-mode acceptEdits --allowedTools "$CLAUDE_ALLOWED_TOOLS" \
+            --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP"
+        rc=$?
+      else
+        echo "WARNING: this Claude CLI is too old to be told what it may do (no --permission-mode)."
+        echo "         The run will be refused its own tools and produce nothing. Update the CLI."
+        JOBRUN_SOURCE=scheduled CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
+          run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
+            --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP"
+        rc=$?
+      fi
 
       # Put the narrative back in the log, so this costs nothing in readability. If the response is
       # not JSON (a crash, a watchdog kill) print it raw rather than losing it.
@@ -375,8 +407,18 @@ write_status "running" 0 "in progress"
           process.stdout.write("\n---- cost $" + d.total_cost_usd.toFixed(4) +
             "  " + (d.num_turns ?? "?") + " turns ----\n");
         }
-      ' "$RESP" "$COST_FILE" 2>/dev/null || cat "$RESP"
+        // The CLI names every tool it refused. A refused run is a failed run however it exited:
+        // the pipeline cannot read mail, search the web or write a digest without them.
+        const den = Array.isArray(d.permission_denials) ? d.permission_denials : [];
+        const names = [...new Set(den.map((x) => String((x && x.tool_name) || "").trim()).filter(Boolean))];
+        if (names.length) fs.writeFileSync(process.argv[3], names.join(", "));
+      ' "$RESP" "$COST_FILE" "$DENIED_FILE" 2>/dev/null || cat "$RESP"
       rm -f "$RESP"
+      if [ -s "$DENIED_FILE" ]; then
+        DENIED="$(cat "$DENIED_FILE")"
+        echo "TOOLS REFUSED: $DENIED — the run could not do its work."
+        [ $rc -eq 0 ] && rc=1
+      fi
     if [ $rc -eq 0 ]; then
       echo "---- attempt $attempt succeeded ----"
       break
@@ -440,13 +482,24 @@ write_status "running" 0 "in progress"
   # produced no digest did not deliver the one thing an unattended run exists to produce -- that
   # used to be recorded as `ok` while the log line right above said the opposite.
   GAPS="$(gaps_json)"
+  # Whatever the verdict is, a failed run says so in the activity log as well as in its status file.
+  # A status file is one line on one screen and is overwritten by the next run; the activity log is
+  # where somebody scrolls back to ask what happened on Tuesday.
   if [ $rc -ne 0 ]; then
-    write_status "failed" "$attempt" "exit code $rc after $attempt attempt(s) of $ATTEMPTS" "$GAPS"
-    notify "JobSeeker daily run failed" "Exit $rc after $attempt attempt(s). See data/.job-run.log"
+    if [ -n "${DENIED:-}" ]; then
+      WHY="JobSeeker was not allowed to use the tools it needs ($DENIED), so the run did nothing. Update JobSeeker — older copies could not grant them."
+    else
+      WHY="The run exited $rc after $attempt attempt(s) of $ATTEMPTS. The full output is in data/.job-run.log."
+    fi
+    write_status "failed" "$attempt" "$WHY" "$GAPS"
+    log_problem run-failed "The daily run failed. $WHY"
+    notify "JobSeeker daily run failed" "$WHY"
   elif [ "${DIGEST_MISSING:-0}" = "1" ]; then
     write_status "failed" "$attempt" "completed but produced no digest — the run's only deliverable is missing" "$GAPS"
+    log_problem run-failed "The daily run finished but produced no digest — the one thing it exists to deliver is missing. See data/.job-run.log."
   elif [ "$GAPS" != "[]" ]; then
     write_status "partial" "$attempt" "completed, but part of the pipeline could not run: $GAPS" "$GAPS"
+    log_problem run-partial "The daily run completed, but part of the pipeline could not run: $GAPS"
     notify "JobSeeker ran, but not fully" "$(printf '%s' "$GAPS" | tr -d '[]"' ) — see the dashboard"
   else
     write_status "ok" "$attempt" "completed on attempt $attempt of $ATTEMPTS" "[]"

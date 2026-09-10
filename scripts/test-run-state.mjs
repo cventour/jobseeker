@@ -250,11 +250,70 @@ async function main() {
     }
   };
 
-  await writeStub(dir, "claude", `#!/bin/bash\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`,
-    '@echo off\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n');
+  // A pass "worked" only if the list it exists to produce now has companies in it. Exiting 0 is not
+  // the same claim, and the two came apart badly: four consecutive runs were refused every tool
+  // they needed, wrote nothing, exited 0, and were each recorded as "Fintech researched" while the
+  // market file sat at its empty scaffold. So the working stub writes rows, as a working agent does.
+  const MARKET_FILE = path.join(dir, "data", "markets", "fintech.md");
+  const SCAFFOLD = "# Market: Fintech\n\n| company | tier | hq | why | careers_url | linkedin_url | last_reviewed | notes |\n|---------|------|----|-----|-------------|--------------|---------------|-------|\n";
+  const ROW = "| Acme | 1 | Dubai | fits | https://acme.example/careers | | 2026-09-10 | |\n";
+  const seedMarket = async (body) => {
+    await fs.mkdir(path.dirname(MARKET_FILE), { recursive: true });
+    await fs.writeFile(MARKET_FILE, body);
+  };
+
+  await seedMarket(SCAFFOLD);
+  // Every stub answers --help as the real CLI does: the scripts ask once whether this CLI can be
+  // told what it may do, and a stub that says nothing is correctly treated as one that cannot.
+  const HELP_SH = `if [ "$1" = "--help" ]; then echo '  --allowedTools <tools...>'; echo '  --permission-mode <mode>'; exit 0; fi\n`;
+  const HELP_CMD = 'if "%1"=="--help" (echo   --allowedTools ^<tools...^>& echo   --permission-mode ^<mode^>& exit /b 0)\r\n';
+  const writesRows = `#!/bin/bash\n${HELP_SH}printf '%s' '${ROW.trim()}' >> data/markets/fintech.md\nprintf '\\n' >> data/markets/fintech.md\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`;
+  await writeStub(dir, "claude", writesRows,
+    `@echo off\r\n${HELP_CMD}echo ${ROW.trim()}>> data\\markets\\fintech.md\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
   let mk = await researchWith();
   check(mk.state === "ok", "a research pass that worked says so", mk.state);
   check(mk.market === "Fintech", "…and names the market it was asked for", mk.market);
+
+  // The regression that made "markets scan does not work" unanswerable: the run finishes clean and
+  // writes nothing, and the screen says ok.
+  await seedMarket(SCAFFOLD);
+  await writeStub(dir, "claude", `#!/bin/bash\n${HELP_SH}printf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`,
+    `@echo off\r\n${HELP_CMD}echo {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
+  mk = await researchWith();
+  check(mk.state === "failed", "a pass that exits clean but writes no companies is not a success", mk.state);
+  check(/wrote no companies/i.test(String(mk.detail || "")), "…and says the list is still empty", mk.detail);
+
+  // And the cause underneath it: a headless run is refused the tools its agents need, and says so
+  // in the response rather than in its exit code.
+  await writeStub(dir, "claude",
+    `#!/bin/bash\n${HELP_SH}printf '{"result":"blocked","total_cost_usd":0,"permission_denials":[{"tool_name":"Write"},{"tool_name":"WebSearch"}]}\\n'\nexit 0\n`,
+    `@echo off\r\n${HELP_CMD}echo {"result":"blocked","total_cost_usd":0,"permission_denials":[{"tool_name":"Write"},{"tool_name":"WebSearch"}]}\r\nexit /b 0\r\n`);
+  mk = await researchWith();
+  check(mk.state === "failed", "a pass refused its tools reports failed, not ok", mk.state);
+  check(/Write, WebSearch/.test(String(mk.detail || "")), "…and names the tools it was refused", mk.detail);
+
+  // -p mode abandons background subagents after ~10 minutes and ends the turn anyway, so a fan-out
+  // of research agents is cut off mid-work and nothing is written. The runner raises that ceiling;
+  // this proves the value actually reaches the CLI, since it travels in the environment and is
+  // therefore invisible in every log we keep.
+  await writeStub(dir, "claude",
+    `#!/bin/bash\n${HELP_SH}printf '%s' "$CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS" > data/.bgceiling\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`,
+    `@echo off\r\n${HELP_CMD}echo %CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS%> data\\.bgceiling\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
+  await researchWith();
+  const ceiling = (await fs.readFile(path.join(dir, "data", ".bgceiling"), "utf8").catch(() => "")).trim();
+  check(Number(ceiling) >= 1_800_000, "a fan-out gets longer than the 10-minute default to finish in", `${ceiling}ms`);
+
+  // A CLI too old to be told what it may do is its own cause, and its own instruction. It used to
+  // be reported as a mysterious block, because the warning about it contains the word "permission".
+  await writeStub(dir, "claude", `#!/bin/bash\nif [ "$1" = "--help" ]; then echo '  -p, --print'; exit 0; fi\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`,
+    '@echo off\r\nif "%1"=="--help" (echo   -p, --print& exit /b 0)\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n');
+  mk = await researchWith();
+  check(/too old/i.test(String(mk.detail || "")), "a CLI too old to be told what it may do says exactly that", mk.detail);
+
+  // Whatever the dashboard shows, the activity log has to carry it too — that is where somebody
+  // looks when a button did nothing.
+  const activity = await fs.readFile(path.join(dir, "data", "activity.md"), "utf8").catch(() => "");
+  check(/markets-failed/.test(activity), "…and a failure reaches the activity log", activity.split("\n").find((l) => l.includes("markets-failed"))?.slice(0, 80) || "(absent)");
 
   // The run lock, which this script never took: a research pass on top of a daily run put two
   // agents in the same Chrome, which is the one thing AGENT-RULES §13 exists to forbid.

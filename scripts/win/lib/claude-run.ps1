@@ -25,6 +25,13 @@
 
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
 
+# What a run may do, whether the CLI can be told, and how a failure reaches the activity log.
+# Shared with job-run.ps1, which is standalone and would otherwise keep its own copy of the list.
+. (Join-Path $PSScriptRoot "claude-tools.ps1")
+
+# Which tools the last Invoke-ClaudeRun was refused, if any.
+$script:RunClaudeDenied = ""
+
 # ---- node ----------------------------------------------------------------------------------------
 if ($env:NODE_BIN) {
   $NodeBin = $env:NODE_BIN
@@ -377,10 +384,30 @@ function Invoke-Claude {
   param([string]$Prompt, [string]$Budget)
   if (-not $script:ClaudeBin) { $script:ClaudeBin = Resolve-ClaudeBin }
   if (-not $script:ClaudeBin) { $script:ClaudeBin = "claude" }
+  # -p mode gives up on outstanding background subagents after ~10 minutes and ends the turn anyway,
+  # whatever --max-budget-usd says. A /markets pass fans out up to three prioritization-agents doing
+  # live web research, and /curate and /track fan out too — none of which reliably finish inside ten
+  # minutes. When the ceiling fires the work is abandoned, the files are never written, and the run
+  # exits 0: the same silent nothing this whole file exists to stop.
+  #
+  # Bounded rather than 0 here. job-run.ps1 can afford to wait forever because Invoke-WithTimeout is
+  # already its real ceiling; these callers have no outer wrapper, so 0 would trade a silent
+  # truncation for a run lock held forever by a wedged pass. Twin of scripts/lib/claude-run.sh.
+  # Set only when the caller has not, so a caller can still override.
+  if (-not $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS) { $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "1800000" }
   $resp = [IO.Path]::GetTempFileName()
-  $r = Invoke-Native -FilePath $script:ClaudeBin `
-    -ArgumentList @("-p", $Prompt, "--max-budget-usd", $Budget, "--output-format", "json") `
-    -OutFile $resp -WorkingDirectory $Repo
+  # --permission-mode / --allowedTools: without them every tool the agents need is refused, one at
+  # a time, and the run narrates its way to a clean exit 0 having done nothing. See
+  # lib/claude-tools.ps1 for the list and why it is not a settings file.
+  if (Test-ClaudePermsSupported $script:ClaudeBin) {
+    $argv = @("-p", $Prompt, "--permission-mode", "acceptEdits", "--allowedTools", $ClaudeAllowedTools,
+              "--max-budget-usd", $Budget, "--output-format", "json")
+  } else {
+    Write-RunLog "WARNING: this Claude CLI is too old to be told what it may do (no --permission-mode)."
+    Write-RunLog "         The run will be refused its own tools and produce nothing. Update the CLI."
+    $argv = @("-p", $Prompt, "--max-budget-usd", $Budget, "--output-format", "json")
+  }
+  $r = Invoke-Native -FilePath $script:ClaudeBin -ArgumentList $argv -OutFile $resp -WorkingDirectory $Repo
   return @{ ExitCode = $r.ExitCode; ResponseFile = $resp; StderrText = $r.Err }
 }
 
@@ -430,15 +457,64 @@ function Record-Spend {
 function Invoke-ClaudeRun {
   param([string]$Prompt, [string]$Budget, [string]$Detail)
   $started = Get-UtcStamp
+  $script:RunClaudeDenied = ""
   $run = Invoke-Claude $Prompt $Budget
   $resp = $run.ResponseFile
+  $rc = [int]$run.ExitCode
   try {
     # stderr is not part of the response, but it is part of the log, as it is in the bash.
     if ($run.StderrText) { Write-RunLog $run.StderrText.TrimEnd("`n", "`r") }
     Read-ClaudeResponse $resp
-    Record-Spend -ResponseFile $resp -Started $started -ExitCode $run.ExitCode -Detail $Detail
+    # A run that was refused its tools is a failed run, whatever the exit code says. It has to be
+    # both here and in the ledger: four refused research runs were each written down as
+    # `outcome: ok`, so the one record that could have shown $1.48 buying nothing agreed with the
+    # status file instead of contradicting it.
+    $script:RunClaudeDenied = Get-DeniedTools $resp
+    if ($script:RunClaudeDenied) {
+      Write-RunLog ("TOOLS REFUSED: " + $script:RunClaudeDenied + " — the run could not do its work.")
+      if ($rc -eq 0) { $rc = 1 }
+    }
+    Record-Spend -ResponseFile $resp -Started $started -ExitCode $rc -Detail $Detail
   } finally {
     Remove-Item -LiteralPath $resp, "$resp.cost" -Force -ErrorAction SilentlyContinue
   }
-  return [int]$run.ExitCode
+  return $rc
+}
+
+# What to tell the user, read off what actually happened. Ordered by how specific the evidence is:
+# a refused tool and an authentication line are unambiguous, and the caller's own fallback is what
+# is left when nothing else explains it.
+# Twin of classify_failure() in scripts/lib/claude-run.sh — change both together.
+function Get-FailureReason {
+  param([string]$Out, [string]$Fallback)
+  if ($null -eq $Out) { $Out = "" }
+  if ($script:RunClaudeDenied) {
+    return ("JobSeeker was not allowed to use the tools it needs (" + $script:RunClaudeDenied + "), so the run did nothing. Update JobSeeker — older copies could not grant them.")
+  }
+  if ($Out -match 'OAuth|authenticate|Authentication|not logged in|/login') {
+    return "Your Claude login has expired. Open a terminal, run claude, sign in, then try again."
+  }
+  if ($Out -match 'Unknown command') {
+    return "This copy of JobSeeker is missing the command this step runs, so nothing happened. Reinstall or update JobSeeker."
+  }
+  if ($Out -match 'redit balance|insufficient|quota|ate limit') {
+    return "Claude refused the request - out of credit, or rate limited. Check your Claude account, then try again."
+  }
+  if ($Out -match 'budget') {
+    return "The per-run spending cap stopped this before it finished. Raise it in Settings > Spending."
+  }
+  if ($Out -match 'ENOTFOUND|ETIMEDOUT|ECONNREFUSED|network|Network') {
+    return "Claude could not be reached - this PC looks offline. Check the connection and try again."
+  }
+  if ($Out -match 'too old to be told what it may do') {
+    return "The Claude Code CLI on this PC is too old for JobSeeker to grant it the tools it needs, so the run did nothing. Update it (run: claude install stable) and try again."
+  }
+  if ($Out -match 'waiting on your approval|permission denied|was denied|were denied|tool permissions') {
+    # No denial in the JSON, but the model says it was blocked. Rarer and less certain than the
+    # array above, so it sits below the causes that name themselves — and deliberately matches
+    # PHRASES, not the bare word "permission": this file's own "no --permission-mode" warning
+    # contains it, and matched, which reported an out-of-date CLI as a mysterious block.
+    return "JobSeeker was blocked from using a tool it needs, so the run did nothing. Update JobSeeker, then try again."
+  }
+  return $Fallback
 }

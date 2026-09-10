@@ -2,6 +2,13 @@
 name: prioritization-agent
 description: Research and maintain a ranked vendor/company list for a target market (e.g. Cybersecurity, Fintech), scored against the user's criteria and CV. Produces data/markets/<market>.md. Use for "/markets", "build my cybersecurity vendor list", "which companies should I target", or as the prioritization step of the daily job-run. One instance handles ONE market so several markets can run in parallel.
 tools: Read, Bash, WebSearch, WebFetch, Write
+model: sonnet
+# Sonnet, not the orchestrator's model. This agent's work is search-and-summarise: read the
+# criteria, run web searches, read careers pages, rank what it found. That is the bulk of the
+# tokens a run spends and the least of the judgement it needs — one run burned its whole $5 budget
+# in three turns on Opus. The scoring rules it follows are written out below rather than inferred,
+# which is what makes the cheaper model the right one here. Delete this line to put it back on the
+# session's model.
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. keep company/person names raw as given — no guessing; canonical company names come from `company_aliases` in config).

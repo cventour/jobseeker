@@ -1688,6 +1688,12 @@ const ACTIVITY_FAMILY = {
   done:    { hue: 70,  types: ["task-done", "task-open", "task-add", "task-add-nl", "task-in-progress"] },
   config:  { hue: 322, types: ["criteria-edit", "cv-upload", "cv-parse", "correction"] },
   notice:  { hue: 45,  types: ["notification"] },
+  // Things that did not work. Its own family, its own red, its own filter chip — because the
+  // question this log gets opened to answer is usually "I pressed the button and nothing
+  // happened", and until now the answer to that was a status file that had already been
+  // overwritten, or a .log under data/ that nobody knows to open. The scripts write these
+  // (scripts/lib/claude-tools.sh, log_problem) with the cause in plain words, not an exit code.
+  problem: { hue: 0,   types: ["run-failed", "run-partial", "markets-failed", "cv-failed", "send-failed", "run-skipped"] },
 };
 const ACTIVITY_HUE = (() => {
   const m = {};
@@ -1700,8 +1706,10 @@ function activityHue(type) {
   for (let i = 0; i < String(type).length; i++) h = (h * 31 + String(type).charCodeAt(i)) % 360;
   return h;
 }
-// A run boundary is the one row worth spotting from across the page.
+// A run boundary is the one row worth spotting from across the page. So is a failure — and for the
+// same reason: you are scanning for where something changed, not reading top to bottom.
 const isRunStart = (t) => t === "run-start";
+const isProblem = (t) => ACTIVITY_FAMILY.problem.types.includes(t);
 
 function activityHTML(table) {
   if (!table.rows.length) return `<p class="empty">Nothing logged yet.</p>`;
@@ -1709,7 +1717,8 @@ function activityHTML(table) {
     .map((r) => {
       const type = String(r.type || "").trim();
       const fam = Object.entries(ACTIVITY_FAMILY).find(([, f]) => f.types.includes(type));
-      return `<tr data-type="${esc(type)}" data-fam="${esc(fam ? fam[0] : "other")}"${isRunStart(type) ? ' class="runrow"' : ""}>
+      const rowClass = isRunStart(type) ? " class=\"runrow\"" : isProblem(type) ? " class=\"probrow\"" : "";
+      return `<tr data-type="${esc(type)}" data-fam="${esc(fam ? fam[0] : "other")}"${rowClass}>
         <td class="nw">${esc(r.timestamp || "")}</td>
         <td><span class="atype${isRunStart(type) ? " arun" : ""}" style="--h:${activityHue(type)}">${esc(type)}</span></td>
         <td>${cell(r.detail)}</td>
@@ -1726,7 +1735,7 @@ function activitySection(table) {
     key === "all"
       ? table.rows.length
       : table.rows.filter((r) => ACTIVITY_FAMILY[key]?.types.includes(String(r.type || "").trim())).length;
-  const label = { run: "Runs", track: "Tracking", find: "Finding", apply: "Applying", close: "Dismissals", done: "Tasks", config: "Config", notice: "Notifications" };
+  const label = { run: "Runs", track: "Tracking", find: "Finding", apply: "Applying", close: "Dismissals", done: "Tasks", config: "Config", notice: "Notifications", problem: "Problems" };
   return `<div class="taskfilters afilters">
       <button type="button" class="tf active" data-f="all">All (${table.rows.length})</button>
       ${fams.map(([k]) => `<button type="button" class="tf" data-f="${k}" style="--h:${ACTIVITY_FAMILY[k].hue}">${label[k]} (${count(k)})</button>`).join("")}
@@ -4075,6 +4084,8 @@ footer{padding:18px 24px}
 .atype.arun{background:oklch(var(--ton-bg-l) var(--ton-bg-c) var(--h));color:oklch(var(--ton-fg-l) var(--ton-fg-c) var(--h));
   box-shadow:inset 0 0 0 1px oklch(var(--tring-l) var(--tring-c) var(--h))}
 tr.runrow td{border-top:2px solid oklch(var(--tring-l) calc(var(--tring-c) * .7) 213);background:rgba(110,168,254,.06)}
+tr.probrow td{background:rgba(220,80,80,.07)}
+tr.probrow td:first-child{box-shadow:inset 3px 0 0 oklch(var(--tring-l) calc(var(--tring-c) * .9) 22)}
 .prowact{margin:0}.prowact button{background:transparent;color:var(--mut);border:0;padding:0 4px;font-size:16px;line-height:1;cursor:pointer;border-radius:6px}
 .prowact button.xbtn{color:#d06;font-weight:700}.prowact button:hover{background:var(--line);filter:none}
 tr.pdismissed{opacity:.45}tr.pdismissed td:nth-child(3){text-decoration:line-through}

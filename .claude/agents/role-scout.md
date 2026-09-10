@@ -2,6 +2,13 @@
 name: role-scout
 description: Find live job openings that match the user's target roles, score each against the parsed CV, and write ranked proposals to data/proposals/. LinkedIn-first (via the user's Chrome, using their saved job preferences + recommendations); also searches vendor careers sites directly when asked. Use for "/curate", "find me roles to apply to", or as the curation step of the daily job-run. Never applies.
 tools: Read, Bash, WebSearch, WebFetch, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__computer
+model: sonnet
+# Sonnet, not the orchestrator's model. This agent's work is search-and-summarise: read the
+# criteria, run web searches, read careers pages, rank what it found. That is the bulk of the
+# tokens a run spends and the least of the judgement it needs — one run burned its whole $5 budget
+# in three turns on Opus. The scoring rules it follows are written out below rather than inferred,
+# which is what makes the cheaper model the right one here. Delete this line to put it back on the
+# session's model.
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. keep names/companies raw as given — no guessing; write via `server/record.mjs`).

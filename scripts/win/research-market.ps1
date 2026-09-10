@@ -67,6 +67,7 @@ try {
   # claude itself shells out to can find its neighbours.
   if (-not (Require-Claude)) {
     Write-Status "failed" "The Claude Code CLI could not be found on this machine."
+    Write-Problem "markets-failed" "Researching '$Market' could not start: the Claude Code CLI is not on this machine."
     exit 127
   }
 
@@ -82,18 +83,77 @@ try {
   # scheduled path would be a ceiling with a hole in it.
   if (Test-MonthCeiling) {
     Write-Status "skipped-budget" "monthly spend ceiling reached; $Market was not researched"
+    Write-Problem "markets-failed" "Researching '$Market' did not start: the monthly spend ceiling has been reached. Raise it in Settings > Spending."
     exit 0
   }
 
   $Budget = Get-RunBudget "5"
+  # How much of the log was already there, so what this run adds can be read back afterwards -- the
+  # reason a run failed is in what claude said, and the message the dashboard shows is built from it.
+  $before = 0
+  if (Test-Path $Log) { $before = @(Get-Content $Log -ErrorAction SilentlyContinue).Count }
   $rc = Invoke-ClaudeRun "/markets $Market" $Budget "market research: $Market"
+  $runOut = ""
+  if (Test-Path $Log) {
+    $runOut = (@(Get-Content $Log -ErrorAction SilentlyContinue) | Select-Object -Skip $before) -join "`n"
+  }
 
-  [void](Invoke-Record @("log", "markets", "Market research for '$Market' finished (exit $rc), started from the dashboard"))
+  # The claim to check is not "claude exited 0" but "the list has companies in it that were not
+  # there before". Those came apart completely: four consecutive runs were refused every tool they
+  # needed, wrote nothing, exited 0, and were each recorded as "<market> researched" while the
+  # market file sat at its empty scaffold. Both halves matter -- rows alone would call a stale list
+  # from last week a success.
+  $checkSnippet = @'
 
-  if ($rc -eq 0) {
-    Write-Status "ok" "$Market researched"
+    const fs=require("fs"), path=require("path");
+    const name=process.argv[1], since=Date.parse(process.argv[2])||0;
+    const slug=(s)=>String(s).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+    const dir="data/markets";
+    let file=path.join(dir, slug(name)+".md");
+    // The agent chooses the filename, so a market whose slug does not match falls back to the file
+    // that names this market in its own heading.
+    try{
+      if(!fs.existsSync(file)){
+        for(const f of fs.readdirSync(dir).filter(f=>f.endsWith(".md"))){
+          const m=/^#\s*Market:\s*(.+)$/m.exec(fs.readFileSync(path.join(dir,f),"utf8"));
+          if(m && slug(m[1])===slug(name)){ file=path.join(dir,f); break; }
+        }
+      }
+    }catch{}
+    let rows=0, fresh=0;
+    try{
+      const t=fs.readFileSync(file,"utf8");
+      rows=t.split("
+").filter((l)=>{ const s=l.trim();
+        return s.startsWith("|") && !/^\|\s*-+/.test(s) && !/^\|\s*company\s*\|/i.test(s); }).length;
+      fresh=fs.statSync(file).mtimeMs>=since-1000 ? 1 : 0;
+    }catch{}
+    process.stdout.write(rows+" "+fresh);
+
+'@
+  $rows = 0; $fresh = 0
+  $chk = Invoke-Node -Snippet $checkSnippet -ArgumentList @($Market, $Started)
+  if ($chk.ExitCode -eq 0) {
+    $parts = ($chk.Out.Trim() -split '\s+')
+    if ($parts.Count -ge 2) { $rows = [int]$parts[0]; $fresh = [int]$parts[1] }
+  }
+
+  if ($rc -eq 0 -and $rows -gt 0 -and $fresh -eq 1) {
+    Write-Status "ok" "$Market researched — $rows companies"
+    [void](Invoke-Record @("log", "markets", "Market research for '$Market' finished: $rows companies ranked"))
   } else {
-    Write-Status "failed" "the research pass exited $rc — see data/.markets-run.log"
+    if ($rc -ne 0) {
+      $fallback = "The research pass exited $rc — the full output is in data\.markets-run.log."
+    } elseif ($rows -gt 0) {
+      $fallback = "The run finished but did not update the list — data\markets\ still holds what was there before."
+    } else {
+      $fallback = "The run finished but wrote no companies, so nothing was saved."
+    }
+    $why = Get-FailureReason $runOut $fallback
+    Write-Status "failed" $why
+    # In the activity log, not only in a file under data\ that nobody opens.
+    Write-Problem "markets-failed" "Researching '$Market' produced nothing. $why"
+    $rc = 1
   }
 
   Write-RunLog "==================== done $(Get-LocalStamp) (exit $rc) ===================="
