@@ -916,12 +916,7 @@ function tasksSection(rows, appTok, appIds, dueRows = null) {
   const staleRows = rows.filter(
     (r) => r.status === "open" && r.due_date && r.due_date < addDays(t0, -STALE_TASK_DAYS)
   );
-  return `<form method="POST" action="/add-task-nl" class="nladd">
-    <input name="nl" placeholder="Add a task in plain English — e.g. 'call Dana Friday about the referral'" autocomplete="off" required>
-    <button type="submit">+ Add</button>
-  </form>
-  <p class="muted nlhint">Typed in plain English — I parse the date, who, and type into columns. The full text is kept in the detail.</p>
-  <div class="taskfilters">
+  return `<div class="taskfilters">
     ${hasDue ? chip("due", `Due (${dueRows.length})`, true) : ""}
     ${chip("open", `Open (${open})`, !hasDue)}
     ${staleRows.length ? chip("stale", `Stale (${staleRows.length})`) : ""}
@@ -2229,6 +2224,42 @@ function runNowMenu({ tab, busy, lastNow }) {
   </span>`;
 }
 
+// "+ Add task" rides in the tab bar beside Run now. Adding a follow-up is the one thing you do from
+// every tab, and as a permanent row at the top of Today it cost two lines of the screen whether or
+// not you were adding anything — while still being easy to miss, because a field that is always
+// there reads as furniture. Folded into a button, it is one line of chrome and an explicit act.
+//
+// The panel is the same `.pop` shell as the Run now menu, so Escape, click-outside, viewport
+// clamping and focus-return all come from popToggle rather than from a second implementation here.
+//
+// It shows what it parsed BEFORE you commit: the same text can be read three ways ("Friday" is a
+// date, "call" is a type, "Dana" is a who), and a task that quietly landed with the wrong due date
+// is worse than no task, because it disappears from Today and resurfaces as overdue.
+function addTaskMenu() {
+  return `<span class="popwrap addtask-wrap">
+    <button type="button" class="runmenu-btn addtask-btn" aria-haspopup="dialog" aria-expanded="false"
+      aria-label="Add a task" onclick="popToggle('addtask', this)"
+      title="Add a follow-up, typed in plain English">
+      <span class="atplus" aria-hidden="true">+</span><span class="atlabel">Add task</span></button>
+    <div id="addtask" class="pop pop-addtask hide" role="dialog" aria-label="Add a task">
+      <p class="pop-h">Add a follow-up</p>
+      <p class="pop-sub">Type it as you would say it. Below is what will land in the columns.</p>
+      <form method="POST" action="/add-task-nl" id="addtaskform">
+        <input name="nl" id="addtasknl" data-popfocus autocomplete="off" required
+               placeholder="e.g. call Dana Friday about the referral">
+        <div id="addtaskparsed" class="parsed hide" aria-live="polite"></div>
+        <p class="parsenote">Nothing matched a column? It still saves — the whole sentence is kept
+          as the detail.</p>
+        <div class="pop-acts">
+          <span class="esc"><kbd>&#8629;</kbd> to add · <kbd>Esc</kbd> to cancel</span>
+          <button type="button" class="btn-secondary" onclick="popClose('addtask')">Cancel</button>
+          <button type="submit">OK</button>
+        </div>
+      </form>
+    </div>
+  </span>`;
+}
+
 // ---------- Today ----------
 // The default tab: what is actually waiting on you, assembled from the same data the other tabs
 // show. Every block states WHERE it came from, because an aggregate view whose selection rules
@@ -3350,7 +3381,7 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
     all.runNow ? runBadge(all.runNow) : ""
   }
 </div>
-${tabStrip(TABS, active, runNowMenu({ tab: active, busy: all.runNow, lastNow: all.lastRunNow }))}
+${tabStrip(TABS, active, addTaskMenu() + runNowMenu({ tab: active, busy: all.runNow, lastNow: all.lastRunNow }))}
 </div>
 <div id="panels">
 ${tabPanel("today", on("today"), sec("today", "", todayHTML(all, dueToday, appTok, appIds)))}
@@ -3853,6 +3884,12 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .rmi-label{font-size:13px;font-weight:650}
 .rmi-sub{font-size:11px;color:var(--mut);line-height:1.4}
 .runmenu-last{margin:10px 0 0;padding-top:9px;border-top:1px solid var(--line);font-size:11px;color:var(--mut)}
+/* Add task — the one button in the bar that CREATES something, so it is filled rather than
+   outlined and reads as the primary act next to Run now's outline. */
+.addtask-btn{background:var(--acc);border-color:var(--acc);color:var(--bg);font-weight:700;gap:5px}
+.addtask-btn:hover{filter:brightness(1.08);border-color:var(--acc);color:var(--bg)}
+.addtask-btn[aria-expanded=true]{filter:brightness(1.08);border-color:var(--acc);color:var(--bg)}
+.addtask-btn .atplus{font-size:15px;line-height:1;font-weight:700;margin-top:-1px}
 /* One running job, said identically in the stat bar, on Today, and beside every per-tab trigger. */
 .runbadge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;
   font-size:12px;font-weight:600;background:rgba(214,138,0,.16);color:#d68a00;white-space:nowrap}
@@ -3933,6 +3970,27 @@ table td.wrap:first-child{white-space:normal}
 .pop-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
 .pop-acts button{font-size:12.5px;padding:6px 16px}
 @media (max-width:720px){.pop{width:min(320px,calc(100vw - 48px))}}
+.pop-addtask{width:min(560px,calc(100vw - 32px))}
+/* Opt in to the measured arrow: at 560px wide this panel is centred and then pushed off the
+   viewport edge, so the inherited right:18px arrow would point at empty tab strip. */
+.pop-addtask::before{right:auto;left:var(--arrowx,50%)}
+.pop-addtask form{margin:0}
+.pop-addtask input[name=nl]{width:100%;font-size:13.5px;padding:10px 12px}
+.pop-addtask input[name=nl]:focus{outline:2px solid var(--acc);outline-offset:-1px;border-color:transparent}
+/* What the parser made of it, said before you commit rather than after. Hidden while the field is
+   empty: three chips reading "no date · followup · not named" over an empty box is noise. */
+.parsed{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin:11px 0 0}
+.pchip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:4px 10px;border-radius:999px;
+  background:rgba(110,168,254,.12);border:1px solid rgba(110,168,254,.35);color:var(--acc)}
+/* A column the text did not fill is stated, not hidden — "not named" is information; a missing chip
+   would just look like the preview had not caught up. */
+.pchip.pnone{background:transparent;border-color:var(--line);color:var(--mut)}
+.pchip .pk{color:var(--mut);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase}
+.parsenote{margin:9px 0 0;font-size:11.5px;color:var(--mut);line-height:1.45}
+.pop-addtask .pop-acts{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+.pop-addtask .esc{margin-right:auto;font-size:11.5px;color:var(--mut);display:inline-flex;align-items:center;gap:5px}
+.pop-addtask kbd{font:500 11px/1 ui-monospace,Menlo,monospace;color:var(--mut);border:1px solid var(--line);
+  border-radius:5px;padding:3px 5px;background:var(--bg)}
 .alert{padding:11px 14px;border-radius:9px;margin:0 0 18px;font-size:13px;line-height:1.5}
 .alert.warn{background:rgba(214,138,0,.10);box-shadow:inset 3px 0 0 #d68a00}
 /* Chrome-extension pairing (Windows): the folder to load and the code to type, both meant to be read
@@ -4120,6 +4178,9 @@ details summary{cursor:pointer;padding:6px 0;font-weight:600}
   nav.tabs .tab{padding:8px 10px;font-size:13px}
   .statbar{gap:12px;font-size:12px}
   .statbar .sb-sp{display:none}
+  /* Two buttons plus five tabs do not fit: Add task keeps its + and loses its word. */
+  .addtask-btn .atlabel{display:none}
+  .addtask-btn{padding-inline:11px}
   .ti-co{min-width:0}
   .titem{flex-wrap:wrap}
 }
@@ -4129,7 +4190,6 @@ footer{padding:18px 24px}
 #pinned{padding:12px 24px 0}
 #sections{padding:0 24px 0}
 .sec{border:1px solid var(--line);border-radius:12px;background:var(--card);margin-bottom:12px;padding:0;overflow:hidden}
-.nladd{display:flex;gap:8px;margin:2px 0 4px}.nladd input{flex:1}
 .nlhint{margin:0 0 10px;font-size:12px}
 .taskfilters{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
 .tf{background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:5px 12px;border-radius:999px;font-size:12px;cursor:pointer}
@@ -4794,8 +4854,17 @@ function popToggle(id, btn){
       if(top+h > vh-pad) top=Math.max(pad, b.top-h-10); // flip above if no room below
       el.style.left=Math.round(left)+'px';
       el.style.top=Math.round(top)+'px';
+      /* Where the arrow has to sit to actually point at the button. A panel is centred on its
+         button and then clamped to the viewport edge, so a fixed arrow offset points at the button
+         only in the middle of the screen — the wider the panel, the further out it lies. Panels
+         that opt in read this; the rest keep their fixed corner arrow. */
+      el.style.setProperty('--arrowx', Math.round(Math.min(Math.max(16, b.left + b.width/2 - left - 6), w-28))+'px');
     }
-    var t=el.querySelector('textarea'); if(t){ t.focus(); }
+    /* [data-popfocus] first: a panel whose primary control is an <input> (Add task) has to focus
+       that input, and it is the panel, not this function, that knows which control that is. */
+    var t=el.querySelector('[data-popfocus]') || el.querySelector('textarea');
+    if(t){ t.focus(); if(t.select) t.select(); }
+    if(el.id==='addtask') addTaskPreview();
   } else if(popOpener){ popOpener.focus(); popOpener=null; }
 }
 document.addEventListener('click', function(e){
@@ -4809,6 +4878,66 @@ document.addEventListener('keydown', function(e){
     var open=document.querySelector('.pop:not(.hide)');
     if(open) popClose(open.id);
   }
+});
+
+/* ---------- Add task: show what it parsed, before it is written ----------
+   The chips have to say exactly what the server will store, so the page runs the SERVER's parser.
+   parseNL is injected verbatim below rather than reimplemented for the browser: two copies of a
+   heuristic drift, and a preview that disagrees with the row it creates is worse than no preview.
+   It is pure and dependency-free, which is what makes shipping the same function to both sides
+   possible at all. */
+${parseNL.toString()}
+/* ISO is what goes in the column; a weekday is what tells you the parse was right. "2026-09-11" and
+   "Fri 11 Sep" are the same fact, and only one of them catches "Friday" landing on a Thursday. */
+function addTaskDue(iso){
+  /* split(), not a regex: this string is inside a server-side template literal, where a lone \\d
+     would be eaten as an escape and ship a regex that matches the letter d. */
+  var m=String(iso||'').split('-');
+  if(m.length!==3 || m[0].length!==4) return iso||'';
+  var d=new Date(+m[0], +m[1]-1, +m[2]);
+  var DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return DAY[d.getDay()]+' '+d.getDate()+' '+MON[d.getMonth()];
+}
+function addTaskPreview(){
+  var inp=document.getElementById('addtasknl'), out=document.getElementById('addtaskparsed');
+  if(!inp||!out) return;
+  var raw=inp.value.trim();
+  /* Empty field: no chips. "no date · followup · not named" over an empty box is three lines of
+     noise saying nothing has been typed yet, which the empty box already says. */
+  if(!raw){ out.textContent=''; out.classList.add('hide'); out.dataset.sig=''; return; }
+  var p=parseNL(raw);
+  /* Most keystrokes change nothing here — a whole word can go by without moving a column. Redrawing
+     only on a real change keeps this a live region a screen reader can bear: it speaks when the
+     parse moves, not on every letter. */
+  var sig=p.due_date+'|'+p.type+'|'+p.who;
+  if(out.dataset.sig===sig && !out.classList.contains('hide')) return;
+  out.dataset.sig=sig;
+  out.textContent='';
+  out.classList.remove('hide');
+  [['due', p.due_date ? addTaskDue(p.due_date) : 'no date', !p.due_date],
+   ['type', p.type, false],
+   ['who', p.who || 'not named', !p.who]].forEach(function(c){
+    var el=document.createElement('span');
+    el.className='pchip'+(c[2]?' pnone':'');
+    var k=document.createElement('span'); k.className='pk'; k.textContent=c[0];
+    el.appendChild(k);
+    /* textContent, never innerHTML: this is whatever was typed into the box. */
+    el.appendChild(document.createTextNode(c[1]));
+    out.appendChild(el);
+  });
+}
+document.addEventListener('input', function(e){
+  if(e.target && e.target.id==='addtasknl') addTaskPreview();
+});
+/* The panel promises "Enter to add", so it says so out loud rather than leaning on the browser's
+   implicit submission — which a single stray keydown handler anywhere above it would silence. */
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Enter' || !e.target || e.target.id!=='addtasknl') return;
+  var f=document.getElementById('addtaskform');
+  if(!f || !f.reportValidity()) return;
+  e.preventDefault();
+  f.requestSubmit ? f.requestSubmit() : f.submit();
 });
 
 function bToggle(id){
@@ -7706,7 +7835,10 @@ function parseNL(text) {
   else if (/\btoday\b/.test(lc)) due = addDays(0);
   else if (/\bnext week\b/.test(lc)) due = addDays(7);
   else if ((m = lc.match(/\bin (\d+)\s*(day|days|week|weeks)\b/))) due = addDays(parseInt(m[1], 10) * (/week/.test(m[2]) ? 7 : 1));
-  else if ((m = lc.match(/\b(mon|tue|wed|thu|fri|sat|sun)(?:day|nesday|rsday|urday)?\b/))) {
+    // "sday" is what makes TUESDAY parse: every other weekday's tail is covered above, so
+  // "call Dana Tuesday" quietly landed with no due date at all — the one day of the week you
+  // could not write. The Add task panel shows the parsed date now, which is how it surfaced.
+  else if ((m = lc.match(/\b(mon|tue|wed|thu|fri|sat|sun)(?:day|nesday|rsday|urday|sday)?\b/))) {
     const map = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
     let diff = (map[m[1]] - base.getDay() + 7) % 7; if (diff === 0) diff = 7;
     due = addDays(diff);
