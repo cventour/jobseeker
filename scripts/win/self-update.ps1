@@ -66,6 +66,20 @@ function Say([string]$m) {
   try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch { }
 }
 
+# Native command with stderr swallowed -> @(exitCode, stdout). Windows PowerShell 5.1 turns
+# redirected stderr into terminating errors under $ErrorActionPreference = Stop. Same helper, same
+# reason, as scripts\win\stop.ps1.
+function Invoke-Native([string]$exe, [string[]]$argv) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $out = & $exe @argv 2>$null | ForEach-Object { "$_" }
+    return @($LASTEXITCODE, (@($out) -join "`n"))
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+}
+
 $FromV = ""
 try { $FromV = (Get-Content -Raw -LiteralPath (Join-Path $Repo "package.json") | ConvertFrom-Json).version } catch { }
 # Recorded BEFORE the swap: afterwards the old manifest is gone, and this is the only way to know
@@ -185,9 +199,23 @@ if ($Check) { Say "-Check: stopping before anything is changed"; Set-Status "che
 # holding a reused pid, and it is still readable because nothing has been replaced yet.
 $script:Pct = 45; Set-Status "stopping" 45
 Say "stopping the dashboard"
-try {
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $Repo "scripts\win\stop.ps1") 2>$null | Out-Null
-} catch { }
+# What stop.ps1 found goes in the log, not to Out-Null. "Stopped JobSeeker (pid 1234)" and
+# "JobSeeker was not running" are the difference between a failure that can be read and one that
+# cannot -- which is exactly what the silent stop step cost on the Mac.
+#
+# The install's own copy, falling back to the verified download: updating an install old enough to
+# predate stop.ps1 must not leave the server running.
+$stopper = Join-Path $Repo "scripts\win\stop.ps1"
+if (-not (Test-Path -LiteralPath $stopper)) { $stopper = Join-Path $src "scripts\win\stop.ps1" }
+if (Test-Path -LiteralPath $stopper) {
+  try {
+    $r = Invoke-Native "powershell.exe" @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $stopper)
+    foreach ($line in ("$($r[1])" -split "`n")) { if ("$line".Trim()) { Say ("stop: " + "$line".Trim()) } }
+    if ($r[0] -ne 0) { Say "the stop script reported it could not" }
+  } catch { Say ("the stop script failed: " + $_.Exception.Message) }
+} else {
+  Say "WARNING: no stop.ps1 in this install or in the download; the server was not stopped"
+}
 
 $port = 4319
 try {
@@ -196,17 +224,83 @@ try {
 } catch { }
 # "Still up" means OUR install is still answering — /_whoami names the root it serves, so another
 # JobSeeker holding the port is not a reason to refuse.
+#
+# Every spelling of this install's path is accepted. The dashboard reports its root as Node
+# resolved it, which is not always the string this script was handed: a different letter case, a
+# junction or a subst'd drive all give the same folder two true names, and JSON escapes every
+# backslash in it. Matching one literal spelling would make a running dashboard invisible here --
+# worse than the failure this check exists to catch, because the swap would then go ahead
+# underneath a live server. (Its macOS twin resolves /var vs /private/var for the same reason.)
+$RepoNames = @($Repo)
+try {
+  $full = [IO.Path]::GetFullPath($Repo)
+  if ($RepoNames -notcontains $full) { $RepoNames += $full }
+  $resolved = (Get-Item -LiteralPath $Repo -Force -ErrorAction SilentlyContinue)
+  if ($resolved -and $resolved.Target -and $RepoNames -notcontains $resolved.Target) { $RepoNames += $resolved.Target }
+} catch { }
 function Ours-Is-Up {
   try {
     $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/_whoami" -TimeoutSec 1 -UseBasicParsing
-    return ("$($r.Content)" -match [regex]::Escape('"root":"' + $Repo + '"'))
+    $body = "$($r.Content)"
+    foreach ($name in $RepoNames) {
+      # As it appears in JSON: every backslash doubled.
+      $asJson = '"root":"' + ($name -replace '\\', '\\') + '"'
+      if ($body.IndexOf($asJson, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+    }
+    return $false
   } catch { return $false }
 }
 for ($i = 0; $i -lt 10; $i++) {
   if (-not (Ours-Is-Up)) { break }
   Start-Sleep -Seconds 1
 }
-if (Ours-Is-Up) { Fail ("the dashboard is still answering on port " + $port + " - nothing was changed") }
+
+# Who is listening on the port, and on what command line. Used twice below: to escalate, and to
+# name the holder if it survives that.
+function Get-PortHolders([int]$p) {
+  $ids = @()
+  try {
+    foreach ($c in @(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue)) {
+      if ($c.OwningProcess -and $ids -notcontains [int]$c.OwningProcess) { $ids += [int]$c.OwningProcess }
+    }
+  } catch { }
+  return $ids
+}
+function Describe-Proc([int]$procId) {
+  try {
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+    if ($p) { return "$($p.Name) $($p.CommandLine)" }
+  } catch { }
+  return "unknown"
+}
+
+# Last resort: ask the PORT who is holding it. stop.ps1 looks for a node whose command line names
+# this repo's dashboard, which is every ordinary case; this covers the one it cannot see -- a
+# dashboard launched in some way that does not put the path on its command line, but which
+# /_whoami has just told us is serving THIS root.
+if (Ours-Is-Up) {
+  foreach ($procId in (Get-PortHolders $port)) {
+    if ($procId -eq $PID) { continue }
+    Say ("port " + $port + " is held by pid " + $procId + ": " + (Describe-Proc $procId))
+    try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch { Say ("could not stop pid " + $procId + ": " + $_.Exception.Message) }
+  }
+  for ($i = 0; $i -lt 5; $i++) {
+    if (-not (Ours-Is-Up)) { break }
+    Start-Sleep -Seconds 1
+  }
+}
+
+if (Ours-Is-Up) {
+  # Name whoever is holding it. "Still answering", with nothing else to go on, is a bug report that
+  # cannot be answered; the command line is the answer.
+  $who = @(Get-PortHolders $port)
+  $extra = ""
+  if ($who.Count -gt 0) {
+    Say ("still held by pid " + $who[0] + ": " + (Describe-Proc $who[0]))
+    $extra = " (process " + $who[0] + ")"
+  }
+  Fail ("the dashboard is still answering on port " + $port + $extra + " - nothing was changed")
+}
 
 # ---------------------------------------------------------------- the swap
 $script:Pct = 60

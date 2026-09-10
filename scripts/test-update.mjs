@@ -10,7 +10,7 @@
 //   node scripts/test-update.mjs
 
 import { promises as fs } from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +94,90 @@ check(!TAG_OK.test("v0.7.0/../../etc"), "a tag carrying a path is refused");
   check(g.changed.length === 1, "anything else is Changed");
 }
 
+// ---------------------------------------------------------------- stopping the dashboard
+//
+// The updater cannot replace the code while the old code is still answering, so scripts/stop.sh is
+// load-bearing: an update whose stop step misses the server fails with "the dashboard is still
+// answering on port 4319 — nothing was changed", which is what users saw. The two cases that
+// matter pull opposite ways, so both are checked here.
+if (process.platform !== "win32") {
+  console.log("\nstopping the dashboard\n");
+  const st = await fs.mkdtemp(path.join(os.tmpdir(), "jobseeker-stop-"));
+  const repo = path.join(st, "repo");
+  const alive = (procId) => {
+    try {
+      process.kill(procId, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const settle = async (procId, want) => {
+    for (let i = 0; i < 40; i++) {
+      if (alive(procId) === want) return want;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return alive(procId);
+  };
+  try {
+    await fs.mkdir(path.join(repo, "server"), { recursive: true });
+    await fs.mkdir(path.join(repo, "data/.setup"), { recursive: true });
+    await fs.copyFile(path.join(ROOT, "scripts/stop.sh"), path.join(st, "stop.sh"));
+    // A stand-in dashboard: what matters is only that it is a node running THIS path.
+    await fs.writeFile(path.join(repo, "server/dashboard.mjs"), "setInterval(() => {}, 1000);\n");
+    const stop = () => run("bash", [path.join(st, "stop.sh")], { env: { ...process.env, JOBSEEKER_REPO: repo } });
+
+    const none = await stop();
+    check(none.code === 0 && /was not running/.test(none.out), "with nothing running, stop says so", none.out.trim());
+
+    // The case that broke the update: a server nothing recorded. Started by hand, by
+    // `npm run dashboard`, or by an app instance that has since gone — no pid file, no watchdog.
+    const ghost = spawn(process.execPath, [path.join(repo, "server/dashboard.mjs")], {
+      detached: true,
+      stdio: "ignore",
+    });
+    ghost.unref();
+    await new Promise((r) => setTimeout(r, 300));
+    const swept = await stop();
+    check(!(await settle(ghost.pid, false)), "a dashboard no pid file names is found and stopped");
+    check(swept.code === 0 && /Stopped JobSeeker/.test(swept.out), "…and it says which pid", swept.out.trim());
+    if (alive(ghost.pid)) process.kill(ghost.pid, "SIGKILL");
+
+    // The same install under its OTHER true name. On a Mac os.tmpdir() is /var/folders/…, which is
+    // really /private/var/folders/… — so a dashboard started with one spelling has to be recognised
+    // by a stop asked about the other, or it survives an update that then swaps the code out from
+    // under it.
+    const realRepo = await fs.realpath(repo);
+    if (realRepo !== repo) {
+      const twin = spawn(process.execPath, [path.join(realRepo, "server/dashboard.mjs")], {
+        detached: true,
+        stdio: "ignore",
+      });
+      twin.unref();
+      await new Promise((r) => setTimeout(r, 300));
+      await stop();
+      check(!(await settle(twin.pid, false)), "the same install under a symlinked path is still ours");
+      if (alive(twin.pid)) process.kill(twin.pid, "SIGKILL");
+    }
+
+    // The opposite failure: a pid file that outlived its process, its number handed to a stranger.
+    // Killing that stranger would be far worse than failing to stop anything.
+    const bystander = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    bystander.unref();
+    await fs.writeFile(path.join(repo, "data/.setup/server.pid"), String(bystander.pid));
+    const reused = await stop();
+    check(alive(bystander.pid), "a reused pid is left alone", reused.out.trim());
+    check(reused.code === 0 && /belongs to something else/.test(reused.out), "…and stop says why", reused.out.trim());
+    check(
+      !(await fs.access(path.join(repo, "data/.setup/server.pid")).then(() => true).catch(() => false)),
+      "…and the stale pid file is cleared"
+    );
+    process.kill(bystander.pid, "SIGKILL");
+  } finally {
+    await fs.rm(st, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 // ---------------------------------------------------------------- the updater itself
 console.log("\nthe updater\n");
 
@@ -108,10 +192,11 @@ try {
   const tar = await run("bash", ["-c", `git archive --format=tar HEAD | tar x -C '${inst}'`], { cwd: ROOT });
   if (tar.code !== 0) throw new Error("could not build the scratch install");
   // Untracked-but-required: the updater is new, so git archive has not got it yet.
-  for (const f of ["scripts/self-update.sh", "server/update.mjs"]) {
+  for (const f of ["scripts/self-update.sh", "scripts/stop.sh", "server/update.mjs"]) {
     await fs.copyFile(path.join(ROOT, f), path.join(inst, f));
   }
   await fs.chmod(path.join(inst, "scripts/self-update.sh"), 0o755);
+  await fs.chmod(path.join(inst, "scripts/stop.sh"), 0o755);
 
   await fs.mkdir(path.join(inst, "templates/cv"), { recursive: true });
   await fs.mkdir(path.join(inst, "data/.setup"), { recursive: true });

@@ -200,32 +200,59 @@ for d in "${JOBSEEKER_APPS:-$HOME/Applications}" "$HOME/Applications" "/Applicat
     APP="$d/JobSeeker.app"; APPS_DIR="$d"; break
   fi
 done
+# The bundle EXISTING and the app RUNNING are different facts, and this log used to report the
+# first as if it were the second: "stopping <app>" was printed the moment repo-path.txt matched,
+# whether or not there was a process, and pkill's result was thrown away. A failed update then read
+# as though the app had been stopped and the server had ignored it. Say which of the two happened.
 if [ -n "$APP" ]; then
-  say "stopping $APP"
-  pkill -TERM -f "$APP/Contents/MacOS/JobSeeker" 2>/dev/null
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    pgrep -f "$APP/Contents/MacOS/JobSeeker" >/dev/null 2>&1 || break
-    sleep 0.3
-  done
-  pkill -KILL -f "$APP/Contents/MacOS/JobSeeker" 2>/dev/null
+  if pgrep -f "$APP/Contents/MacOS/JobSeeker" >/dev/null 2>&1; then
+    say "stopping $APP"
+    pkill -TERM -f "$APP/Contents/MacOS/JobSeeker" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      pgrep -f "$APP/Contents/MacOS/JobSeeker" >/dev/null 2>&1 || break
+      sleep 0.3
+    done
+    pkill -KILL -f "$APP/Contents/MacOS/JobSeeker" 2>/dev/null
+    if pgrep -f "$APP/Contents/MacOS/JobSeeker" >/dev/null 2>&1; then
+      say "WARNING: $APP is still running"
+    else
+      say "app stopped"
+    fi
+  else
+    say "$APP was not running"
+  fi
 else
   say "no app bundle points at this install; only the server will be stopped"
 fi
 
-# The app's watchdog takes the server with it, but not every install was started that way. Check the
-# pid really is ours before signalling it -- pids get reused.
-PIDF="$WORK/server.pid"
-if [ -f "$PIDF" ]; then
-  SPID="$(cat "$PIDF" 2>/dev/null)"
-  if [ -n "$SPID" ] && kill -0 "$SPID" 2>/dev/null; then
-    if ps -o command= -p "$SPID" 2>/dev/null | grep -q "$REPO/server/dashboard.mjs"; then
-      say "stopping server $SPID"
-      kill -TERM "$SPID" 2>/dev/null
-      for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$SPID" 2>/dev/null || break; sleep 0.5; done
-      kill -KILL "$SPID" 2>/dev/null
-    fi
-  fi
-  rm -f "$PIDF"
+# Then the server, through scripts/stop.sh -- the one place that knows how to tell OUR dashboard
+# from a stranger holding a reused pid, AND how to find one that no pid file names.
+#
+# Quitting the app is USUALLY enough: the watchdog in scripts/setup-step.sh takes the server down
+# with it. But that watchdog only exists when the app started the server, and data/.setup/server.pid
+# is only written on that same path. A dashboard started by hand, by `npm run dashboard`, or by an
+# app instance that has since gone had neither -- so the code here signalled nothing, logged
+# nothing, and failed ten seconds later over a server it had never once asked to stop. Do not
+# shortcut this on the app having quit: what matters is that the port is free, not why.
+#
+# Prefer the install's own copy -- nothing has been replaced yet, so it is the code this install has
+# been running. Fall back to the verified download, which is what makes this work when updating an
+# install old enough to predate the script.
+STOPPER=""
+for c in "$REPO/scripts/stop.sh" "$STAGE/src/scripts/stop.sh"; do
+  [ -f "$c" ] && { STOPPER="$c"; break; }
+done
+if [ -n "$STOPPER" ]; then
+  say "stopping the dashboard (via $STOPPER)"
+  # What it found goes in the log with everything else, timestamped -- "Stopped JobSeeker (pid N)"
+  # and "JobSeeker was not running" are the difference between a failure that can be read and one
+  # that cannot, which is what the silent stop step cost here.
+  STOP_OUT="$(JOBSEEKER_REPO="$REPO" bash "$STOPPER" 2>&1)" || say "the stop script reported it could not"
+  printf '%s\n' "$STOP_OUT" | while IFS= read -r l; do
+    if [ -n "$l" ]; then say "stop: $l"; fi
+  done
+else
+  say "WARNING: no stop.sh in this install or in the download; only the app was stopped"
 fi
 
 PORT="$(sed -n 's/^dashboard_port:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$REPO/config/job-seeker.config.md" 2>/dev/null | head -1)"
@@ -233,15 +260,47 @@ PORT="$(sed -n 's/^dashboard_port:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$REPO/con
 # "Still up" means OUR install is still answering. Another JobSeeker, or anything else, holding
 # that port is not a reason to refuse — /_whoami names the root it is serving, which is the whole
 # reason it exists.
+#
+# BOTH spellings of this install's path are accepted. The dashboard reports its root with every
+# symlink resolved, while this script has whatever path it was handed -- and on a Mac /var IS
+# /private/var, so those two strings differ for any install under a symlinked parent. Matching only
+# the literal one makes a running dashboard invisible here, which is worse than the failure this
+# check exists to catch: the swap would go ahead underneath a live server.
+REPO_REAL="$(cd "$REPO" 2>/dev/null && pwd -P)" || REPO_REAL="$REPO"
 ours_is_up() {
-  curl -fsS --max-time 1 "http://127.0.0.1:$PORT/_whoami" 2>/dev/null | grep -q "\"root\":\"$REPO\""
+  curl -fsS --max-time 1 "http://127.0.0.1:$PORT/_whoami" 2>/dev/null \
+    | grep -q -e "\"root\":\"$REPO\"" -e "\"root\":\"$REPO_REAL\""
 }
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   ours_is_up || break
   sleep 1
 done
+
+# Last resort: ask the PORT who is holding it. stop.sh looks for a node whose command line names
+# this repo's dashboard, which is every ordinary case; this covers the one it cannot see -- a
+# dashboard launched in some way that does not put the path on its command line, but which
+# /_whoami has just told us is serving THIS root. The identity test is the same one, a step further
+# out: nothing is signalled unless it is listening on the port our own install is answering on.
 if ours_is_up; then
-  die "the dashboard is still answering on port $PORT — nothing was changed"
+  for p in $(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null); do
+    [ "$p" = "$$" ] && continue
+    say "port $PORT is held by pid $p: $(ps -o command= -p "$p" 2>/dev/null | head -1)"
+    kill -TERM "$p" 2>/dev/null
+    for _ in 1 2 3 4 5 6; do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done
+    kill -KILL "$p" 2>/dev/null
+  done
+  for _ in 1 2 3 4 5; do
+    ours_is_up || break
+    sleep 1
+  done
+fi
+
+if ours_is_up; then
+  # Name whoever is holding it. "Still answering", with nothing else to go on, is a bug report that
+  # cannot be answered; the command line is the answer.
+  WHO="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
+  [ -n "$WHO" ] && say "still held by pid $WHO: $(ps -o command= -p "$WHO" 2>/dev/null | head -1)"
+  die "the dashboard is still answering on port $PORT${WHO:+ (process $WHO)} — nothing was changed"
 fi
 
 # ---------------------------------------------------------------- the swap

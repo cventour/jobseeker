@@ -3,15 +3,20 @@
 #
 # It exists because on Windows, unlike the Mac, closing the window does not stop the server:
 # scripts\win\launch.ps1 deliberately leaves it up so the scheduled daily run keeps working. That
-# makes quitting an explicit act, and this is it.
+# makes quitting an explicit act, and this is it. On the Mac the app owns the server's life, but
+# self-update needs the same guarantee on both -- the code cannot be replaced while the old code is
+# still answering -- so scripts\stop.sh is now the twin of this file rather than an absence.
 #
 #   powershell -File scripts\win\stop.ps1
+#   node scripts\run.mjs stop
 #
 # The care taken below is about ONE failure: a pid file outlives the process it names, Windows
 # hands that number to something else, and quitting JobSeeker kills a stranger. So a pid is never
 # trusted on its own -- it is only killed once the process it points at turns out to be a node
 # running THIS repo's server\dashboard.mjs. Without a usable pid file, the same test is run over
 # every node process instead, which finds a dashboard started by an older build or by hand.
+#
+# Twin: scripts/stop.sh. Change both.
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Off
@@ -127,25 +132,31 @@ if (Test-Path -LiteralPath $PidFile) {
     Write-Host "The recorded process id is unreadable; looking for JobSeeker by hand."
   }
   Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-  if ($stopped.Count -gt 0) {
-    Write-Host "Stopped JobSeeker (pid $($stopped -join ', '))."
-    exit 0
-  }
 }
 
-# No pid file, or it named a process that was not ours: look for the dashboard itself. This is what
-# catches a server started by an older build, or by hand from a terminal.
-$found = @(Find-Dashboards)
+# The sweep runs even when the pid file's process was stopped -- it used to return here instead.
+# Only one dashboard can hold the port, but a second one that lost the race and stayed up is
+# exactly the leftover that makes the next update fail with "still answering". It also catches a
+# server started by an older build, or by hand from a terminal, which no pid file names.
+$found = @(Find-Dashboards | Where-Object { $stopped -notcontains $_ })
 if ($found.Count -eq 0) {
-  if (-not $said) { Write-Host "JobSeeker was not running." }
+  if ($stopped.Count -gt 0) {
+    Write-Host "Stopped JobSeeker (pid $($stopped -join ', '))."
+  } elseif (-not $said) {
+    Write-Host "JobSeeker was not running."
+  }
   exit 0
 }
+$left = 0
 foreach ($procId in $found) {
-  if (Stop-One $procId) { $stopped += $procId }
+  if (Stop-One $procId) { $stopped += $procId } else { $left++ }
 }
 if ($stopped.Count -gt 0) {
   Write-Host "Stopped JobSeeker (pid $($stopped -join ', '))."
-} else {
+}
+# One that would not go is the whole answer, whatever else was stopped alongside it: the caller
+# (self-update) is about to replace the code and needs to know the port may still be held.
+if ($left -gt 0) {
   Write-Host "JobSeeker is running but could not be stopped."
   exit 1
 }

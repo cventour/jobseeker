@@ -4,6 +4,14 @@ Every release, in plain language. Newest first.
 
 ---
 
+## Unreleased
+
+- Fixed: updating could stop with "the dashboard is still answering on port 4319 — nothing was changed" and leave you on the old version. JobSeeker only knew how to stop a dashboard it had started itself, so one you had started any other way was never asked to quit.
+- The update log now says whether JobSeeker was actually running, what was stopped, and — if something is still holding the port — which program it is.
+- Fixed: on Windows, the check that JobSeeker had really stopped never recognised your own install, so an update could replace the files while it was still running. It now checks properly, and stops what is holding the connection first.
+
+---
+
 ## v0.7.3 — 10 September 2026
 
 - **Report a problem** is now a bug icon at the top right of every page, not a button buried in Settings. Write what went wrong and JobSeeker saves one file into your Downloads folder for you to email.

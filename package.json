@@ -30,6 +30,7 @@
   ],
   "scripts": {
     "dashboard": "node server/dashboard.mjs",
+    "stop": "node scripts/run.mjs stop",
     "audit": "node server/audit.mjs",
     "logs": "node scripts/run.mjs collect-logs",
     "update": "node scripts/run.mjs update-now",
