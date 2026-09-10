@@ -3777,7 +3777,63 @@ tr.bform td{background:rgba(110,168,254,.06);border-bottom:2px solid var(--line)
 .costates{margin:0}
 .cogroup[hidden]{display:none}
 .comatch{margin-left:auto;font-size:11.5px}
-.s-applied{background:#2b3a67}.s-screening{background:#3a2f67}.s-interview{background:#1f5b46}.s-offer{background:#1f6b2f}.s-rejected{background:#6b2330}.s-saved{background:#3a3f57}.s-withdrawn{background:#4a3a2a}
+/* Status pills state BOTH halves of the colour pair, the way the .tag-* pills below do.
+   Background alone is not enough: with no colour the text falls back to --fg, which is near-black
+   in the light theme and vanishes into these dark grounds. Every pair clears 4.5:1 in both themes.
+   Colour is never the only cue -- the pill also spells the status out.
+   Declared as tokens so the light theme restates values, not selectors, the same three-state way
+   as the tab pills above: base :root is dark, light is said twice (media query for Auto, attribute
+   for an explicit choice). */
+:root{
+  --s-applied-bg:#2b3a67; --s-applied-fg:#cfe0ff;
+  --s-screening-bg:#3a2f67; --s-screening-fg:#ddd0f7;
+  --s-interview-bg:#1f5b46; --s-interview-fg:#c6f0dc;
+  --s-offer-bg:#1f6b2f; --s-offer-fg:#cdf0cf;
+  --s-rejected-bg:#6b2330; --s-rejected-fg:#ffc9d2;
+  --s-saved-bg:#3a3f57; --s-saved-fg:#d7dcf0;
+  --s-withdrawn-bg:#4a3a2a; --s-withdrawn-fg:#f0d9b8;
+  --s-proposed-bg:#2a3550; --s-proposed-fg:#cddcf7;
+  --s-dismissed-bg:#4a2a30; --s-dismissed-fg:#f0c6cf;
+  --s-open-bg:#5a3f0e; --s-open-fg:#f5cf85;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --s-applied-bg:#dbe6fb; --s-applied-fg:#1d3a72;
+    --s-screening-bg:#e6dffa; --s-screening-fg:#402a78;
+    --s-interview-bg:#d3f0e2; --s-interview-fg:#10503a;
+    --s-offer-bg:#d6f0d6; --s-offer-fg:#14561f;
+    --s-rejected-bg:#fbdadf; --s-rejected-fg:#7a1b2a;
+    --s-saved-bg:#e2e5f0; --s-saved-fg:#363c56;
+    --s-withdrawn-bg:#f5e6d2; --s-withdrawn-fg:#5c4020;
+    --s-proposed-bg:#dfe6f5; --s-proposed-fg:#2a3f6b;
+    --s-dismissed-bg:#fadfe3; --s-dismissed-fg:#6e2430;
+    --s-open-bg:#f7e6c4; --s-open-fg:#6b4708;
+  }
+}
+:root[data-theme="light"]{
+    --s-applied-bg:#dbe6fb; --s-applied-fg:#1d3a72;
+    --s-screening-bg:#e6dffa; --s-screening-fg:#402a78;
+    --s-interview-bg:#d3f0e2; --s-interview-fg:#10503a;
+    --s-offer-bg:#d6f0d6; --s-offer-fg:#14561f;
+    --s-rejected-bg:#fbdadf; --s-rejected-fg:#7a1b2a;
+    --s-saved-bg:#e2e5f0; --s-saved-fg:#363c56;
+    --s-withdrawn-bg:#f5e6d2; --s-withdrawn-fg:#5c4020;
+    --s-proposed-bg:#dfe6f5; --s-proposed-fg:#2a3f6b;
+    --s-dismissed-bg:#fadfe3; --s-dismissed-fg:#6e2430;
+    --s-open-bg:#f7e6c4; --s-open-fg:#6b4708;
+}
+.s-applied{background:var(--s-applied-bg);color:var(--s-applied-fg)}
+.s-screening{background:var(--s-screening-bg);color:var(--s-screening-fg)}
+.s-interview{background:var(--s-interview-bg);color:var(--s-interview-fg)}
+.s-offer{background:var(--s-offer-bg);color:var(--s-offer-fg)}
+.s-rejected{background:var(--s-rejected-bg);color:var(--s-rejected-fg)}
+.s-saved{background:var(--s-saved-bg);color:var(--s-saved-fg)}
+.s-withdrawn{background:var(--s-withdrawn-bg);color:var(--s-withdrawn-fg)}
+.s-proposed{background:var(--s-proposed-bg);color:var(--s-proposed-fg)}
+.s-dismissed{background:var(--s-dismissed-bg);color:var(--s-dismissed-fg)}
+/* A task still owed by you. Amber, the same "needs a look" register as .rp-maybe below; its partner
+   status "done" deliberately keeps the neutral .pill default, so settled reads as quiet. */
+.s-open{background:var(--s-open-bg);color:var(--s-open-fg)}
 form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 form.grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut)}
 input,button,textarea{font:inherit}input,textarea{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px}
@@ -3847,7 +3903,6 @@ tr.isnew td{background:rgba(46,160,110,.16)}tr.isnew td:first-child{box-shadow:i
 .rp-certain{color:#ffc9d2;background:rgba(214,0,60,.16);border:1px solid rgba(214,0,60,.55)}
 .rp-maybe{color:#f0b357;background:rgba(214,138,0,.14);border:1px solid rgba(214,138,0,.5)}
 .appliedhere{display:inline-block;margin-top:4px;font-size:10.5px;font-weight:600;color:#8fd0ff;background:rgba(110,168,254,.14);border:1px solid rgba(110,168,254,.4);border-radius:6px;padding:1px 7px;line-height:1.4}
-.s-proposed{background:#2a3550}.s-applied{background:#2b3a67}.s-dismissed{background:#4a2a30;color:#f0c6cf}
 .sec .sechead{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none}
 .sec .sechead h2{margin:0;flex:1}
 .sec .secbody{padding:2px 16px 16px}
