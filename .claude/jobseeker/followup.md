@@ -1,8 +1,3 @@
----
-description: Draft a follow-up message, get your approval (chat or WhatsApp), then send it. Usage — "/followup" (all due follow-ups) or "/followup <who/app-id/task-id>".
-argument-hint: "[who or id]"
----
-
 Handle a follow-up. Arguments: `$ARGUMENTS`
 
 You are the orchestrator for the human-in-the-loop follow-up flow. Approvals happen HERE (in this

@@ -144,7 +144,7 @@ Then, inside Claude Code, pair it to your own WhatsApp:
 /whatsapp-claude-channel:setup
 ```
 
-`/onboard` (below) then asks for your number and saves it as `whatsapp_owner_jid` in
+`/jobseeker onboard` (below) then asks for your number and saves it as `whatsapp_owner_jid` in
 `config/job-seeker.config.md`. Skip all of this and JobSeeker still works exactly the same — the
 digest is written to `data/.last-digest.md` and shown in the dashboard either way.
 
@@ -209,7 +209,7 @@ checks that it worked.
 
 It asks one question that decides how much setup you actually need:
 
-- **Run it manually** (the default) — you run `/job-run` when you want it, nothing runs on its own.
+- **Run it manually** (the default) — you run `/jobseeker job-run` when you want it, nothing runs on its own.
   No background job, no System Settings changes. This is the short path, and the one to start on.
 - **Run it on a schedule** — it goes off at 08:00 and sends you a summary. Because that has to work
   while you are away, it needs a few one-time macOS permissions: an Automation grant for the
@@ -235,20 +235,20 @@ when it should run. Three of those steps can be skipped — Settings offers each
 and says what skipping costs. Nothing runs and nothing is spent while you set up; when you finish,
 Today asks whether to research your first market.
 
-Prefer to type? Everything the wizard writes, `/onboard` writes too:
+Prefer to type? Everything the wizard writes, `/jobseeker onboard` writes too:
 
 ```bash
 claude
 ```
 ```text
-/onboard
+/jobseeker onboard
 ```
 
 The two are interchangeable — same questions, same files — so you can start in one and finish in the
 other. Once a day after that:
 
 ```text
-/job-run
+/jobseeker job-run
 ```
 
 That is the whole routine. It reads your channels, finds roles, and sends you a summary.
@@ -257,31 +257,35 @@ That is the whole routine. It reads your channels, finds roles, and sends you a 
 
 ## Talking to it
 
-You do not need to memorise commands. Address **`jobseeker`** in plain English and it works out what
-to run — and after setup this works in Claude Code from **any** directory, not just this folder
-(setup installs a thin front-door agent into `~/.claude/agents` that defers to this install's own
-playbooks; `node scripts/run.mjs install-global-agent --remove` takes it back out):
+Everything runs through one command, **`/jobseeker <subcommand>`**. Each subcommand hands its work to
+a specialist agent, and each specialist runs on the model it is set to: Sonnet for reading your
+channels and researching markets, Opus for scoring roles, applying and writing in your voice.
+
+For quick questions, address **`jobseeker`** in plain English. After setup this works in Claude Code
+from **any** directory (setup installs a thin front-door agent into `~/.claude/agents` that defers to
+this install; `node scripts/run.mjs install-global-agent --remove` takes it back out). It answers
+status and task questions itself, and for anything bigger it tells you which `/jobseeker` subcommand
+to run:
 
 ```text
-jobseeker, check my email and WhatsApp for anything new
-jobseeker, find me Solution Architect roles in Dubai
 jobseeker, what's my pipeline? what's due today?
 jobseeker, add: call Dana on Friday about the referral
-jobseeker, close anything I've already done
-jobseeker, research the cybersecurity vendors worth targeting
+jobseeker, I already emailed the Acme recruiter, mark it done
 ```
 
-There are also direct commands when you know exactly what you want:
+The subcommands:
 
 | Command | What it does |
 |---|---|
-| `/job-run` | The full daily routine — the one the scheduler runs |
-| `/curate` | Find and score new roles |
-| `/track` | Update the tracker from Gmail, Calendar, WhatsApp and LinkedIn |
-| `/apply <id>` | Prepare an application — **pauses for your approval before submitting** |
-| `/followup` | Draft a follow-up — **pauses for your approval before sending** |
-| `/markets` | Build or refresh the ranked company list for a market |
-| `/onboard` · `/parse-cv` | First-run setup and CV parsing — the terminal version of the dashboard wizard |
+| `/jobseeker job-run` | The full daily routine — the one the scheduler runs |
+| `/jobseeker curate` | Find and score new roles |
+| `/jobseeker track` | Update the tracker from Gmail, Calendar, WhatsApp and LinkedIn |
+| `/jobseeker apply <id>` | Prepare an application — **pauses for your approval before submitting** |
+| `/jobseeker followup` | Draft a follow-up — **pauses for your approval before sending** |
+| `/jobseeker markets` | Build or refresh the ranked company list for a market |
+| `/jobseeker reconcile` | Close tasks you have already done, using evidence from any channel |
+| `/jobseeker check` | Health check: failed runs, duplicates, pending approvals, anything overdue |
+| `/jobseeker onboard` · `/jobseeker parse-cv` | First-run setup and CV parsing — the terminal version of the dashboard wizard |
 
 And two things you run in the terminal:
 

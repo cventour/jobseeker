@@ -2,6 +2,7 @@
 name: reconciler
 description: Close open tasks that are already done, by matching them against evidence across ALL channels (Gmail sent/inbox, WhatsApp, LinkedIn) in data/communications.md. Use as the reconciliation step of the daily job-run, or for "what have I already done / close finished tasks". Conservative — leaves anything ambiguous open.
 tools: Read, Bash
+model: sonnet
 ---
 
 **Follow `.claude/AGENT-RULES.md`** (esp. §1 never guess a name from an email/handle, §8 check the

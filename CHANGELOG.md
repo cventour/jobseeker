@@ -4,6 +4,14 @@ Every release, in plain language. Newest first.
 
 ---
 
+## Unreleased
+
+- One command for everything: `/jobseeker` followed by what you want. `/markets Fintech` is now `/jobseeker markets Fintech`, `/curate` is `/jobseeker curate`, `/job-run` is `/jobseeker job-run`, and so on for track, apply, apply-fill, followup, send-approval, onboard and parse-cv. The old names are gone. Two are new: `/jobseeker reconcile` closes tasks you have already done, and `/jobseeker check` looks for problems in your tracker. `/jobseeker` on its own lists them all and shows where your search stands.
+- Each part of JobSeeker now runs on the model it is set to, however you reach it. Reading your mail and chats, researching markets, closing finished tasks and checking the tracker use Claude Sonnet. Scoring roles, filling applications and writing messages in your voice use Claude Opus. Before, asking "jobseeker" to research a market ran it on whatever model your session was using.
+- "jobseeker" in plain English still answers what is due, adds tasks and marks things done. For anything bigger it now tells you which `/jobseeker` command to run instead of doing the work itself.
+
+---
+
 ## v0.7.7 — 11 September 2026
 
 - Fixed: links in the Mac app did nothing when clicked — job postings, LinkedIn profiles, "open ↗", and "See everything that changed" after an update. They now open in your web browser, where you are already signed in to LinkedIn and the job sites. In a browser tab and on Windows they always worked.

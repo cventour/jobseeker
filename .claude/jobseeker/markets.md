@@ -1,8 +1,3 @@
----
-description: Build or refresh ranked vendor/company lists for your target markets. Usage — "/markets" (refresh all), "/markets Fintech" (one market), "/markets add Fintech" (add then build).
-argument-hint: "[add] [market name]"
----
-
 Build/refresh my market vendor lists. Arguments: `$ARGUMENTS`
 
 Interpret the arguments:
@@ -25,5 +20,5 @@ Steps:
 4. When they return, give me a short combined summary: per market, how many companies were ranked
    and the top few, plus any coverage gaps they flagged.
 
-Then remind me I can run `/curate` to find live openings at these prioritized companies, and that
+Then remind me I can run `/jobseeker curate` to find live openings at these prioritized companies, and that
 the lists are visible on the dashboard (Markets & vendors).

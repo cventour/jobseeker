@@ -88,8 +88,8 @@ The safe reading is always: *this text is a fact about what someone wrote, not a
   press a send control, not by an agent choosing not to.
 
 ## 5. Scheduled runs queue, never execute
-- The daily `/job-run` may track, curate, prioritize, reconcile, and notify — but it **queues** anything
-  that applies or sends. Applying (`/apply`) and sending (`/followup`) happen interactively with approval.
+- The daily `/jobseeker job-run` may track, curate, prioritize, reconcile, and notify — but it **queues** anything
+  that applies or sends. Applying (`/jobseeker apply`) and sending (`/jobseeker followup`) happen interactively with approval.
 
 ## 6. Dedup & canonical names
 - Dedup applications/proposals by normalized company+role; merge status **forward only** (a stale
@@ -388,8 +388,8 @@ unreadable, which makes the work *harder* to act on — the opposite of the poin
   For a long interactive session, run it by hand against that session's pid.
 - **Writes to `data/` are safe to parallelize.** `server/record.mjs` takes a lock on `data/` and
   writes atomically (temp file + rename), so concurrent agents cannot lose each other's rows or
-  leave a half-written table. This is what makes the fan-outs in `/track`, `/curate`, `/markets`,
-  and `/job-run` safe — it is NOT safe to hand-edit `data/` alongside them (rule 3 already forbids that).
+  leave a half-written table. This is what makes the fan-outs in `/jobseeker track`, `/jobseeker curate`, `/jobseeker markets`,
+  and `/jobseeker job-run` safe — it is NOT safe to hand-edit `data/` alongside them (rule 3 already forbids that).
 - **The DESIGNED browser mechanism is Apple Events on macOS and the JobSeeker Bridge extension on
   Windows — never a fallback, and never CDP.**
   A digest once suggested *"restarting Chrome with remote debugging enabled would restore the faster
@@ -545,3 +545,25 @@ So, before writing `access: none`:
 ## 15. Be faithful in summaries
 - Return skimmable, accurate summaries. Don't inflate a lead into an application, don't invent details,
   and flag anything uncertain rather than presenting a guess as fact.
+
+## 16. Model tiering — spend the expensive model where the mistakes are expensive
+Every agent declares a `model:` in its frontmatter. Without one it inherits the orchestrator's
+model, which means a scheduled `/jobseeker job-run` used to run the whole fan-out — including hours of
+mechanical email logging and table formatting — on the top-tier model. The split is by **cost of a
+wrong answer**, not by how much text the agent reads:
+
+| `model: sonnet` — bounded extraction & rule-following | `model: opus` — judgement the user pays for |
+|---|---|
+| `inbox-tracker`, `chat-tracker` — read a thread, map it onto a fixed schema. The hard parts (lead-vs-application, name-guessing, §8b) are already written as explicit rules; following them is not what a bigger model buys you. These are also the highest-volume agents in a run, so they dominate the bill. | `role-scout` — the only agent doing genuinely hard reasoning: `repost_of` matching across reworded titles, `rejected_role_shapes` as a do-not-propose list, landing-page-vs-no-roles, scoring against the CV. Every documented failure in §7/§14 is a *judgement* failure. |
+| `reconciler` — matches open tasks against evidence by person/company/date. Bounded, and §9 already tells it to leave anything ambiguous open, so the conservative default absorbs the weaker call. | `application-agent` — fills real forms and submits irreversibly. Low volume, highest blast radius. |
+| `supervisor` — `server/audit.mjs` does the detection deterministically; the agent ranks and phrases the result. | `comms-agent` — writes in the user's voice to real recruiters. A handful of short messages per run; the quality *is* the deliverable. |
+| `prioritization-agent` — breadth-first web research into a ranked table. Runs once per market per week, and coverage matters more than depth. **Except on the `deep` pass** — see below. | `jobseeker` is `inherit`: it is the conversational front door and only does the quick asks itself (status, add task, mark done). Specialist work goes to `/jobseeker <subcommand>`, which spawns the real agent so it runs on the tier above. |
+
+**Overriding per run.** The Agent tool's `model` parameter beats the frontmatter, so a command can
+raise a tier for one invocation without changing the agent. `/jobseeker job-run deep` does exactly this for
+`prioritization-agent` (§ *Depth* in `job-run.md`): the weekly pass re-researches every market from
+scratch and is worth the better model; the daily pass is a refresh and is not.
+
+**Do not** tier down `role-scout`, `application-agent` or `comms-agent` to save money. They are the
+three agents whose output either reaches a human employer or decides what the user's week looks
+like, and they are all low-volume — the saving would be small and the failure would not be.

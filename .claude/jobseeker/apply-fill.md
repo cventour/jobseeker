@@ -1,8 +1,3 @@
----
-description: Fill a job application form in the user's Chrome and STOP — the user reviews and submits it themselves. Usage — "/apply-fill <proposal-id>".
-argument-hint: "<proposal-id>"
----
-
 Fill the application form for `$ARGUMENTS`, then stop. **You never submit it. The user does.**
 
 This is the dashboard's Apply button. It runs unattended, so there is nobody to answer a question
@@ -18,7 +13,7 @@ mid-way — which is exactly why it stops at a filled form instead of trying to 
    It opens `job_url` in the user's own Chrome, fills what it can from `data/profile.md` and
    `templates/answers.md`, and attaches the CV.
    - **Tell it explicitly: do NOT create an approval record, and do NOT submit.** The approval in
-     Mode FILL exists for the interactive `/apply` flow, where a session is held open to finalise it.
+     Mode FILL exists for the interactive `/jobseeker apply` flow, where a session is held open to finalise it.
      Here nothing is held open, so an approval would sit pending forever with nothing able to act on
      it. This run ends with a filled form and an open tab, nothing more.
    - **Leave the tab open.** It is the user's browser; the tab is the deliverable.

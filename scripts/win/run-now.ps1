@@ -31,10 +31,10 @@ $Status = [IO.Path]::Combine($Repo, "data", ".run-now.status.json")
 # and the spend caps — because it drives Chrome like the others, and two agents in the same browser
 # read each other's tabs (AGENT-RULES §13).
 switch ($Slug) {
-  "job-run"  { $Prompt = "/job-run";  $Label = "Full daily run";       $DefaultBudget = "5" }
-  "track"    { $Prompt = "/track";    $Label = "Read my channels";     $DefaultBudget = "3" }
-  "curate"   { $Prompt = "/curate";   $Label = "Find new roles";       $DefaultBudget = "3" }
-  "followup" { $Prompt = "/followup"; $Label = "Draft due follow-ups"; $DefaultBudget = "2" }
+  "job-run"  { $Prompt = "/jobseeker job-run";  $Label = "Full daily run";       $DefaultBudget = "5" }
+  "track"    { $Prompt = "/jobseeker track";    $Label = "Read my channels";     $DefaultBudget = "3" }
+  "curate"   { $Prompt = "/jobseeker curate";   $Label = "Find new roles";       $DefaultBudget = "3" }
+  "followup" { $Prompt = "/jobseeker followup"; $Label = "Draft due follow-ups"; $DefaultBudget = "2" }
   "apply" {
     # The id reaches this from a web form, and it is about to be interpolated into a prompt. An
     # allow-list on the SHAPE, checked again here rather than trusted from the caller.
@@ -46,7 +46,7 @@ switch ($Slug) {
       [Console]::Error.WriteLine("no such proposal: $Target")
       exit 66
     }
-    $Prompt = "/apply-fill $Target"; $Label = "Fill an application"; $DefaultBudget = "3"
+    $Prompt = "/jobseeker apply-fill $Target"; $Label = "Fill an application"; $DefaultBudget = "3"
   }
   default {
     [Console]::Error.WriteLine("usage: run-now.ps1 <job-run|track|curate|followup|apply <proposal-id>>")

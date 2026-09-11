@@ -1,7 +1,3 @@
----
-description: Update the job tracker from Gmail, Calendar, and your WhatsApp Web + LinkedIn messages (runs inbox-tracker and chat-tracker in parallel).
----
-
 Update my job-search tracker from all my channels.
 
 Run these two subagents **in parallel** (launch both in a single message, two Agent tool calls):

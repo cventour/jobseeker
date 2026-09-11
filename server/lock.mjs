@@ -1,8 +1,8 @@
 // Cross-process advisory lock for data/ mutations.
 //
 // Why this exists: several writers touch data/ at the same time —
-//   * /track and /job-run fan out inbox-tracker + chat-tracker in parallel,
-//   * /curate and /job-run fan out one role-scout per market,
+//   * /jobseeker track and /jobseeker job-run fan out inbox-tracker + chat-tracker in parallel,
+//   * /jobseeker curate and /jobseeker job-run fan out one role-scout per market,
 //   * the dashboard (server/dashboard.mjs) writes whenever you click a button.
 // Each record.mjs command is a read-modify-write (read the table or the record dir, decide,
 // write the whole file back). Two of those interleaving silently LOSES one writer's change:

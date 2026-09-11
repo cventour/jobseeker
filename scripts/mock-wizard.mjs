@@ -721,19 +721,19 @@ function cancelModal(){
     '<p>Nothing is lost — what you have answered so far is already saved.</p>' +
     '<p>You can finish this any time from <b>Settings</b>, which runs the same steps one at a time. ' +
     'Or, if you prefer the terminal: open Claude Code in the JobSeeker folder and run ' +
-    '<code>/onboard</code> — it asks the same questions in chat.</p>',
+    '<code>/jobseeker onboard</code> — it asks the same questions in chat.</p>',
     '<button class="btn sec" data-close="1">Stay here</button>' +
     '<a class="btn" href="/today">Leave setup</a>');
 }
 
 function advancedModal(){
   modal('Set up in the terminal instead',
-    '<p>Open Claude Code in the JobSeeker folder and run <code>/onboard</code>. It asks the same ' +
+    '<p>Open Claude Code in the JobSeeker folder and run <code>/jobseeker onboard</code>. It asks the same ' +
     'questions in chat and writes the same files, so you can switch between the two freely.</p>' +
-    '<p class="tiny">The wizard is the supported path and will stay the default. <code>/onboard</code> ' +
+    '<p class="tiny">The wizard is the supported path and will stay the default. <code>/jobseeker onboard</code> ' +
     'remains for people who would rather type.</p>',
     '<button class="btn sec" data-close="1">Back to the wizard</button>' +
-    '<a class="btn" href="/today">I will use /onboard</a>');
+    '<a class="btn" href="/today">I will use /jobseeker onboard</a>');
 }
 
 /* ---------- render + events ---------- */
@@ -1003,7 +1003,7 @@ var HOME = function(){ return '<div class="hd"><span class="brand"><span class="
       '<div class="tiny">Market 0.40 · role 0.35 · CV match 0.25.</div></span>' +
       '<button class="btn ghost" data-open="none">Adjust</button></div>' +
   '</div>' +
-  '<p class="tiny" style="margin-top:14px">Prefer the terminal? <code>/onboard</code> in Claude Code asks ' +
+  '<p class="tiny" style="margin-top:14px">Prefer the terminal? <code>/jobseeker onboard</code> in Claude Code asks ' +
   'the same questions and writes the same files.</p>'; };
 
 // The CV wizard: the wizard's step 2, standing alone. Same screen, same copy, its own way in and out.

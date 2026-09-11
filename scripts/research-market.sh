@@ -92,7 +92,7 @@ mkdir -p "$REPO/data"
   # RUN_CLAUDE_DENIED, and the left-hand side of a pipeline is a subshell whose variables die with
   # it -- the one fact worth reporting would be the one fact thrown away.
   RUNLOG="$(mktemp)"
-  run_claude "/markets $MARKET" "$BUDGET" "market research: $MARKET" > "$RUNLOG" 2>&1
+  run_claude "/jobseeker markets $MARKET" "$BUDGET" "market research: $MARKET" > "$RUNLOG" 2>&1
   rc=$?
   cat "$RUNLOG"
 
