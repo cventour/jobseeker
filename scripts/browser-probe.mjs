@@ -8,7 +8,7 @@
 // none machine-readable, so nothing downstream could count the drought.
 //
 // The fix is to stop asking the model. This probe writes ONE machine-readable verdict and
-// .claude/commands/job-run.md forbids asserting browser state from anything else.
+// .claude/jobseeker/job-run.md forbids asserting browser state from anything else.
 //
 // It names CAPABILITIES, not apps (AGENT-RULES §10). "WhatsApp" is two unrelated things here:
 // SENDING goes over the WhatsApp MCP and needs no browser at all, while READING needs a browser.

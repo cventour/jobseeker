@@ -1,8 +1,3 @@
----
-description: The full daily job-search pipeline — track channels, refresh priorities, curate roles, reconcile finished tasks, supervise, and send you a digest. Queues (does not auto-execute) anything needing approval. This is the scheduler entrypoint. Add "deep" for the thorough weekly pass.
-argument-hint: "[deep]"
----
-
 Run my full daily job-search pipeline. Arguments: `$ARGUMENTS`
 
 **Depth.** Default (no arguments) is the **daily** pass — keep it fast, skip fresh markets, and do
@@ -285,7 +280,7 @@ tool**, so an "emailed digest" would sit unsent in Drafts. Verified, not assumed
 ## Hard rules for unattended runs
 
 - **Do NOT apply** to anything (no application-agent here) and **do NOT send** follow-ups. Applying
-  is `/apply` and sending is `/followup`, both with my approval, done when I'm present.
+  is `/jobseeker apply` and sending is `/jobseeker followup`, both with my approval, done when I'm present.
 - **Stay inside the 3-agent cap.** Scheduled runs are guarded by `scripts/rss-guard.sh` (and its
   Windows twin `scripts/win/rss-guard.ps1`), which
   kills any process over 4 GB and aborts the run past 12 GB — but the cap is what keeps you from
@@ -297,4 +292,4 @@ tool**, so an "emailed digest" would sit unsent in Drafts. Verified, not assumed
   scout bailed, say which. A run that quietly covered half of what it claims is a failure.
 
 End by telling me the three things waiting for me: **proposals to review**, **follow-ups due**, and
-**approvals pending** — with the exact commands to act (`/apply <id>`, `/followup`).
+**approvals pending** — with the exact commands to act (`/jobseeker apply <id>`, `/jobseeker followup`).

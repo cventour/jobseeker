@@ -143,8 +143,8 @@ run_claude() {
   resp="$(mktemp)"
   # -p mode gives up on outstanding background subagents after ~10 minutes and ends the turn anyway,
   # whatever --max-budget-usd says: "Background tasks still running after Ns; terminating. Set
-  # CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely." A /markets pass fans out up to
-  # three prioritization-agents doing live web research, and /curate and /track fan out too — none
+  # CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely." A /jobseeker markets pass fans out up to
+  # three prioritization-agents doing live web research, and /jobseeker curate and /jobseeker track fan out too — none
   # of which reliably finish inside ten minutes. When the ceiling fires the work is abandoned, the
   # files are never written, and the run exits 0, which is the same silent nothing this whole file
   # exists to stop.

@@ -1,6 +1,6 @@
 ---
 name: role-scout
-description: Find live job openings that match the user's target roles, score each against the parsed CV, and write ranked proposals to data/proposals/. LinkedIn-first (via the user's Chrome, using their saved job preferences + recommendations); also searches vendor careers sites directly when asked. Use for "/curate", "find me roles to apply to", or as the curation step of the daily job-run. Never applies.
+description: Find live job openings that match the user's target roles, score each against the parsed CV, and write ranked proposals to data/proposals/. LinkedIn-first (via the user's Chrome, using their saved job preferences + recommendations); also searches vendor careers sites directly when asked. Use for "/jobseeker curate", "find me roles to apply to", or as the curation step of the daily job-run. Never applies.
 tools: Read, Bash, WebSearch, WebFetch, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__tabs_close_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__computer
 model: opus
 ---
@@ -128,7 +128,7 @@ up LinkedIn **job preferences**, so LinkedIn already recommends roles matched to
 **2. Vendor careers sites — use STATELESS web, not Chrome.** Careers pages are public, so **do NOT use
 the Chrome session** here (reserve Chrome for LinkedIn, where the user's login + preferences matter). Use
 **`WebFetch` / `WebSearch`** (no cookies/session), or **Playwright** if a page is JS-heavy and needs
-rendering. When the user explicitly asks ("also check the vendor sites", a manual `/curate`), OR for
+rendering. When the user explicitly asks ("also check the vendor sites", a manual `/jobseeker curate`), OR for
 tier-1 vendors in `data/markets/*.md` that didn't surface on LinkedIn, go direct to each `careers_url`
 + role-title searches. The careers page is the source of truth for that vendor.
 - Because this path is **stateless, it also runs headless/scheduled** where Chrome/LinkedIn isn't

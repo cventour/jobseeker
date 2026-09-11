@@ -138,11 +138,13 @@ Say "--- project commands the CLI needs to find ---"
 $cmds = Join-Path $REPO ".claude\commands"
 if (Test-Path $cmds) {
   Say ".claude\commands: $((Get-ChildItem $cmds -Name) -join ' ')"
-  if (Test-Path (Join-Path $cmds "parse-cv.md")) { Say "parse-cv.md: present" }
-  else { Say "parse-cv.md: MISSING - /parse-cv would fail as 'Unknown command'" }
+  if (Test-Path (Join-Path $cmds "jobseeker.md")) { Say "jobseeker.md: present" }
+  else { Say "jobseeker.md: MISSING - every /jobseeker <subcommand> would fail as 'Unknown command'" }
+  if (Test-Path (Join-Path $REPO ".claude\jobseeker\parse-cv.md")) { Say "jobseeker\parse-cv.md: present" }
+  else { Say "jobseeker\parse-cv.md: MISSING - /jobseeker parse-cv would have no playbook to follow" }
 } else {
   Say ".claude\commands: MISSING ENTIRELY."
-  Say "Every slash command (/parse-cv, /job-run, /curate) would fail as 'Unknown command', and the"
+  Say "Every slash command (/jobseeker parse-cv, /jobseeker job-run, /jobseeker curate) would fail as 'Unknown command', and the"
   Say "CV step would report 'Nothing could be read' no matter how good the PDF is."
 }
 if (Test-Path (Join-Path $REPO "CLAUDE.md")) { Say "CLAUDE.md: present" } else { Say "CLAUDE.md: missing" }

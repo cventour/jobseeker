@@ -1,4 +1,4 @@
-﻿# Read the newest uploaded CV into data/profile.md, by running /parse-cv headlessly.
+﻿# Read the newest uploaded CV into data/profile.md, by running /jobseeker parse-cv headlessly.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\win\parse-cv.ps1
 #
@@ -75,14 +75,14 @@ try {
 
   # Deliberately NOT under the run lock. Reading a CV touches no browser and no channel, it is the
   # one thing the wizard needs to overlap with everything else, and blocking it behind a 40-minute
-  # /job-run would strand someone on step 2 with no explanation.
+  # /jobseeker job-run would strand someone on step 2 with no explanation.
   # How much of the log was already there, so what this run adds can be read back afterwards. The
   # reason a run failed is in what claude said, and the message the wizard shows has to be built
   # from it -- with only the exit code to go on, every failure was reported to the user as "your
   # PDF is probably a scan".
   $before = 0
   if (Test-Path $Log) { $before = @(Get-Content $Log -ErrorAction SilentlyContinue).Count }
-  $rc = Invoke-ClaudeRun "/parse-cv" (Get-RunBudget "1") "parse CV"
+  $rc = Invoke-ClaudeRun "/jobseeker parse-cv" (Get-RunBudget "1") "parse CV"
   $runOut = ""
   if (Test-Path $Log) {
     $runOut = (@(Get-Content $Log -ErrorAction SilentlyContinue) | Select-Object -Skip $before) -join "`n"

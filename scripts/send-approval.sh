@@ -60,7 +60,7 @@ mkdir -p "$REPO/data"
   "$NODE_BIN" "$REPO/server/record.mjs" approval-dispatch "$ID" running "sending from the dashboard" >/dev/null 2>&1
 
   BUDGET="$(run_budget 1)"
-  run_claude "/send-approval $ID" "$BUDGET" "send approval $ID"
+  run_claude "/jobseeker send-approval $ID" "$BUDGET" "send approval $ID"
   rc=$?
 
   if [ $rc -eq 0 ]; then

@@ -148,7 +148,7 @@ else
   say ""
   say "  ${BOLD}How do you want to run it?${OFF}"
   say ""
-  say "    Manually  — you run /job-run in Claude Code when you want it. Nothing runs on its own."
+  say "    Manually  — you run /jobseeker job-run in Claude Code when you want it. Nothing runs on its own."
   say "                Needs no background job and no System Settings changes."
   say "    Scheduled — it runs itself at 08:00 and sends you a summary. Needs a few one-time"
   say "                macOS permissions so it can work while you are away."
@@ -349,7 +349,7 @@ say ""
 if [ "$DRY" = 1 ]; then
   say "${BOLD}Dry run complete.${OFF} Nothing was changed. Run without --dry-run to apply."
 elif [ ${#GAPS[@]} -eq 0 ] && [ "$BROWSER_OK" = 1 ]; then
-  say "${GRN}${BOLD}Ready.${OFF} Next: run ${BOLD}claude${OFF}, then ${BOLD}/onboard${OFF} to set your targets and CV."
+  say "${GRN}${BOLD}Ready.${OFF} Next: run ${BOLD}claude${OFF}, then ${BOLD}/jobseeker onboard${OFF} to set your targets and CV."
 else
   say "${YEL}${BOLD}Set up, with gaps:${OFF}"
   for g in "${GAPS[@]:-}"; do [ -n "$g" ] && say "  • $g"; done

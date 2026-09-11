@@ -9,28 +9,28 @@ Markdown in `data/` is the source of truth.** All agent behavior rules are in
 The user runs their whole job search through one handle: **`jobseeker`** (they may write `@jobseeker`,
 `jobseeker,` or just ask something job-search-related). When they do:
 
-- **Delegate to the `jobseeker` agent** (`.claude/agents/jobseeker.md`) for any single job-seeking
-  request — checking email/WhatsApp/LinkedIn, finding/curating roles, researching vendors, prepping/
-  submitting an application, drafting a follow-up, reconciling tasks, adding a task, or answering
-  "what's my pipeline / what's due".
-- For the **full unattended daily pipeline**, run the **`/job-run`** command (it fans out the
-  specialists in parallel — a subagent can't, so this stays a main-session command).
+- **Specialist work runs through the `/jobseeker <subcommand>` command** (`.claude/commands/jobseeker.md`,
+  playbooks in `.claude/jobseeker/`). It runs in the main session and spawns the real specialist
+  agents, so each one runs on the `model:` in its own frontmatter (AGENT-RULES §16). Run the
+  matching subcommand yourself. Never do a specialist's work inline, and never route it through the
+  `jobseeker` agent: a subagent cannot spawn subagents, so it would run on the wrong model.
+- **Quick asks go to the `jobseeker` agent** (`.claude/agents/jobseeker.md`): pipeline status, add a
+  task, mark something done, who to follow up with.
 
 Natural request → what to run:
 
 | User says | Do |
 |---|---|
-| "jobseeker, check my email / any updates" | jobseeker agent → inbox-tracker playbook |
-| "jobseeker, check WhatsApp/LinkedIn" | jobseeker agent → chat-tracker playbook |
-| "find me roles" / "curate" | jobseeker agent → role-scout (or `/curate`) |
-| "research <market> vendors" | jobseeker agent → prioritization-agent (or `/markets`) |
-| "apply to <proposal>" | `/apply <id>` (interactive, approval-gated) |
-| "follow up with X" | `/followup` (draft → approve → send) |
+| "jobseeker, check my email / WhatsApp / LinkedIn / any updates" | `/jobseeker track` |
+| "find me roles" / "curate" | `/jobseeker curate [market]` |
+| "research <market> vendors" | `/jobseeker markets <market>` |
+| "apply to <proposal>" | `/jobseeker apply <id>` (interactive, approval-gated) |
+| "follow up with X" | `/jobseeker followup <who>` (draft → approve → send) |
+| "run my morning routine" | `/jobseeker job-run` |
+| "set me up" / "parse my CV" | `/jobseeker onboard`, `/jobseeker parse-cv` — or point them at the dashboard wizard (`/welcome`), which writes the same files |
+| "close what I've already done" | spawn the `reconciler` agent |
 | "what's my pipeline / status" | jobseeker agent → `server/audit.mjs` + summarize |
-| "close what I've already done" | jobseeker agent → reconciler playbook |
 | "add task …" (plain English) | jobseeker agent → `record.mjs add-task` (parse date/who/type, keep raw detail) |
-| "run my morning routine" | `/job-run` |
-| "set me up" / "parse my CV" | `/onboard`, `/parse-cv` — or point them at the dashboard wizard (`/welcome`), which writes the same files |
 
 ## Hard rules (see AGENT-RULES.md for the full list)
 

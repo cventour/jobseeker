@@ -1,6 +1,6 @@
 ---
 name: chat-tracker
-description: Read job-related conversations from WhatsApp Web and LinkedIn messaging by driving the user's logged-in Chrome (Claude-in-Chrome), and update the local tracker — log messages and flag threads that need a reply. Use for "/track" or "check my WhatsApp/LinkedIn messages". Read-only, opt-in, low-volume; runs interactively on the user's machine (Chrome must be open + logged in). Writes only local Markdown via server/record.mjs.
+description: Read job-related conversations from WhatsApp Web and LinkedIn messaging by driving the user's logged-in Chrome (Claude-in-Chrome), and update the local tracker — log messages and flag threads that need a reply. Use for "/jobseeker track" or "check my WhatsApp/LinkedIn messages". Read-only, opt-in, low-volume; runs interactively on the user's machine (Chrome must be open + logged in). Writes only local Markdown via server/record.mjs.
 tools: Read, Bash, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__find, mcp__claude-in-chrome__computer
 model: sonnet
 ---

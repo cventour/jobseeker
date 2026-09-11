@@ -577,7 +577,7 @@ async function loadAll() {
   } catch {
     /* probe has not run yet */
   }
-  // /job-run writes the digest here BEFORE trying to deliver it, with a `delivered:` /
+  // /jobseeker job-run writes the digest here BEFORE trying to deliver it, with a `delivered:` /
   // `not-delivered: <reason>` first line. If the push failed the digest still exists — surfacing it
   // here is what stops a failed send becoming a silently missing update (it happened three days
   // running before anyone noticed).
@@ -1155,7 +1155,7 @@ function normCompanyKey(name) {
 }
 
 function proposalsHTML(props, appliedByCompany, reposts = {}, busy = null) {
-  if (!props.length) return `<p class="empty">No proposals yet. Run <code>/curate</code>.</p>`;
+  if (!props.length) return `<p class="empty">No proposals yet. Run <code>/jobseeker curate</code>.</p>`;
   const rows = props
     .map((p) => p.data)
     .sort((x, y) => Number(y.priority || 0) - Number(x.priority || 0))
@@ -1850,7 +1850,7 @@ function criteriaFormHTML(criteria, marketNames = [], extraHidden = "") {
       // Picking rather than typing is what stops a second "fintech" appearing beside "Fintech".
       suggestions: marketNames,
       placeholder: "pick or type a market…",
-      hint: "— from your market lists; typing a new one creates it on the next /markets run",
+      hint: "— from your market lists; typing a new one creates it on the next /jobseeker markets run",
       // Commas, said out loud rather than inferred. Without this, one pasted value containing a
       // semicolon flipped the whole field to semicolon-separated and SAVED it that way, while
       // marketList() below went on splitting only on commas -- so the box showed four markets and
@@ -1926,12 +1926,12 @@ function profileHTML(profile) {
   const status = parsed
     ? `<span class="pill s-offer">CV parsed ${esc(parsed)}</span>`
     : `<span class="pill s-rejected">No CV parsed</span>`;
-  // The upload form that used to live here left you to run /parse-cv yourself, and a PDF uploaded
+  // The upload form that used to live here left you to run /jobseeker parse-cv yourself, and a PDF uploaded
   // but never read is indistinguishable from no CV at all. One page now does both.
   return `<p>${status} ${profile.data?.source_cv ? esc(profile.data.source_cv) : ""}</p>
     <p><a class="btn-small linkbtn" href="/setup-step?step=cv&back=cv">${parsed ? "Replace my CV" : "Add my CV"}</a></p>
     <p class="muted">Uploading it also reads it — Claude turns the PDF into <code>data/profile.md</code>,
-      which is what roles are scored against. <code>/parse-cv</code> in Claude Code does the same thing.</p>`;
+      which is what roles are scored against. <code>/jobseeker parse-cv</code> in Claude Code does the same thing.</p>`;
 }
 
 function addTaskFormHTML() {
@@ -2291,7 +2291,7 @@ function unfinishedHTML(w, markets) {
   return `<div class="tblock">
       <p class="th">Unfinished setup <span class="muted">— each one runs on its own; nothing else has to be redone</span></p>
       ${rows.join("")}
-      <p class="tiny muted" style="margin-top:10px">Prefer the terminal? <code>/onboard</code> in Claude
+      <p class="tiny muted" style="margin-top:10px">Prefer the terminal? <code>/jobseeker onboard</code> in Claude
         Code asks the same questions and writes the same files. Or
         <a href="/welcome">run the whole wizard again</a>.</p>
     </div>`;
@@ -2629,7 +2629,7 @@ function setupHTML(st, criteria, marketNames = [], subReq = "", upd = null) {
         ${chanRow("Gmail / Calendar", st.channels.gmail, "Connected in Claude Code, not here.")}
         ${chanRow("WhatsApp", st.channels.whatsapp, "Read through Chrome by the daily run.")}
         ${chanRow("LinkedIn", st.channels.linkedin, "Read through Chrome by the daily run.")}
-        <tr><td class="nw"><b>CV</b></td><td class="nw">${st.profileParsed ? `<span class="ok-pill">parsed</span>` : `<span class="bad-pill">not parsed</span>`}</td><td class="nw"></td><td class="muted">Upload on the CV tab, then run <code>/parse-cv</code> in Claude Code.</td></tr>
+        <tr><td class="nw"><b>CV</b></td><td class="nw">${st.profileParsed ? `<span class="ok-pill">parsed</span>` : `<span class="bad-pill">not parsed</span>`}</td><td class="nw"></td><td class="muted">Upload on the CV tab, then run <code>/jobseeker parse-cv</code> in Claude Code.</td></tr>
       </tbody></table></div>
 
       ${manual.length ? `<p class="th">Only you can do these</p>` + manual.map(([k, v]) => `<div class="alert warn"><b>${esc(k)}</b>${v}</div>`).join("") : ""}`)}
@@ -2964,8 +2964,8 @@ function todayHTML(all, dueToday, appTok, appIds) {
     const preview = String(a.body || "").trim();
     const hidden = `<input type="hidden" name="_tab" value="today"><input type="hidden" name="id" value="${esc(d.id)}">`;
     // An application approval cannot be "sent" — it is a form half-filled in a browser session that
-    // /apply is holding open. Saying "Approve & send" on one would be a lie, so it says what it
-    // does: it records your yes, and /apply does the submitting.
+    // /jobseeker apply is holding open. Saying "Approve & send" on one would be a lie, so it says what it
+    // does: it records your yes, and /jobseeker apply does the submitting.
     const approveLabel = isApply ? "Approve" : "Approve &amp; send";
     return `<div class="titem">
       <span class="ti-co">${esc(kind)}</span>
@@ -2973,7 +2973,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
         <div class="ti-sub">${esc(d.channels || "")}${d.channels ? " · " : ""}<code>${esc(d.id)}</code></div>
         ${days != null ? `<div class="ti-age${stale ? " stale" : ""}">waiting ${days === 0 ? "since today" : `${days} day${days === 1 ? "" : "s"}`}${stale ? " — it will read as late" : ""}</div>` : ""}
         ${preview ? `<details class="apprev"><summary>Show the full text</summary><pre class="digest">${esc(preview)}</pre></details>` : `<div class="ti-sub muted">No preview was recorded.</div>`}
-        ${isApply ? `<div class="ti-sub muted">Approving records your decision. The submit itself happens in the <code>/apply</code> session that opened this.</div>` : ""}
+        ${isApply ? `<div class="ti-sub muted">Approving records your decision. The submit itself happens in the <code>/jobseeker apply</code> session that opened this.</div>` : ""}
       </span>
       <span class="ti-acts">
         <form method="POST" action="/decide-approval" class="inline">${hidden}
@@ -3453,7 +3453,7 @@ ${tabStrip(TABS, active)}
 <div id="panels">
 ${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label), all.sub, all.update)))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
-${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
+${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /jobseeker parse-cv</span>`, profileHTML(all.profile)))}
 </div>
 <footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a>${
   platform.IS_WIN
@@ -4996,7 +4996,7 @@ document.getElementById('cvform')?.addEventListener('submit', async (e) => {
   if (!f) return;
   msg.textContent = 'Uploading…';
   const res = await fetch('/upload-cv?name=' + encodeURIComponent(f.name), { method:'POST', headers:{'content-type':'application/pdf'}, body: f });
-  msg.textContent = res.ok ? 'Saved. Now run /parse-cv in Claude Code.' : 'Upload failed.';
+  msg.textContent = res.ok ? 'Saved. Now run /jobseeker parse-cv in Claude Code.' : 'Upload failed.';
 });
 
 window.openDetail = function(id){
@@ -5626,7 +5626,7 @@ async function handleAddCompany(form) {
       company,
       tier: "3",
       last_reviewed: today(),
-      notes: `Added manually from the dashboard ${today()}. Tier 3 is provisional — not yet researched or ranked; run /markets to score it properly. Careers board lookup was triggered on add.`,
+      notes: `Added manually from the dashboard ${today()}. Tier 3 is provisional — not yet researched or ranked; run /jobseeker markets to score it properly. Careers board lookup was triggered on add.`,
     },
     "bottom"
   );
@@ -5891,9 +5891,9 @@ async function handleSaveConfig(form) {
 //
 // Everything JobSeeker does used to be behind a terminal: clone, `npm run setup`, `claude`, then a
 // slash command. This is the same setup with a face on it — seven steps, three of them skippable,
-// each writing the SAME files /onboard writes. It is a face, not a new source of truth: criteria,
+// each writing the SAME files /jobseeker onboard writes. It is a face, not a new source of truth: criteria,
 // the answer library and the config remain the only record of what you chose, so the wizard and
-// /onboard can be used interchangeably and neither can drift from the other.
+// /jobseeker onboard can be used interchangeably and neither can drift from the other.
 //
 // Deliberately server-rendered, one form POST per step. A client-side wizard would hold your
 // answers in memory until a final Save, which means closing the window at step 5 loses steps 1-4.
@@ -6143,7 +6143,7 @@ async function mergeConfig(fields) {
 
 // What is actually set up, read from the files themselves rather than from a progress counter.
 // A wizard that remembered "you did step 3" would disagree with the files the moment anything was
-// edited elsewhere — and /onboard, the dashboard and a text editor can all edit them.
+// edited elsewhere — and /jobseeker onboard, the dashboard and a text editor can all edit them.
 async function welcomeState({ schedule = false } = {}) {
   const { existing: cfgRaw, data: cfg } = await readConfigRaw();
   const criteria = parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {};
@@ -6221,18 +6221,18 @@ function welcomeProgress(key) {
     </div>`;
 }
 
-// "I would rather use the terminal" used to be a paragraph saying to run /onboard, which left the
+// "I would rather use the terminal" used to be a paragraph saying to run /jobseeker onboard, which left the
 // reader to work out what came after it. These are the commands, in the order they are meant to be
 // run, each one copyable — because a command you retype from a screenshot is a command you mistype.
 //
 // A modal rather than the .pop popover: this is a list to work through with a terminal open beside
 // it, not a one-line aside, and a popover closes the moment you click away to the terminal.
 const TERMINAL_STEPS = [
-  ["/onboard", "The same questions this wizard asks, in chat. Writes the same files."],
-  ["/parse-cv", "Reads templates/cv/*.pdf into data/profile.md, so roles are scored against you."],
-  ["/markets", "Researches and ranks the companies in each industry you named."],
-  ["/curate", "Finds live openings at those companies and scores them."],
-  ["/job-run", "The whole daily pipeline, whenever you want it. Queues approvals; sends nothing."],
+  ["/jobseeker onboard", "The same questions this wizard asks, in chat. Writes the same files."],
+  ["/jobseeker parse-cv", "Reads templates/cv/*.pdf into data/profile.md, so roles are scored against you."],
+  ["/jobseeker markets", "Researches and ranks the companies in each industry you named."],
+  ["/jobseeker curate", "Finds live openings at those companies and scores them."],
+  ["/jobseeker job-run", "The whole daily pipeline, whenever you want it. Queues approvals; sends nothing."],
 ];
 
 const COPY_GLYPH = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
@@ -6315,7 +6315,7 @@ function welcomeCVCard(st) {
   const running = st.cvStatus?.state === "running";
   const parsed = st.profileParsed;
   // A failure stands only while it is still the LATEST thing that happened to the CV. Nothing but
-  // scripts/parse-cv.sh writes this status file, so `/parse-cv` run from chat — or any other path
+  // scripts/parse-cv.sh writes this status file, so `/jobseeker parse-cv` run from chat — or any other path
   // that fills data/profile.md — leaves the old "failed" behind untouched. Checking the status
   // first meant a perfectly good profile was reported as unreadable for as long as the stale file
   // survived, and the reader's reasonable conclusion was that the CV step is broken.
@@ -7471,7 +7471,7 @@ async function criteriaImpact(nextMarkets) {
  *      rejected, because re-adding a vertical is not a statement about that specific job.
  *
  * Vendor discovery itself is not started here: finding companies for a market is a research pass
- * that costs real money and minutes (`/markets` → prioritization-agent), and silently spending that
+ * that costs real money and minutes (`/jobseeker markets` → prioritization-agent), and silently spending that
  * from a settings save would be a surprising thing for a form to do. The file and the restored
  * roles are the setup; the flash message names the command that fills it.
  */
@@ -7497,7 +7497,7 @@ async function setUpAddedMarkets(added, scaffold = added) {
         file,
         `# Market: ${name}\n\n` +
           "Maintained by the prioritization-agent. `tier` 1 = strongest fit. Ranked best-first.\n\n" +
-          `Created from the dashboard on ${today()}. Run \`/markets\` in Claude Code to research and rank vendors.\n\n` +
+          `Created from the dashboard on ${today()}. Run \`/jobseeker markets\` in Claude Code to research and rank vendors.\n\n` +
           "| company | tier | hq | why | careers_url | linkedin_url | last_reviewed | notes |\n" +
           "|---------|------|----|-----|-------------|--------------|---------------|-------|\n"
       );
@@ -7617,7 +7617,7 @@ async function handleSaveCriteria(form) {
   const wanted = marketList(form.markets ?? "");
   const setup = wanted.length ? await setUpAddedMarkets(added, wanted) : { created: [], restored: [] };
   if (setup.created.length) {
-    await logActivity("market-add", `Market file created for ${setup.created.join(", ")} — run /markets to research vendors`);
+    await logActivity("market-add", `Market file created for ${setup.created.join(", ")} — run /jobseeker markets to research vendors`);
   }
   if (setup.restored.length) {
     await logActivity("proposal-proposed", `${setup.restored.length} role(s) restored — market(s) re-added: ${added.join(", ")}`);
@@ -7627,7 +7627,7 @@ async function handleSaveCriteria(form) {
   // happened, which is why a second "Add market" button existed in the first place.
   const parts = [];
   // Plain text: the flash is rendered through esc(), so markup here would show as literal "<code>".
-  if (setup.created.length) parts.push(`${setup.created.join(", ")} added — run /markets in Claude Code to research vendors`);
+  if (setup.created.length) parts.push(`${setup.created.join(", ")} added — run /jobseeker markets in Claude Code to research vendors`);
   if (setup.restored.length) parts.push(`${setup.restored.length} previously dismissed role${setup.restored.length === 1 ? "" : "s"} restored`);
   if (impact.ids.length) parts.push(`${impact.ids.length} role${impact.ids.length === 1 ? "" : "s"} from ${impact.removed.join(", ")} dismissed`);
   return { ...impact, setup, flash: parts.length ? { kind: "ok", msg: `Criteria saved. ${parts.join(" · ")}.` } : null };
@@ -7996,7 +7996,7 @@ async function handlePickCV(form) {
   } catch (e) {
     return done({ kind: "bad", msg: `The CV could not be saved (${e.code || e.message}). Nothing changed.` });
   }
-  await logActivity("cv-upload", `Chose CV: templates/cv/${name} (run /parse-cv)`);
+  await logActivity("cv-upload", `Chose CV: templates/cv/${name} (run /jobseeker parse-cv)`);
 
   await snapshotProfile();
   platform.spawnScriptDetached("parse-cv");
@@ -8081,7 +8081,7 @@ async function handleUpdateNow(form) {
 //
 // Same spawn, lock and budget path as handleRunNow — deliberately, because it drives the same
 // serial Chrome. The differences are that it takes an argument and that nothing it starts can
-// submit anything: /apply-fill leaves a filled form in a tab and adds a task to finish it.
+// submit anything: /jobseeker apply-fill leaves a filled form in a tab and adds a task to finish it.
 async function handleApplyNow(form) {
   const id = String(form.id || "").trim();
   // Shape first, then existence on disk. This value came from a browser and ends up on a command
@@ -8193,7 +8193,7 @@ async function handleDecideApproval(form) {
 
   if (data.status === "rejected") return { kind: "ok", msg: `Rejected. Nothing was sent.` };
   if (!sendable) {
-    return { kind: "ok", msg: `Approved. Applications are submitted by the /apply session that opened this — nothing was sent from here.` };
+    return { kind: "ok", msg: `Approved. Applications are submitted by the /jobseeker apply session that opened this — nothing was sent from here.` };
   }
   dispatchApproval(id);
   return {
@@ -8321,7 +8321,7 @@ async function handleUploadCV(req, url) {
   await fs.mkdir(CV_DIR, { recursive: true });
   const dest = path.join(CV_DIR, name);
   await fs.writeFile(dest, buf);
-  await logActivity("cv-upload", `Uploaded CV: templates/cv/${name} (run /parse-cv)`);
+  await logActivity("cv-upload", `Uploaded CV: templates/cv/${name} (run /jobseeker parse-cv)`);
   return dest;
 }
 
@@ -8581,7 +8581,7 @@ const server = http.createServer(async (req, res) => {
         return res.end("Cross-site request rejected");
       }
       // Every mutation below shares data/ with record.mjs, which agents may be running right
-      // now (a scheduled /job-run writing while you click Advance). Take the same lock so the
+      // now (a scheduled /jobseeker job-run writing while you click Advance). Take the same lock so the
       // two never interleave a read-modify-write. GET is unlocked — a slightly stale render is
       // harmless, and blocking page loads behind a long agent run would not be.
       //

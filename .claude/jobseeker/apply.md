@@ -1,8 +1,3 @@
----
-description: Apply to a curated proposal via the browser, with your approval before submit. Usage — "/apply <proposal-id>" or "/apply <job-url>".
-argument-hint: "<proposal-id | job-url>"
----
-
 Apply to a job. Argument: `$ARGUMENTS`
 
 You orchestrate the human-in-the-loop application flow. **Nothing gets submitted without my explicit
@@ -13,7 +8,7 @@ approval in this session.**
    - If it's a URL, use it directly.
    - If empty, list the top few `data/proposals/*.md` by `priority` and ask me which to apply to.
    - Confirm `data/profile.md` is parsed (not the placeholder) and a `templates/cv/*.pdf` exists; if
-     not, tell me to run `/parse-cv` / upload a CV first.
+     not, tell me to run `/jobseeker parse-cv` / upload a CV first.
 2. **Fill.** Invoke the **application-agent** (Mode FILL) with the proposal/URL. It opens the posting
    in my Chrome, fills what it can, attaches my CV, and returns: the tab id, what it filled, a
    numbered list of questions needing my input, and an approval id. It does NOT submit.

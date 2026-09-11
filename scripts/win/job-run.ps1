@@ -1,7 +1,7 @@
 ﻿# Windows scheduler entrypoint for the daily job-search pipeline. Twin of scripts/job-run.sh —
 # change both together.
 #
-# Runs the /job-run slash command headless via the Claude Code CLI, from the repo root, so it has
+# Runs the /jobseeker job-run slash command headless via the Claude Code CLI, from the repo root, so it has
 # access to the local Markdown state, the agents in .claude/, and the connected MCP servers.
 # Invoked by Task Scheduler (see scripts/win/set-schedule.ps1 and docs/SCHEDULER.md).
 #
@@ -481,7 +481,7 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
     $DENIED = ""
     # -p runs a single prompt headlessly and exits. The pipeline queues approvals; it never
     # applies or sends on its own.
-    # Tells /job-run this is the scheduled run rather than a manual one, so the run-start row in
+    # Tells /jobseeker job-run this is the scheduled run rather than a manual one, so the run-start row in
     # the activity log says which.
     # --output-format json so the run's ACTUAL cost can be recorded. Previously the log printed
     # the budget LIMIT and never the spend, so "what is this costing me" had no answer and a
@@ -513,13 +513,13 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
       # refused, one at a time, and the run narrates its way to a clean exit 0 having done nothing.
       # See lib\claude-tools.ps1 for the list and why it is not a settings file.
       if (Test-ClaudePermsSupported $CLAUDE_BIN) {
-        $claudeArgs = @("-p", "/job-run", "--permission-mode", "acceptEdits",
+        $claudeArgs = @("-p", "/jobseeker job-run", "--permission-mode", "acceptEdits",
                         "--allowedTools", $ClaudeAllowedTools,
                         "--max-budget-usd", "$MAX_BUDGET_USD", "--output-format", "json")
       } else {
         Log "WARNING: this Claude CLI is too old to be told what it may do (no --permission-mode)."
         Log "         The run will be refused its own tools and produce nothing. Update the CLI."
-        $claudeArgs = @("-p", "/job-run", "--max-budget-usd", "$MAX_BUDGET_USD", "--output-format", "json")
+        $claudeArgs = @("-p", "/jobseeker job-run", "--max-budget-usd", "$MAX_BUDGET_USD", "--output-format", "json")
       }
       $rc = Invoke-WithTimeout -Seconds $TIMEOUT_SECS -FilePath $CLAUDE_BIN `
         -ArgumentList $claudeArgs `
@@ -618,7 +618,7 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
   # from a run that needed its retry, which is exactly the signal this file exists to carry.
   # The digest is the whole point of an unattended run, and its delivery has failed silently before
   # (the WhatsApp MCP server is stdio — every session spawns its own, and a second instance cannot
-  # claim a device link an orphaned one still holds). /job-run always writes the digest to
+  # claim a device link an orphaned one still holds). /jobseeker job-run always writes the digest to
   # data/.last-digest.md with a `delivered:` line, so a push failure degrades to a desktop
   # notification rather than to nothing at all.
   $DIGEST = Join-Path $LOG_DIR ".last-digest.md"

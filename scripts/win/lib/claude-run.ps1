@@ -385,8 +385,8 @@ function Invoke-Claude {
   if (-not $script:ClaudeBin) { $script:ClaudeBin = Resolve-ClaudeBin }
   if (-not $script:ClaudeBin) { $script:ClaudeBin = "claude" }
   # -p mode gives up on outstanding background subagents after ~10 minutes and ends the turn anyway,
-  # whatever --max-budget-usd says. A /markets pass fans out up to three prioritization-agents doing
-  # live web research, and /curate and /track fan out too — none of which reliably finish inside ten
+  # whatever --max-budget-usd says. A /jobseeker markets pass fans out up to three prioritization-agents doing
+  # live web research, and /jobseeker curate and /jobseeker track fan out too — none of which reliably finish inside ten
   # minutes. When the ceiling fires the work is abandoned, the files are never written, and the run
   # exits 0: the same silent nothing this whole file exists to stop.
   #

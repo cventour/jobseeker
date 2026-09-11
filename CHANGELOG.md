@@ -4,6 +4,14 @@ Every release, in plain language. Newest first.
 
 ---
 
+## Unreleased
+
+- One command for everything: `/jobseeker` followed by what you want. `/markets Fintech` is now `/jobseeker markets Fintech`, `/curate` is `/jobseeker curate`, `/job-run` is `/jobseeker job-run`, and so on for track, apply, apply-fill, followup, send-approval, onboard and parse-cv. The old names are gone. `/jobseeker` on its own lists them all and shows where your search stands.
+- Each part of JobSeeker now runs on the model it is set to, however you reach it. Reading your mail and chats, researching markets, closing finished tasks and checking the tracker use Claude Sonnet. Scoring roles, filling applications and writing messages in your voice use Claude Opus. Before, asking "jobseeker" to research a market ran it on whatever model your session was using.
+- "jobseeker" in plain English still answers what is due, adds tasks and marks things done. For anything bigger it now tells you which `/jobseeker` command to run instead of doing the work itself.
+
+---
+
 ## v0.7.6 — 11 September 2026
 
 - A run no longer fills Chrome with tabs. Reading forty careers pages opened forty tabs; it now opens one, moves that one from page to page, and closes it at the end. Looking through LinkedIn jobs and filling in an application work the same way: one tab, reused, closed when it is finished with.

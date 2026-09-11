@@ -1,8 +1,3 @@
----
-description: Send one message you have already approved. Usage — "/send-approval appr_xxxxxx". Refuses anything not already approved or edited.
-argument-hint: "<approval-id>"
----
-
 Send the approved message in `data/approvals/$ARGUMENTS.md`.
 
 This command exists so the dashboard can finish what it started: you press Approve there, and this
@@ -16,7 +11,7 @@ by you directly.
 3. **Stop if `dispatch:` is already `sent` or `running`.** The message has gone (or is going). Say
    so and stop.
 4. **Stop if `kind:` is `apply`.** An application is filled in a live browser session by
-   `/apply`; there is nothing here to send.
+   `/jobseeker apply`; there is nothing here to send.
 5. Otherwise invoke the **comms-agent** in SEND mode: `send $ARGUMENTS`. If `status:` is `edited`,
    the edited preview body is the text to send — that is the user's wording, not the draft's.
 6. Report in one line what happened: sent on WhatsApp / prepared as a Gmail draft / left for the

@@ -174,7 +174,7 @@ Full detail: [`PERMISSIONS.md`](PERMISSIONS.md).
 ## Repository layout
 
 ```
-.claude/            agents, slash commands, and AGENT-RULES.md (the normative rules)
+.claude/            agents, the /jobseeker command + its playbooks (jobseeker/), and AGENT-RULES.md
 config/             personal settings — gitignored, with a committed .example
 data/               the source of truth. Gitignored; data/.example/ ships as a sample
 docs/               this file and its siblings

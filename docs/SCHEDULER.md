@@ -1,7 +1,7 @@
 # Local scheduler — daily job-run
 
 The daily pipeline runs **locally on your own machine** — launchd on a Mac, Task Scheduler on
-Windows. It runs `/job-run` headless, which
+Windows. It runs `/jobseeker job-run` headless, which
 **tracks → prioritizes → curates → supervises → sends you a digest**. It **queues** anything
 needing approval — it never applies or sends on its own.
 
@@ -11,7 +11,7 @@ needing approval — it never applies or sends on its own.
 - ✅ **Prioritization + curation** (web research) and the **supervisor** audit — no session needed.
 - ✅ **Digest** to the log (and WhatsApp if the channel is reachable).
 - ❌ **`chat-tracker`** (WhatsApp Web + LinkedIn via Chrome) — needs your **visible, logged-in
-  Chrome**, so it does **not** run headless. Read those with an interactive `/track` when you're at
+  Chrome**, so it does **not** run headless. Read those with an interactive `/jobseeker track` when you're at
   your machine.
 
 ### Failure handling (built into `scripts/job-run.sh`, and its twin `scripts/win/job-run.ps1`)
@@ -208,6 +208,6 @@ Logs are the same as on macOS: `data/.job-run.log` and `data/.job-run.status.jso
 - A WhatsApp + chat **digest**: new proposals, follow-ups due, pending approvals, anything needing a
   decision.
 - On the dashboard (`npm run dashboard`): ranked proposals and due follow-ups waiting.
-- Then you act when ready: `/apply <proposal-id>` and `/followup` (both ask before doing anything).
+- Then you act when ready: `/jobseeker apply <proposal-id>` and `/jobseeker followup` (both ask before doing anything).
 
 Logs: `data/.job-run.log` (and `data/.launchd.*.log` on macOS). All gitignored.

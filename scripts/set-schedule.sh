@@ -3,7 +3,7 @@
 # Windows twin: scripts/win/set-schedule.ps1 — change both together.
 #
 # This exists because the schedule had a TRAP in it. config/job-seeker.config.md carried a
-# `schedule_job_run` cron expression, /onboard wrote it, and NOTHING READ IT -- the real schedule is
+# `schedule_job_run` cron expression, /jobseeker onboard wrote it, and NOTHING READ IT -- the real schedule is
 # StartCalendarInterval in the launchd plist. A user who set 09:00 still got 08:00, with no warning.
 # A settings form would make that worse, because a form looks authoritative in a way a config
 # comment does not. So there is now exactly one way to change the schedule, and it edits the plist.

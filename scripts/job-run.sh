@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local scheduler entrypoint for the daily job-search pipeline.
 # Windows twin: scripts/win/job-run.ps1 — change both together.
-# Runs the /job-run slash command headless via the Claude Code CLI, from the repo root, so it has
+# Runs the /jobseeker job-run slash command headless via the Claude Code CLI, from the repo root, so it has
 # access to the local Markdown state, the agents in .claude/, and the connected MCP servers.
 # Invoked by launchd/cron. See docs/SCHEDULER.md to install.
 #
@@ -340,7 +340,7 @@ write_status "running" 0 "in progress"
     : > "$DENIED_FILE"; DENIED=""
     # -p runs a single prompt headlessly and exits. The pipeline queues approvals; it never
     # applies or sends on its own.
-    # Tells /job-run this is the scheduled run rather than a manual one, so the run-start row in
+    # Tells /jobseeker job-run this is the scheduled run rather than a manual one, so the run-start row in
     # the activity log says which.
       # --output-format json so the run's ACTUAL cost can be recorded. Previously the log printed
       # the budget LIMIT and never the spend, so "what is this costing me" had no answer and a
@@ -367,7 +367,7 @@ write_status "running" 0 "in progress"
       # die to this script's own budget, not to an internal default with no relation to it.
       if claude_perms_supported; then
         JOBRUN_SOURCE=scheduled CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
-          run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
+          run_with_timeout "$TIMEOUT_SECS" claude -p "/jobseeker job-run" \
             --permission-mode acceptEdits --allowedTools "$CLAUDE_ALLOWED_TOOLS" \
             --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP"
         rc=$?
@@ -375,7 +375,7 @@ write_status "running" 0 "in progress"
         echo "WARNING: this Claude CLI is too old to be told what it may do (no --permission-mode)."
         echo "         The run will be refused its own tools and produce nothing. Update the CLI."
         JOBRUN_SOURCE=scheduled CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
-          run_with_timeout "$TIMEOUT_SECS" claude -p "/job-run" \
+          run_with_timeout "$TIMEOUT_SECS" claude -p "/jobseeker job-run" \
             --max-budget-usd "$MAX_BUDGET_USD" --output-format json > "$RESP"
         rc=$?
       fi
@@ -456,7 +456,7 @@ write_status "running" 0 "in progress"
   # from a run that needed its retry, which is exactly the signal this file exists to carry.
   # The digest is the whole point of an unattended run, and its delivery has failed silently before
   # (the WhatsApp MCP server is stdio — every session spawns its own, and a second instance cannot
-  # claim a device link an orphaned one still holds). /job-run always writes the digest to
+  # claim a device link an orphaned one still holds). /jobseeker job-run always writes the digest to
   # data/.last-digest.md with a `delivered:` line, so a push failure degrades to a desktop
   # notification rather than to nothing at all.
   DIGEST="$LOG_DIR/.last-digest.md"

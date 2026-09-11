@@ -199,10 +199,11 @@ say ""
 say "--- project commands the CLI needs to find ---"
 if [ -d "$REPO/.claude/commands" ]; then
   say ".claude/commands: $(ls "$REPO/.claude/commands" 2>/dev/null | tr '\n' ' ')"
-  [ -f "$REPO/.claude/commands/parse-cv.md" ] && say "parse-cv.md: present" || say "parse-cv.md: MISSING — /parse-cv would fail as 'Unknown command'"
+  [ -f "$REPO/.claude/commands/jobseeker.md" ] && say "jobseeker.md: present" || say "jobseeker.md: MISSING — every /jobseeker <subcommand> would fail as 'Unknown command'"
+  [ -f "$REPO/.claude/jobseeker/parse-cv.md" ] && say "jobseeker/parse-cv.md: present" || say "jobseeker/parse-cv.md: MISSING — /jobseeker parse-cv would have no playbook to follow"
 else
   say ".claude/commands: MISSING ENTIRELY."
-  say "Every slash command (/parse-cv, /job-run, /curate) would fail as 'Unknown command', and the"
+  say "Every slash command (/jobseeker parse-cv, /jobseeker job-run, /jobseeker curate) would fail as 'Unknown command', and the"
   say "CV step would report 'Nothing could be read' no matter how good the PDF is."
 fi
 [ -f "$REPO/CLAUDE.md" ] && say "CLAUDE.md: present" || say "CLAUDE.md: missing"

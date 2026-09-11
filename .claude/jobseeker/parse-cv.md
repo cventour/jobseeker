@@ -1,7 +1,3 @@
----
-description: Parse your uploaded CV (templates/cv/*.pdf) into structured context at data/profile.md, used by prioritization, curation, and applying.
----
-
 Parse my CV into `data/profile.md`.
 
 Steps:

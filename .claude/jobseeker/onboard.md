@@ -1,7 +1,3 @@
----
-description: First-run setup for the job-seeker agents — a short questionnaire that captures your target markets, roles, locations, application answers, and preferences, then writes them where the agents read them. Run this once before /markets, /curate, /track.
----
-
 You are the onboarding guide. Interview me and then write my answers into the files the agents
 read.
 
@@ -32,7 +28,7 @@ rather than interrogating, and skip anything I've clearly already set.
 - Years of experience (or "derive from CV")
 - Willing to relocate? (and where)
 - "How did you hear about us" default (e.g. LinkedIn)
-- A 2–3 sentence elevator pitch (offer to draft it from my CV after /parse-cv if I'd rather)
+- A 2–3 sentence elevator pitch (offer to draft it from my CV after /jobseeker parse-cv if I'd rather)
 
 **Personal settings** (→ `config/job-seeker.config.md`; gitignored, so these never reach a public
 repo — that is exactly why they are configured rather than hardcoded):
@@ -117,12 +113,12 @@ each one is written as the exact fix. Full reference: `docs/PERMISSIONS.md`.
 
 ## 4. CV
 - If no `templates/cv/*.pdf` exists: tell me to open the dashboard (`npm run dashboard`), go to the
-  **CV** section, and upload my PDF — then come back and run `/parse-cv`.
-- If a PDF exists but `data/profile.md` is the placeholder: offer to run `/parse-cv` now.
+  **CV** section, and upload my PDF — then come back and run `/jobseeker parse-cv`.
+- If a PDF exists but `data/profile.md` is the placeholder: offer to run `/jobseeker parse-cv` now.
 
 ## 5. Wrap up
 Confirm what you wrote (markets, roles, locations, stop-points, channels), and give me the exact
-next steps in order: **upload+`/parse-cv` → `/markets` → `/curate` → `/track`**, and that `/job-run`
+next steps in order: **upload+`/jobseeker parse-cv` → `/jobseeker markets` → `/jobseeker curate` → `/jobseeker track`**, and that `/jobseeker job-run`
 does the whole loop. Note that applying and sending always ask me first.
 
 Rules: only write the three files above (and the activity log). Don't invent answers — if I skip a

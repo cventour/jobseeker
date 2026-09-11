@@ -28,10 +28,10 @@ STATUS="$REPO/data/.run-now.status.json"
 # and the spend caps — because it drives Chrome like the others, and two agents in the same browser
 # read each other's tabs (AGENT-RULES §13).
 case "$SLUG" in
-  job-run)  PROMPT="/job-run"; LABEL="Full daily run";        DEFAULT_BUDGET=5 ;;
-  track)    PROMPT="/track";   LABEL="Read my channels";      DEFAULT_BUDGET=3 ;;
-  curate)   PROMPT="/curate";  LABEL="Find new roles";        DEFAULT_BUDGET=3 ;;
-  followup) PROMPT="/followup";LABEL="Draft due follow-ups";  DEFAULT_BUDGET=2 ;;
+  job-run)  PROMPT="/jobseeker job-run"; LABEL="Full daily run";        DEFAULT_BUDGET=5 ;;
+  track)    PROMPT="/jobseeker track";   LABEL="Read my channels";      DEFAULT_BUDGET=3 ;;
+  curate)   PROMPT="/jobseeker curate";  LABEL="Find new roles";        DEFAULT_BUDGET=3 ;;
+  followup) PROMPT="/jobseeker followup";LABEL="Draft due follow-ups";  DEFAULT_BUDGET=2 ;;
   apply)
     # The id reaches this from a web form, and it is about to be interpolated into a prompt. An
     # allow-list on the SHAPE, checked again here rather than trusted from the caller.
@@ -43,7 +43,7 @@ case "$SLUG" in
       echo "no such proposal: $TARGET" >&2
       exit 66
     fi
-    PROMPT="/apply-fill $TARGET"; LABEL="Fill an application"; DEFAULT_BUDGET=3 ;;
+    PROMPT="/jobseeker apply-fill $TARGET"; LABEL="Fill an application"; DEFAULT_BUDGET=3 ;;
   *)
     echo "usage: run-now.sh <job-run|track|curate|followup|apply <proposal-id>>" >&2
     exit 64 ;;

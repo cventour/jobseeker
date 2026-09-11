@@ -92,7 +92,7 @@ try {
   # reason a run failed is in what claude said, and the message the dashboard shows is built from it.
   $before = 0
   if (Test-Path $Log) { $before = @(Get-Content $Log -ErrorAction SilentlyContinue).Count }
-  $rc = Invoke-ClaudeRun "/markets $Market" $Budget "market research: $Market"
+  $rc = Invoke-ClaudeRun "/jobseeker markets $Market" $Budget "market research: $Market"
   $runOut = ""
   if (Test-Path $Log) {
     $runOut = (@(Get-Content $Log -ErrorAction SilentlyContinue) | Select-Object -Skip $before) -join "`n"

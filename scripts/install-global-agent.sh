@@ -14,7 +14,7 @@
 #     such calls — so verbatim copies would load in every project and work in none of them;
 #   * copies go stale: the project files update with `git pull` or a release unzip, and a snapshot
 #     in ~/.claude would keep executing last month's rules against this month's data;
-#   * eight of the nine are specialists that /job-run fans out inside a repo session. Installed
+#   * eight of the nine are specialists that /jobseeker job-run fans out inside a repo session. Installed
 #     globally they would appear in the agent list of every unrelated project as noise.
 # The shim never goes stale because it contains no procedure — only the address of the install and
 # the instruction to read the live playbooks there.
@@ -48,7 +48,7 @@ mkdir -p "$HOME/.claude/agents"
 cat > "$DEST.tmp" <<AGENT
 ---
 name: jobseeker
-description: The single front door for ALL job-search tasks — address it as "@jobseeker" or "jobseeker" from any directory. Check Gmail/WhatsApp/LinkedIn for updates, find/curate roles, research markets, prep an application, draft a follow-up, reconcile tasks, or answer "what's my pipeline / what's due". Defers to the JobSeeker install's own playbooks.
+description: The conversational front door for the job search — address it as "@jobseeker" or "jobseeker" from any directory. Answers "what's my pipeline / what's due", adds tasks, marks things done; for specialist work (email/WhatsApp/LinkedIn, roles, markets, apply, follow up) it names the "/jobseeker <subcommand>" to run in the JobSeeker folder. Defers to the JobSeeker install's own playbooks.
 ---
 
 <!-- $MARKER
@@ -65,7 +65,7 @@ Rules, in order:
    absolute paths under it. The playbooks you are about to read use relative paths (\`data/...\`,
    \`node server/record.mjs\`) and every one of them assumes that cwd.
 2. **Read \`$REPO/.claude/agents/jobseeker.md\` and follow it exactly** — it is the live front-door
-   playbook, including the table mapping each kind of request to a specialist playbook, and the
+   playbook, including the table mapping each kind of request to a \`/jobseeker\` subcommand, and the
    rules file \`$REPO/.claude/AGENT-RULES.md\` it binds you to. Do not act from memory of what those
    files might say; they change with every release and this shim deliberately contains no
    procedure of its own.

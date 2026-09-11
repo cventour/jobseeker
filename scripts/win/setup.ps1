@@ -277,7 +277,7 @@ if ($showed.ExitCode -eq 0 -and $showed.Out -and $showed.Out.Trim() -ne "not sch
   Say ""
   Write-Host "  How do you want to run it?" -ForegroundColor White
   Say ""
-  Say "    Manually  — you run /job-run in Claude Code when you want it. Nothing runs on its own."
+  Say "    Manually  — you run /jobseeker job-run in Claude Code when you want it. Nothing runs on its own."
   Say "                Needs no scheduled task."
   Say "    Scheduled — it runs itself at 08:00 and sends you a summary. Adds one Task Scheduler"
   Say "                task so it can work while you are away."
@@ -548,7 +548,7 @@ if ($Dry) {
   Say " Nothing was changed. Run without --dry-run to apply."
 } elseif ($Gaps.Count -eq 0 -and $BrowserOk) {
   Write-Host "Ready." -ForegroundColor Green -NoNewline
-  Say " Next: run claude, then /onboard to set your targets and CV."
+  Say " Next: run claude, then /jobseeker onboard to set your targets and CV."
 } else {
   Write-Host "Set up, with gaps:" -ForegroundColor Yellow
   foreach ($g in $Gaps) { if ($g) { Say ("  - " + $g) } }

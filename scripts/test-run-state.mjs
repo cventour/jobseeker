@@ -114,7 +114,7 @@ async function seedRun(dir, { canRead, digest, exitCode = 0, boards = 0 }) {
     "# Boards\n\n| company | access | careers_url | last_verified | dismissed |\n|---|---|---|---|---|\n" + rows.join("\n") + "\n");
 
   await fs.rm(path.join(dir, "data", ".last-digest.md"), { force: true });
-  // The stub claude writes the digest, exactly as the real /job-run does — so "no digest" is a
+  // The stub claude writes the digest, exactly as the real /jobseeker job-run does — so "no digest" is a
   // genuine absence rather than a file the harness forgot to create.
   const bashStub = digest === null
     ? `#!/bin/bash\nprintf '{"result":"no digest","total_cost_usd":0}\\n'\nexit ${exitCode}\n`

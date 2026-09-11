@@ -651,7 +651,7 @@ function onQueueEmpty() {
 //   * `welcome_done:`  the wizard was finished,
 //   * `welcome_left:`  the user walked out of it deliberately,
 //   * markets or roles in data/criteria.md — an install from BEFORE the wizard existed, or one set
-//     up with /onboard in the terminal.
+//     up with /jobseeker onboard in the terminal.
 function setupFinished() {
   const cfg = readFileSafe(path.join(REPO, "config", "job-seeker.config.md"));
   if (/^welcome_(done|left):[ \t]*\S/m.test(cfg)) return true;

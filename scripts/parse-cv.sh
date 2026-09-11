@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read the newest uploaded CV into data/profile.md, by running /parse-cv headlessly.
+# Read the newest uploaded CV into data/profile.md, by running /jobseeker parse-cv headlessly.
 # Windows twin: scripts/win/parse-cv.ps1 — change both together.
 #
 #   bash scripts/parse-cv.sh
@@ -61,7 +61,7 @@ write_status "running" "reading $CV"
 
   # Deliberately NOT under the run lock. Reading a CV touches no browser and no channel, it is the
   # one thing the wizard needs to overlap with everything else, and blocking it behind a 40-minute
-  # /job-run would strand someone on step 2 with no explanation.
+  # /jobseeker job-run would strand someone on step 2 with no explanation.
   # Captured as well as logged, because the reason a run failed is in what claude said and the
   # message the wizard shows has to be built from it. Without this the only signal is the exit
   # code, and every non-zero exit was reported to the user as "your PDF is probably a scan".
@@ -69,7 +69,7 @@ write_status "running" "reading $CV"
   # a subshell whose variables die with it — the one fact worth reporting would be the one thrown
   # away. Redirect, then print, which lands in the same log either way.
   RUNLOG="$(mktemp)"
-  run_claude "/parse-cv" "$(run_budget 1)" "parse CV" > "$RUNLOG" 2>&1
+  run_claude "/jobseeker parse-cv" "$(run_budget 1)" "parse CV" > "$RUNLOG" 2>&1
   rc=$?
   cat "$RUNLOG"
 

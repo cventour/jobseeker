@@ -99,7 +99,7 @@ $Url = "http://127.0.0.1:$Port/"
 #   * `welcome_done:`  the wizard was finished,
 #   * `welcome_left:`  the user walked out of it deliberately,
 #   * markets or roles in data\criteria.md -- an install from before the wizard existed, or one set
-#     up with /onboard in the terminal. That is the case that matters: an established install has
+#     up with /jobseeker onboard in the terminal. That is the case that matters: an established install has
 #     none of the wizard's bookkeeping and must not be dragged back through setup.
 function Setup-Finished([string]$cfg) {
   if ($cfg -match '(?m)^welcome_(done|left):[ \t]*\S') { return $true }

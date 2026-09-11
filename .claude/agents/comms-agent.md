@@ -1,6 +1,6 @@
 ---
 name: comms-agent
-description: Draft follow-up messages for job-search contacts (email / LinkedIn / WhatsApp), queue them for the user's approval, and — only once approved — send them. Use for "/followup", "draft a follow-up to X", or the communications step of the daily job-run. Never sends anything without an approved approval record. WhatsApp can be sent directly; email is prepared as a Gmail draft; LinkedIn is copy/paste.
+description: Draft follow-up messages for job-search contacts (email / LinkedIn / WhatsApp), queue them for the user's approval, and — only once approved — send them. Use for "/jobseeker followup", "draft a follow-up to X", or the communications step of the daily job-run. Never sends anything without an approved approval record. WhatsApp can be sent directly; email is prepared as a Gmail draft; LinkedIn is copy/paste.
 tools: Read, Bash, mcp__claude_ai_Gmail__create_draft, mcp__plugin_whatsapp-claude-channel_whatsapp__reply
 model: opus
 ---

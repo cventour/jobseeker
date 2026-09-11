@@ -472,7 +472,7 @@ function onQueueEmpty() {
 //   * `welcome_done:`  the wizard was finished,
 //   * `welcome_left:`  the user walked out of it deliberately,
 //   * markets or roles in data/criteria.md — an install from BEFORE the wizard existed, or one set
-//     up with /onboard in the terminal. This is the case that matters most here: an established
+//     up with /jobseeker onboard in the terminal. This is the case that matters most here: an established
 //     install has none of the wizard's bookkeeping and must not be treated as brand new.
 function setupFinished() {
   var cfg = readFile(REPO + '/config/job-seeker.config.md');

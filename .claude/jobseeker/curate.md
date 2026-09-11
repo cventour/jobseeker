@@ -1,8 +1,3 @@
----
-description: Find live openings at your prioritized companies and write ranked proposals (runs role-scout, fanned out per market).
-argument-hint: "[market name]"
----
-
 Find roles I can apply to. Arguments: `$ARGUMENTS`
 
 Search strategy (role-scout follows this): **LinkedIn first**, using my Chrome + my saved LinkedIn
@@ -13,7 +8,7 @@ or Playwright — NOT my Chrome session**. Do the vendor-site pass **whenever I 
 Steps:
 1. `cat data/criteria.md` and `ls data/markets/*.md`.
    - If `$ARGUMENTS` names a market, scope to that one.
-   - If `data/profile.md` is still the placeholder, warn me CV-match will be 0 until `/parse-cv`, but proceed.
+   - If `data/profile.md` is still the placeholder, warn me CV-match will be 0 until `/jobseeker parse-cv`, but proceed.
 2. **LinkedIn-first pass — ONE agent, run serially** (interactive): a single `role-scout` reads my
    LinkedIn recommended/for-you jobs and searches my target roles/locations in Chrome (read-only).
    Do **not** fan this pass out per market — Chrome is a serial resource (AGENT-RULES §13), and one
@@ -34,4 +29,4 @@ Steps:
    priority) and the total count, and note that they're on the dashboard (Curated proposals) for
    me to review and approve. Say explicitly if any market was skipped or a scout bailed.
 
-Do not apply to anything — this only proposes. Applying happens later via `/apply` with my approval.
+Do not apply to anything — this only proposes. Applying happens later via `/jobseeker apply` with my approval.
