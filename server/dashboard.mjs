@@ -10,6 +10,7 @@ import { promises as fs, default as fsSync } from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createHash } from "crypto";
 import * as platform from "./platform.mjs";
 import {
   parseFrontmatter,
@@ -54,6 +55,39 @@ const DATA = process.env.JOBSEEKER_DATA_DIR
 const CONFIG = path.join(ROOT, "config", "job-seeker.config.md");
 const CV_DIR = path.join(ROOT, "templates", "cv");
 const PUBLIC = path.join(ROOT, "public");
+
+// Which build of the dashboard THIS process is serving: a fingerprint of the server code and
+// package.json, taken once, at start-up. It has to be taken here and not on request -- an update
+// replaces these files on disk while an old process may still be running, and a fingerprint read
+// later would describe the new files while the process serves the old code. The version number is
+// not enough on its own: main moves between releases without it changing.
+//
+// Every page carries the fingerprint it was rendered with, and the page's poll compares it with
+// this one (see /run-state and the poll in JS). A window left open across an update -- the
+// installer or the Update button restarts the server, the old window stays open -- notices the
+// mismatch and reloads, rather than showing the previous version until someone thinks to.
+const BUILD_ID = await (async () => {
+  const h = createHash("sha1");
+  try {
+    const dir = path.join(ROOT, "server");
+    for (const f of (await fs.readdir(dir)).filter((n) => n.endsWith(".mjs")).sort()) {
+      h.update(f);
+      h.update(await fs.readFile(path.join(dir, f)));
+    }
+    h.update(await fs.readFile(path.join(ROOT, "package.json")));
+  } catch {
+    // Unreadable is not fatal: a per-process value means every restart reads as a new build, which
+    // costs one extra reload and never a stale page.
+    h.update(`${process.pid}:${Date.now()}`);
+  }
+  return h.digest("hex").slice(0, 12);
+})();
+
+// Every HTML page goes out uncacheable. The page is rendered from data/ on every request, so a
+// stored copy is always a wrong one -- and after an update it is the previous version's page,
+// served by the browser without asking. no-store also keeps pages out of the back/forward cache,
+// which would otherwise restore a pre-update page, script and all.
+const HTML_HEADERS = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" };
 
 // The Chrome-extension bridge (server/bridge.mjs) is how Windows reaches the browser: there is no
 // Apple Events / launchd broker to lean on, so a small extension talks to this server over
@@ -4729,6 +4763,11 @@ const JS = `${VIEWPORT_JS}
      watching for a run someone ELSE started: the 08:00 schedule, another tab, the terminal. */
   (function(){
     var seen = null, timer = 0;
+    /* The build that rendered THIS page, fixed into it by the server. Compared on every poll with the
+       build the server is running now. It is baked in rather than taken from the first poll, because
+       a server swapped before that first poll would otherwise become the baseline, and the page
+       rendered by the old one would never learn it is stale. */
+    var BUILD = ${JSON.stringify(BUILD_ID)};
     function busyNow(){ return !!document.querySelector('[data-busy]'); }
     /* Never yank the page out from under a hand. A reload mid-sentence loses what was typed, and a
        reload under an open dialog loses the decision being made -- so it waits for a quiet moment,
@@ -4748,6 +4787,19 @@ const JS = `${VIEWPORT_JS}
         .then(function(r){ return r.ok ? r.json() : null; })
         .then(function(d){
           if (!d) return;
+          /* A different build is answering: this page is left over from before an update. Reload for
+             the new one -- at a quiet moment, like any other reload here. The session note stops a
+             loop if something between here and the server keeps handing back the old page. */
+          if (d.build && d.build !== BUILD) {
+            var tried = '';
+            try { tried = sessionStorage.getItem('js_build_reload') || ''; } catch(e){}
+            if (tried !== d.build && !occupied()) {
+              try { sessionStorage.setItem('js_build_reload', d.build); } catch(e){}
+              keepPlace();
+              location.reload();
+            }
+            return;
+          }
           /* A version this page has never heard of is a change worth reloading for, the same as a
              run finishing: the reload is what puts the dialog in front of the user. */
           var now = (d.running ? d.running.slug + '@' + d.running.started : '') + '|' + (d.finished || '') +
@@ -4769,6 +4821,13 @@ const JS = `${VIEWPORT_JS}
     /* A hidden tab costs the user nothing to leave open, and should cost the server nothing either. */
     document.addEventListener('visibilitychange', function(){
       if (!document.hidden) { clearTimeout(timer); timer = setTimeout(tick, 400); }
+    });
+    /* An app window that never goes hidden -- the Edge window on Windows, the Mac app -- is exactly
+       the one left open across an update. Coming back to it is the moment to ask, not up to 30
+       seconds later. pageshow covers a page restored from the back/forward cache. */
+    window.addEventListener('focus', function(){ clearTimeout(timer); timer = setTimeout(tick, 400); });
+    window.addEventListener('pageshow', function(e){
+      if (e.persisted) { clearTimeout(timer); timer = setTimeout(tick, 100); }
     });
     schedule();
   })();
@@ -8603,7 +8662,7 @@ const server = http.createServer(async (req, res) => {
       const flash = url.searchParams.get("flash")
         ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
         : null;
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.writeHead(200, HTML_HEADERS);
       return res.end(welcomePage(st, key, flash));
     }
     // One step, on its own, for changing something long after setup.
@@ -8626,7 +8685,7 @@ const server = http.createServer(async (req, res) => {
       const flash = url.searchParams.get("flash")
         ? { kind: url.searchParams.get("flash"), msg: url.searchParams.get("msg") || "" }
         : null;
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.writeHead(200, HTML_HEADERS);
       return res.end(welcomeStandalonePage(st, want, back, flash));
     }
     // Is anything running, and what finished last? Deliberately tiny and uncached: the page polls
@@ -8654,6 +8713,7 @@ const server = http.createServer(async (req, res) => {
           running: live ? { slug: live.slug, started: live.started } : null,
           finished: last?.finished || "",
           update: upd?.available && !answered ? upd.latest : "",
+          build: BUILD_ID,
         })
       );
     }
@@ -8712,7 +8772,7 @@ const server = http.createServer(async (req, res) => {
       const forceUpdate = url.searchParams.get("upd") === "1";
       const html =
         url.pathname === "/settings" ? settingsPage(all, flash, forceUpdate) : page(all, flash, forceUpdate);
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.writeHead(200, HTML_HEADERS);
       res.end(html);
       return;
     }
