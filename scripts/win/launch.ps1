@@ -11,7 +11,9 @@
 #   1. which port                    (config\job-seeker.config.md, default 4319)
 #   2. is this a first run?          (the same three tests the dashboard's needsWelcome() uses)
 #   3. is our dashboard up already?  (/_whoami, and it must say OUR repo)
-#   4. open the window
+#   4. open the window -- or bring back the one already open. One JobSeeker window, never one per
+#      launch: see step 4. The Mac twin has nothing to match here, because there the app IS the
+#      window and macOS already refuses to open a second copy of an app.
 #
 #   powershell -File scripts\win\launch.ps1
 #
@@ -157,6 +159,7 @@ function Normalize-Path([string]$p) {
 $Mine = Normalize-Path $Repo
 $Who = Get-Whoami $Port
 
+$StartedHere = $false
 if ($null -ne $Who) {
   if ((Normalize-Path $Who) -ieq $Mine) {
     Write-Host "JobSeeker is already running; opening it."
@@ -204,6 +207,7 @@ if ($null -ne $Who) {
     Stop-Visibly "JobSeeker started but did not finish opening.`n`nOpen it again. If it keeps happening, run `"npm run diagnose`" in the JobSeeker folder and send the file it saves to your Downloads."
   }
   Write-Host "JobSeeker is running."
+  $StartedHere = $true
 }
 
 # ---------------------------------------------------------------- 4. the window
@@ -233,6 +237,133 @@ function Find-App([string]$exe, [string[]]$fallbacks) {
 if ($NoWindow) {
   Write-Host "not opening a window (JOBSEEKER_NO_WINDOW=1) — JobSeeker is at $Url"
   exit 0
+}
+
+# One JobSeeker window, not one per launch.
+#
+# Every launch used to open a fresh --app window, whatever was already on screen. Clicking the
+# shortcut twice gave two windows; worse, an update -- the installer, or the Update button, both of
+# which end here -- restarted the server and opened a new window BESIDE the old one, and the old one
+# went on showing the previous version.
+#
+# So which window to show depends on who started the server:
+#   * The server was already up: whatever JobSeeker window is open was drawn by this same server, so
+#     it is current. Bring it to the front and open nothing.
+#   * This launch started the server: any JobSeeker window still on screen was drawn by a server that
+#     no longer exists -- the build before an update, or a server that stopped. It is stale by
+#     definition, so it is closed, and the fresh window below replaces it. That also covers windows
+#     from builds too old to reload themselves, which a page-side fix alone cannot.
+#
+# A JobSeeker window is found by its title, and only among Edge and Chrome windows. An --app window's
+# title is exactly the page's <title> (measured on Edge, Windows 11), while an ordinary browser window
+# always appends the browser's name -- so a tab that merely shows a JobSeeker page never matches, and
+# nothing but JobSeeker's own window is ever closed. The titles are the dashboard's own <title>s:
+# Dashboard, Settings, the setup wizard, a single setup step ("<step> — JobSeeker"), and the Windows
+# setup window. The dash is written as [char]0x2014 so this file's encoding can never change it.
+$Dash = [char]0x2014
+$JsTitles = @("Job Seeker $Dash Dashboard", "Settings $Dash Job Seeker", "Welcome to JobSeeker", "JobSeeker Setup")
+$JsSuffix = " $Dash JobSeeker"
+
+$WinApi = @"
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class JobSeekerWindows {
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+
+  public class Win { public IntPtr Handle; public uint Pid; public string Title; }
+
+  // Visible top-level Chromium windows (Edge and Chrome share the class), front to back.
+  public static List<Win> Chromium() {
+    var found = new List<Win>();
+    EnumWindows(delegate (IntPtr h, IntPtr l) {
+      if (!IsWindowVisible(h)) return true;
+      var c = new StringBuilder(64);
+      GetClassName(h, c, 64);
+      if (c.ToString() != "Chrome_WidgetWin_1") return true;
+      var t = new StringBuilder(512);
+      GetWindowText(h, t, 512);
+      if (t.Length == 0) return true;
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      found.Add(new Win { Handle = h, Pid = pid, Title = t.ToString() });
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+
+  // Windows only lets the process the user just clicked take the foreground; a script started by a
+  // shortcut usually qualifies, one started by an update may not. When the plain call is refused,
+  // borrowing the foreground window's input queue for a moment is the documented way through, and
+  // the worst case is the taskbar button flashing -- never a second window.
+  public static bool Focus(IntPtr h) {
+    if (IsIconic(h)) ShowWindow(h, 9); // SW_RESTORE
+    if (SetForegroundWindow(h) && GetForegroundWindow() == h) return true;
+    uint fgPid;
+    uint fg = GetWindowThreadProcessId(GetForegroundWindow(), out fgPid);
+    uint me = GetCurrentThreadId();
+    bool attached = fg != 0 && fg != me && AttachThreadInput(me, fg, true);
+    BringWindowToTop(h);
+    SetForegroundWindow(h);
+    if (attached) AttachThreadInput(me, fg, false);
+    return GetForegroundWindow() == h;
+  }
+
+  // WM_CLOSE: the same as clicking the window's X. The page gets its normal unload, nothing is killed.
+  public static void Close(IntPtr h) { PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero); }
+}
+"@
+
+function Find-JobSeekerWindows {
+  if (-not ("JobSeekerWindows" -as [type])) { Add-Type -TypeDefinition $WinApi -ErrorAction Stop }
+  $found = @()
+  foreach ($w in [JobSeekerWindows]::Chromium()) {
+    $t = $w.Title
+    if (-not (($JsTitles -contains $t) -or $t.EndsWith($JsSuffix))) { continue }
+    $p = Get-Process -Id $w.Pid -ErrorAction SilentlyContinue
+    if (-not $p -or ($p.ProcessName -notin @("msedge", "chrome"))) { continue }
+    $found += $w
+  }
+  return ,$found
+}
+
+# Looking for the window must never be the reason JobSeeker does not open: if any of this fails, it
+# says so and falls through to opening a new window, exactly as before.
+if ($OnWindows) {
+  try {
+    $open = Find-JobSeekerWindows
+    if ($StartedHere) {
+      foreach ($w in $open) { [JobSeekerWindows]::Close($w.Handle) }
+      if ($open.Count -gt 0) {
+        Write-Host ("closed {0} JobSeeker window(s) left over from before this start" -f $open.Count)
+        # Let Edge finish closing before it is asked for a new window, so the two do not race.
+        Start-Sleep -Milliseconds 700
+      }
+    } elseif ($open.Count -gt 0) {
+      if ([JobSeekerWindows]::Focus($open[0].Handle)) {
+        Write-Host "JobSeeker's window is already open; brought it to the front."
+      } else {
+        Write-Host "JobSeeker's window is already open; Windows would not bring it forward, so its taskbar button is flashing."
+      }
+      exit 0
+    }
+  } catch {
+    Write-Err "could not look for an open JobSeeker window ($($_.Exception.Message)); opening a new one"
+  }
 }
 
 $edge = Find-App "msedge.exe" @(
