@@ -273,13 +273,16 @@ async function main() {
   // told what it may do, and a stub that says nothing is correctly treated as one that cannot.
   const HELP_SH = `if [ "$1" = "--help" ]; then echo '  --allowedTools <tools...>'; echo '  --permission-mode <mode>'; exit 0; fi\n`;
   const HELP_CMD = 'if "%1"=="--help" (echo   --allowedTools ^<tools...^>& echo   --permission-mode ^<mode^>& exit /b 0)\r\n';
+  await fs.writeFile(path.join(dir, "bin", "row.txt"), ROW.replace(/\n$/, "\r\n"));
   const writesRows = `#!/bin/bash\n${HELP_SH}printf '%s' '${ROW.trim()}' >> data/markets/fintech.md\nprintf '\\n' >> data/markets/fintech.md\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`;
   await writeStub(dir, "claude", writesRows,
-    // cmd reads every | as a pipe, so the row is escaped with ^| there -- unescaped, `echo | Acme |
-    // ...` piped nothing into a command called Acme and the "worked" pass wrote no row on Windows.
-    `@echo off\r\n${HELP_CMD}echo ${ROW.trim().replace(/\|/g, "^|")}>> data\\markets\\fintech.md\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
+    // The Windows stub copies a row file the test writes, rather than echoing the row: cmd reads every
+    // | as a pipe, and escaping them with ^| still left the "worked" pass writing no row on Windows.
+    // `type` of a file has nothing on its command line for cmd to reinterpret. %~dp0 is the stub's
+    // own directory, bin\ -- outside data/markets, so the row file is never mistaken for a market.
+    `@echo off\r\n${HELP_CMD}type "%~dp0row.txt" >> data\\markets\\fintech.md\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
   let mk = await researchWith();
-  check(mk.state === "ok", "a research pass that worked says so", mk.state);
+  check(mk.state === "ok", "a research pass that worked says so", mk.detail ? `${mk.state} — ${mk.detail}` : mk.state);
   check(mk.market === "Fintech", "…and names the market it was asked for", mk.market);
 
   // The regression that made "markets scan does not work" unanswerable: the run finishes clean and
