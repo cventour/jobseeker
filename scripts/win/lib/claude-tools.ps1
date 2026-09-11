@@ -105,7 +105,15 @@ function Get-DeniedTools {
     process.stdout.write(names.join(", "));
 
 '@
-  try { return ((& $node "-e" $snippet $ResponseFile 2>$null | Out-String).Trim()) } catch { return "" }
+  # The code travels in an environment variable, never on the command line: Windows PowerShell 5.1
+  # mangles double quotes inside native arguments, and this snippet is made of them. Passed directly,
+  # node received broken JavaScript, printed nothing, and every refused tool went unreported on
+  # Windows -- found only once the Windows suite could run this far. Same transport as
+  # Invoke-Node -Snippet in claude-run.ps1; process.argv[1] is still the response file.
+  $env:JOBSEEKER_NODE_SNIPPET = $snippet
+  try { return ((& $node "-e" "eval(process.env.JOBSEEKER_NODE_SNIPPET)" $ResponseFile 2>$null | Out-String).Trim()) }
+  catch { return "" }
+  finally { Remove-Item -Path Env:JOBSEEKER_NODE_SNIPPET -ErrorAction SilentlyContinue }
 }
 
 # The activity log is where somebody looks when a button did nothing. A failure that exists only in
