@@ -3544,7 +3544,7 @@ ${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcom
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
 ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /parse-cv</span>`, profileHTML(all.profile)))}
 </div>
-<footer class="muted">Local Markdown is the source of truth (<code>data/</code>). <a href="/">Back to work →</a>${
+<footer class="muted">${
   platform.IS_WIN
     ? ` <form method="POST" action="/quit" class="inline" style="display:inline"><button type="submit" class="quitbtn">Quit JobSeeker</button></form>`
     : ""
