@@ -4,9 +4,10 @@ Every release, in plain language. Newest first.
 
 ---
 
-## Unreleased
+## v0.7.7 — 11 September 2026
 
 - Fixed: links in the Mac app did nothing when clicked — job postings, LinkedIn profiles, "open ↗", and "See everything that changed" after an update. They now open in your web browser, where you are already signed in to LinkedIn and the job sites. In a browser tab and on Windows they always worked.
+- Fixed: in light mode, the small labels on the Companies page — how each careers page can be read, and each company's tier — were dark text on a dark background. They are readable in both themes now.
 
 ---
 
