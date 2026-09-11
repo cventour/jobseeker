@@ -7523,6 +7523,64 @@ async function setUpAddedMarkets(added, scaffold = added) {
   return { created, restored };
 }
 
+// ---- markets saved with the wrong separator (repaired on start, from 0.7.6) ---------------------
+// Before 0.7.6 the Markets box inferred its separator from the value, so a pasted semicolon list was
+// SAVED as one market: one empty file under data/markets/, headed with all four names. A tester's
+// dashboard duly asked "Shall I research Economic Development; Exporting; Trade; Government now?".
+// Reading criteria correctly fixes the list going forward; this removes the file the bug left behind
+// and creates the separate ones a Save in Settings would — so the person it happened to never needs
+// to know it happened, or to delete anything by hand.
+//
+// It deletes, so it only deletes what cannot be anyone's work:
+//   * the heading contains a semicolon — the bug's signature; no market is named with one,
+//   * it splits into two or more names,
+//   * and its table has NO rows. A researched list is kept whatever it is called.
+// Only the names still in criteria.md get a file: someone who has since changed their markets does
+// not get old ones back. Idempotent — once nothing matches it does nothing — so it simply runs on
+// every start rather than keeping a record of having run.
+async function migrateSemicolonMarkets() {
+  const dir = path.join(DATA, "markets");
+  let files = [];
+  try {
+    files = await fs.readdir(dir);
+  } catch {
+    return { removed: [], created: [] };
+  }
+  const wanted = marketList((parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {}).markets);
+  const wantedKeys = new Set(wanted.map(marketKey));
+  const removed = [];
+  const toCreate = [];
+  for (const f of files) {
+    if (!f.endsWith(".md") || f.startsWith(".")) continue;
+    const p = path.join(dir, f);
+    let text = "";
+    try {
+      text = await fs.readFile(p, "utf8");
+    } catch {
+      continue;
+    }
+    const m = /^#\s*Market:\s*(.+)$/m.exec(text);
+    if (!m || !m[1].includes(";")) continue;
+    const parts = m[1].split(/[,;]/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+    if ((await readTable(p)).rows.length) continue;
+    for (const name of parts) if (wantedKeys.has(marketKey(name))) toCreate.push(name);
+    await fs.unlink(p);
+    removed.push(m[1].trim());
+  }
+  // No `added`: nothing was added by the user here, so no auto-dismissed proposal comes back.
+  const setup = toCreate.length ? await setUpAddedMarkets([], toCreate) : { created: [] };
+  if (removed.length) {
+    await logActivity(
+      "correction",
+      `Split ${removed.map((r) => `'${r}'`).join(", ")} into separate markets` +
+        (setup.created.length ? `: ${setup.created.join(", ")}` : "") +
+        " — it had been saved as one market with semicolons in its name"
+    );
+  }
+  return { removed, created: setup.created };
+}
+
 async function handleSaveCriteria(form) {
   const file = path.join(DATA, "criteria.md");
   const { body } = parseFrontmatter(await safeRead(file));
@@ -8843,6 +8901,22 @@ server.on("error", async (e) => {
   console.error(`The dashboard could not start: ${e?.message || e}`);
   process.exit(1);
 });
+
+// The one-off repair above. Under the same lock every other writer takes, and before the port opens,
+// so the first page after an update is already clean. Bounded: record.mjs holds that lock for
+// milliseconds at a time, but a start must never hang behind it, so after a few seconds the port
+// opens anyway and the repair finishes when the lock comes free. And never fatal — it is tidying,
+// not a precondition for anything.
+try {
+  const repair = withLock(() => migrateSemicolonMarkets()).catch((e) => {
+    console.error(`Market repair skipped: ${e?.message || e}`);
+    return null;
+  });
+  const fixed = await Promise.race([repair, new Promise((r) => setTimeout(() => r(null), 4000))]);
+  if (fixed?.removed?.length) console.log(`Repaired ${fixed.removed.length} market list(s) saved as one`);
+} catch (e) {
+  console.error(`Market repair skipped: ${e?.message || e}`);
+}
 
 server.listen(PORT, HOST, () => {
   console.log(`Job-seeker dashboard on http://127.0.0.1:${PORT}`);
