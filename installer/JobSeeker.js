@@ -213,6 +213,9 @@ var quietStart = false;
 // window's size is the first thing that would otherwise jump. Cleared by leaveBoot() the moment the
 // launch turns out to need real setup work after all.
 var bootMode = false;
+// Whether the window has been put on screen. A boot keeps it hidden until its page has painted the veil,
+// so everything that reads "not visible" as "the user closed it" must wait for this.
+var shown = false;
 
 function themeAnswer(result, error) {
   // A real function, never $() -- see THE RULE at the top of this file.
@@ -289,14 +292,33 @@ function cgBounds() {
   return null;
 }
 
+// Whether a window-server rectangle (CG space: origin at the PRIMARY display's top-left, y down) lies
+// wholly on one display. NSScreen frames are AppKit space (origin bottom-left of the primary, y up), so
+// each is flipped into CG space against the primary's height before comparing. A pixel of slack for
+// rounding.
+function onSomeScreen(b) {
+  var screens = $.NSScreen.screens;
+  if (!screens || screens.count === 0) return true;
+  var primaryH = screens.objectAtIndex(0).frame.size.height;
+  for (var i = 0; i < screens.count; i++) {
+    var f = screens.objectAtIndex(i).frame;
+    var x = f.origin.x, y = primaryH - (f.origin.y + f.size.height);
+    if (b.x >= x - 1 && b.y >= y - 1 && b.x + b.w <= x + f.size.width + 1 && b.y + b.h <= y + f.size.height + 1) return true;
+  }
+  return false;
+}
+
 // Checked after the window is up, against the window server rather than against AppKit -- because
 // AppKit was the thing reporting a position the window did not have.
 function ensureOnScreen(w) {
   try {
     var b = cgBounds();
     if (!b) return false;          // not registered yet; the caller will ask again
-    var sf = $.NSScreen.mainScreen.frame;          // CG space: main screen is 0,0 .. width,height
-    var off = (b.x < 0 || b.y < 0 || b.x + b.w > sf.size.width || b.y + b.h > sf.size.height);
+    // Off screen means not on ANY display. This used to test against the main screen alone, with CG's
+    // 0,0 at its corner -- so on a Mac with a display above or left of the laptop, a window placed
+    // squarely on that display had a negative coordinate, was judged off screen, and was moved on
+    // every launch: a visible jump just after the window appeared.
+    var off = !onSomeScreen(b);
     appendFile(FULLLOG, stamp() + '  window at ' + Math.round(b.x) + ',' + Math.round(b.y) + ' '
       + Math.round(b.w) + 'x' + Math.round(b.h) + (off ? '  — off screen, re-centring' : '') + '\n');
     if (!off) return true;
@@ -560,6 +582,7 @@ function finishBoot() {
 function leaveBoot() {
   if (!bootMode) return;
   bootMode = false;
+  showWindow();
   quietStart = false;
   state.view = 'work';
   win.title = 'JobSeeker Setup';
@@ -568,6 +591,36 @@ function leaveBoot() {
   win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 800, 688), true, true);
   placeWindow(win);
   placementChecked = false; placementTries = 0;
+}
+
+// The title bar and the window's own background must be the veil's colours from the first frame. Left
+// alone they follow the Mac -- dark on a Mac in dark mode -- until syncAppearance reads the page about
+// 0.6s later and flips them: a dark bar over a light veil, then a light one.
+function applyLaunchAppearance(theme) {
+  try {
+    if (theme === 'light') app.appearance = $.NSAppearance.appearanceNamed($.NSAppearanceNameAqua);
+    else if (theme === 'dark') app.appearance = $.NSAppearance.appearanceNamed($.NSAppearanceNameDarkAqua);
+  } catch (e) { /* the page's own sync will catch up */ }
+  // What the page is about to report, so syncAppearance finds nothing to flip.
+  themeSeen = themeApplied = theme;
+}
+
+// The veil's background, for the moment between the window appearing and WebKit's first composite.
+function veilBackground(theme) {
+  var dark = theme === 'dark';
+  if (theme === 'auto') {
+    try { dark = /Dark/.test(String(ObjC.unwrap(app.effectiveAppearance.name))); } catch (e) {}
+  }
+  return dark ? $.NSColor.colorWithSRGBRedGreenBlueAlpha(15 / 255, 18 / 255, 32 / 255, 1)      // #0f1220
+              : $.NSColor.colorWithSRGBRedGreenBlueAlpha(247 / 255, 245 / 255, 240 / 255, 1);  // #f7f5f0
+}
+
+function showWindow() {
+  if (shown) return;
+  win.makeKeyAndOrderFront(null);
+  win.orderFrontRegardless;
+  app.activateIgnoringOtherApps(true);
+  shown = true;
 }
 
 function rememberedTheme() {
@@ -703,6 +756,8 @@ function run() {
     state.say = 'Checking this Mac';
     state.pct = 12;
     state.theme = rememberedTheme();
+    applyLaunchAppearance(state.theme);
+    win.backgroundColor = veilBackground(state.theme);
   }
   // A normal title bar, not a transparent full-height one. The transparent version let the page
   // draw right to the top, but it left almost nothing to drag the window by -- only a thin,
@@ -718,12 +773,15 @@ function run() {
   var cfg = $.WKWebViewConfiguration.alloc.init;
   wv = $.WKWebView.alloc.initWithFrameConfiguration(rect, cfg);
   wv.setUIDelegate(linkOpener);   // see "link opener" above: without it, no link opens
-  wv.loadFileURLAllowingReadAccessToURL(
-    $.NSURL.fileURLWithPath($(UI)), $.NSURL.fileURLWithPath($(RES)));
+  // A boot tells the page so in its address, which it reads before painting anything (see the head
+  // script in ui.html). Resolved against the file URL so any escaping in the path stays right.
+  var uiURL = $.NSURL.fileURLWithPath($(UI));
+  if (bootMode) uiURL = $.NSURL.URLWithStringRelativeToURL($('#boot=' + state.theme), uiURL).absoluteURL;
+  wv.loadFileURLAllowingReadAccessToURL(uiURL, $.NSURL.fileURLWithPath($(RES)));
   win.contentView = wv;
-  win.makeKeyAndOrderFront(null);
-  win.orderFrontRegardless;
-  app.activateIgnoringOtherApps(true);
+  // A boot shows the window only once the page has painted the veil (the wait-ui tick), so the first
+  // thing anyone sees is the veil -- never an empty window, never the setup screen.
+  if (!bootMode) showWindow();
   // The on-screen check happens on the first idle tick, not here: the window server does not know
   // about the window yet in this run-loop turn, so asking it now returns nothing and the check
   // quietly does nothing at all.
@@ -756,11 +814,13 @@ function tick() {
   if (!win) return;
 
   // The user closed the window. Minimising is not closing -- isVisible goes false for both.
-  if (!win.isVisible && !win.isMiniaturized) { stopServer(); app.terminate(null); return; }
+  // Not before it has been shown: a boot keeps the window hidden on purpose until the veil is painted,
+  // and reading that as "closed" would quit the app on its own launch.
+  if (shown && !win.isVisible && !win.isMiniaturized) { stopServer(); app.terminate(null); return; }
 
   // A window takes a few run-loop turns to reach the window server, so keep asking until it
   // answers rather than giving up on the first look -- which is what made this check a no-op.
-  if (!placementChecked) {
+  if (!placementChecked && shown) {                  // the window server only knows a shown window
     placementTries++;
     if (ensureOnScreen(win) || placementTries > 40) placementChecked = true;
   }
@@ -768,6 +828,11 @@ function tick() {
 
   if (phase === 'wait-ui') {
     if (wv.title.isNil() || !wv.title.js) return;   // page still parsing
+    if (!shown) {
+      if (wv.isLoading) return;                      // parsed, not yet painted
+      showWindow();
+      appendFile(FULLLOG, stamp() + '  window shown on the boot veil\n');
+    }
     appendFile(FULLLOG, stamp() + '  ui loaded, window on screen: ' + onScreen() + '\n');
     // Do not show a setup checklist to someone who is not setting anything up.
     //
