@@ -4,6 +4,12 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.9 — 11 September 2026
+
+- Fixed: on Windows, updating from inside JobSeeker stopped at "restarting" and never finished. The new version was already running, but the update never tidied up after itself, so the next Update was turned down as one already in progress. It now finishes in seconds.
+
+---
+
 ## v0.7.8 — 11 September 2026
 
 - One command for everything: `/jobseeker` followed by what you want. `/markets Fintech` is now `/jobseeker markets Fintech`, `/curate` is `/jobseeker curate`, `/job-run` is `/jobseeker job-run`, and so on for track, apply, apply-fill, followup, send-approval, onboard and parse-cv. The old names are gone. Two are new: `/jobseeker reconcile` closes tasks you have already done, and `/jobseeker check` looks for problems in your tracker. `/jobseeker` on its own lists them all and shows where your search stands.
