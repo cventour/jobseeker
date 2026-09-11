@@ -89,6 +89,11 @@ if [ -n "$WELCOME_LOGO" ]; then
   sips -s format png -Z 320 "$WELCOME_LOGO" --out "$C/Resources/logo-128.png" >/dev/null 2>&1 \
     || cp "$WELCOME_LOGO" "$C/Resources/logo-128.png"
 fi
+# The boot veil's mark. ui.html here and the dashboard (public/boot-mark.png, served at /boot-mark.png)
+# draw the SAME veil across the handover, so they use the same file: a different image on either side
+# would be the one thing that moved when the page changed underneath.
+cp "$REPO/public/boot-mark.png" "$C/Resources/boot-mark.png" 2>/dev/null \
+  || bad "public/boot-mark.png missing -- the startup screen will show no mark"
 # The one thing the app cannot work out for itself: which checkout it belongs to. Launched from the
 # Dock it has no working directory, and there may be more than one copy of the repo on the Mac.
 printf '%s' "$REPO" > "$C/Resources/repo-path.txt"

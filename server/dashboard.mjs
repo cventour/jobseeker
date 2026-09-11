@@ -95,6 +95,9 @@ const ASSETS = new Map([
   ["/apple-touch-icon.png", ["apple-touch-icon.png", "image/png"]],
   ["/logo.webp", ["logo.webp", "image/webp"]],
   ["/logo.png", ["logo.png", "image/png"]],
+  // The boot veil's mark. The Mac app's bundle carries the very same file, so both sides of the
+  // handover draw identical pixels (see BOOT_VEIL).
+  ["/boot-mark.png", ["boot-mark.png", "image/png"]],
 ]);
 
 // Cache buster derived from the icon files themselves. These are served with max-age=86400, which
@@ -126,6 +129,60 @@ const BRAND = (title) => `<div class="brand">
   </picture>
   <h1>${title}</h1>
 </div>`;
+
+// ---------- The boot veil ----------
+// Twin of the veil in installer/ui.html: keep the two identical, pixel for pixel.
+//
+// JobSeeker.app used to start a set-up install on its setup page ("Starting JobSeeker / One
+// moment."), then resize the window to dashboard size, then swap the page for the dashboard -- three
+// visible jumps on every launch. Now it opens at dashboard size on a veil (a large blurred mark and one
+// progress card) while it checks the Mac and starts this server, then loads this page with ?boot=1.
+// Drawing the SAME veil here, in the HTML itself so it is the first thing this page paints, is what
+// makes the handover invisible: WebKit keeps showing the old page until the new one paints, and what
+// the new one paints is identical. Then it fades, and the dashboard is simply there.
+//
+// Explicit box-sizing and font because the two pages differ on both: this one sets border-box
+// globally and ui.html does not, and a 2px difference in the spinner is exactly the kind of thing
+// that moves when the page changes underneath.
+const BOOT_VEIL = `<style>
+.bootveil,.bootveil *{box-sizing:border-box}
+.bootveil{position:fixed;inset:0;z-index:1000;background:var(--bg);color:var(--fg);display:flex;
+  align-items:center;justify-content:center;transition:opacity .35s ease;
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+.bootveil[hidden]{display:none}
+.bootveil.gone{opacity:0;pointer-events:none}
+.bv-mark{position:absolute;left:50%;top:50%;width:640px;height:640px;transform:translate(-50%,-50%);
+  filter:blur(30px) saturate(1.15);opacity:.55;pointer-events:none}
+.bv-box{position:relative;width:420px;background:var(--bg);border:1px solid var(--line);border-radius:14px;
+  padding:22px 24px;box-shadow:0 18px 50px rgba(0,0,0,.25)}
+.bv-box h2{margin:0 0 14px;font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.3}
+.bv-bar{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin:2px 0 10px}
+.bv-bar i{display:block;height:100%;background:var(--acc);border-radius:99px;transition:width .25s ease}
+.bv-say{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--mut);min-height:1.4em}
+.bv-spin{flex:none;width:14px;height:14px;border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--acc) 35%,transparent);border-top-color:var(--acc);
+  animation:bvsp .7s linear infinite}
+@keyframes bvsp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.bv-spin{animation:none}.bv-bar i,.bootveil{transition:none}}
+</style>
+<div class="bootveil" id="bootveil">
+  <img class="bv-mark" src="/boot-mark.png" alt="">
+  <div class="bv-box" role="status" aria-live="polite">
+    <h2>Starting JobSeeker</h2>
+    <div class="bv-bar"><i style="width:100%"></i></div>
+    <div class="bv-say"><span class="bv-spin"></span><span>Opening your dashboard</span></div>
+  </div>
+</div>
+<script>(function(){
+  // Drop ?boot=1 from the address, so a reload or a bookmark never replays the veil.
+  try{var u=new URL(location.href);u.searchParams.delete('boot');history.replaceState(null,'',u.pathname+u.search+u.hash);}catch(e){}
+  var v=document.getElementById('bootveil');
+  // Two frames after load: the first lets the dashboard underneath paint, the second starts the fade
+  // from a painted frame rather than from nothing.
+  function go(){requestAnimationFrame(function(){requestAnimationFrame(function(){
+    v.classList.add('gone');setTimeout(function(){v.remove();},450);});});}
+  if(document.readyState==='complete')go();else addEventListener('load',go);
+})();</script>`;
 
 // Runs in <head>, before the body paints. Setting data-theme here rather than after load is the
 // difference between a themed page and a page that flashes the wrong scheme on every navigation --
@@ -3357,6 +3414,7 @@ function page(all, flash, forceUpdate = false) {
 ${HEAD_ICONS}
 <style>${CSS}</style>
 </head><body>
+${all.boot ? BOOT_VEIL : ""}
 <header>
   ${BRAND("Job Seeker")}
   <div class="head-actions">
@@ -8695,6 +8753,8 @@ const server = http.createServer(async (req, res) => {
       // The active tab is chosen server-side from ?tab= so there is no flash of the wrong pane, and
       // so a POST redirect can put you back where you were.
       all.tab = url.searchParams.get("tab") || "";
+      // Set only by JobSeeker.app, on the load that takes the window over from its own boot veil.
+      all.boot = url.searchParams.get("boot") === "1";
       // Settings' second axis: which sub-pane of Setup. Chosen server-side for the same reason as
       // the tab — no flash of the wrong pane, and a POST redirect can return you to it.
       all.sub = url.searchParams.get("sub") || "";
