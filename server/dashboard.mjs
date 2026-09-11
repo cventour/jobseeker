@@ -4165,9 +4165,35 @@ details summary{cursor:pointer;padding:6px 0;font-weight:600}
 /* Generic hide. NOTE: .flash.hide (below) deliberately overrides this to fade instead of vanish. */
 .hide{display:none!important}
 .flash.hide{display:block!important}
-.flash{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:1000;padding:11px 18px;border-radius:8px;border:1px solid var(--line);box-shadow:0 6px 24px rgba(0,0,0,.35);opacity:1;transition:opacity .5s ease,transform .5s ease}
+.flash{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:1000;padding:11px 18px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);box-shadow:0 6px 24px var(--flash-shadow);opacity:1;transition:opacity .5s ease,transform .5s ease}
 .flash.hide{opacity:0;transform:translateX(-50%) translateY(-8px)}
-.flash.ok{background:#153b2a;border-color:#1f6b2f}.flash.err{background:#3b1520;border-color:#6b2330}
+/* The toast's colours are tokens, said once per theme like the status pills. They used to be dark
+   hex only, and the text inherited --fg — which on the light theme is near-black, so "Criteria
+   saved." was black on dark green. "bad" (a refused input) and "warn" had no colour of their own at
+   all and rendered as bare text floating over the page. Every kind the server sends is styled here. */
+:root{
+  --flash-shadow:rgba(0,0,0,.35);
+  --flash-ok-bg:#153b2a; --flash-ok-bd:#1f6b2f; --flash-ok-fg:#cdf0cf;
+  --flash-err-bg:#3b1520; --flash-err-bd:#6b2330; --flash-err-fg:#ffc9d2;
+  --flash-warn-bg:#3a2a0e; --flash-warn-bd:#6b4708; --flash-warn-fg:#f5cf85;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --flash-shadow:rgba(31,28,23,.16);
+    --flash-ok-bg:#e3f3e2; --flash-ok-bd:#a8d5ab; --flash-ok-fg:#14561f;
+    --flash-err-bg:#fbe4e8; --flash-err-bd:#eab0ba; --flash-err-fg:#7a1b2a;
+    --flash-warn-bg:#f8ecd2; --flash-warn-bd:#e2c47f; --flash-warn-fg:#6b4708;
+  }
+}
+:root[data-theme="light"]{
+    --flash-shadow:rgba(31,28,23,.16);
+    --flash-ok-bg:#e3f3e2; --flash-ok-bd:#a8d5ab; --flash-ok-fg:#14561f;
+    --flash-err-bg:#fbe4e8; --flash-err-bd:#eab0ba; --flash-err-fg:#7a1b2a;
+    --flash-warn-bg:#f8ecd2; --flash-warn-bd:#e2c47f; --flash-warn-fg:#6b4708;
+}
+.flash.ok{background:var(--flash-ok-bg);border-color:var(--flash-ok-bd);color:var(--flash-ok-fg)}
+.flash.err,.flash.bad{background:var(--flash-err-bg);border-color:var(--flash-err-bd);color:var(--flash-err-fg)}
+.flash.warn{background:var(--flash-warn-bg);border-color:var(--flash-warn-bd);color:var(--flash-warn-fg)}
 .head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .head-actions form{margin:0}
 /* Narrow windows: tighten the chrome so more tabs stay visible before the strip has to scroll. */
