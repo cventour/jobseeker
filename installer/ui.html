@@ -2,6 +2,16 @@
 <html lang="en">
 <meta charset="utf-8">
 <title>JobSeeker Setup</title>
+<script>
+// The boot veil has to be the FIRST thing this page paints, in the dashboard's theme. The app says so
+// in the address (#boot=light|dark|auto), because nothing it pushes later can reach the first frame:
+// the page would paint its setup screen first, in its own theme -- a dark "Checking this Mac" on a
+// Mac in dark mode -- and only then switch to a light veil. That was the flicker. This runs in the
+// head, before the body exists, so no frame is ever the wrong one.
+(function(){var m=/^#boot=(light|dark|auto)$/.exec(location.hash);if(!m)return;
+var r=document.documentElement;r.classList.add("booting");
+if(m[1]==="auto")r.removeAttribute("data-theme");else r.setAttribute("data-theme",m[1]);})();
+</script>
 <!--
   The setup window's UI. Rendered inside a WKWebView owned by JobSeeker.app on macOS, and inside an
   Edge app window served by installer/win/setup-server.mjs on Windows. ONE page, two hosts: the
@@ -297,6 +307,10 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
 .bootveil[hidden]{display:none}
 .bootveil.gone{opacity:0;pointer-events:none}
+/* While booting (the head script) the veil is up from the first frame, and the setup screen behind it
+   is not painted at all: hidden rather than merely covered, because covered still paints a frame. */
+html.booting .bootveil[hidden]{display:flex !important}   /* beats the global [hidden]{…!important} above */
+html.booting main,html.booting footer{visibility:hidden}
 .bv-mark{position:absolute;left:50%;top:50%;width:640px;height:640px;transform:translate(-50%,-50%);
   filter:blur(30px) saturate(1.15);opacity:.55;pointer-events:none}
 .bv-box{position:relative;width:420px;background:var(--bg);border:1px solid var(--line);border-radius:14px;
@@ -317,7 +331,7 @@ button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
   <img class="bv-mark" src="boot-mark.png" alt="">
   <div class="bv-box" role="status" aria-live="polite">
     <h2 id="bv-title">Starting JobSeeker</h2>
-    <div class="bv-bar"><i id="bv-fill"></i></div>
+    <div class="bv-bar"><i id="bv-fill" style="width:12%"></i></div>
     <div class="bv-say"><span class="bv-spin"></span><span id="bv-say">Checking this Mac</span></div>
   </div>
 </div>
@@ -803,6 +817,9 @@ if (!GLYPH[mode]) mode = "auto";
 
 function applyAppearance() {
   var root = document.documentElement;
+  // While the boot veil is up the APP decides the theme -- the dashboard's, which the veil hands over
+  // to. This page's own setting lives in file:// storage and would flip it on the first frames.
+  if (root.classList.contains("booting")) return;
   // No attribute at all is what lets the media query decide, so Auto is the real OS setting
   // rather than a guess this page made when it loaded.
   if (mode === "auto") root.removeAttribute("data-theme");
@@ -1088,8 +1105,15 @@ window.__render = function (st) {
     return;   // nothing behind the veil can be seen, so nothing behind it needs drawing
   }
   veil.hidden = true;
-  // Leaving the veil for real setup work: this page's own appearance setting applies again.
-  if (wasBoot) { wasBoot = false; applyAppearance(); }
+  // Leaving the veil for real setup work: the setup screen shows again, and this page's own appearance
+  // setting applies again. Also when the very first push is not a boot at all -- a launch that looked
+  // set up, was loaded with #boot=, and turned out to need work before the veil ever rendered.
+  var rootEl = document.documentElement;
+  if (wasBoot || rootEl.classList.contains("booting")) {
+    wasBoot = false;
+    rootEl.classList.remove("booting");
+    applyAppearance();
+  }
 
   // The handover, hosted-side. The Mac app owns its web view and simply loads the dashboard into
   // it; a browser window can only be sent somewhere by the page inside it, so the server says
