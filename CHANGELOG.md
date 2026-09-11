@@ -4,12 +4,20 @@ Every release, in plain language. Newest first.
 
 ---
 
-## Unreleased
+## v0.7.8 — 11 September 2026
 
 - One command for everything: `/jobseeker` followed by what you want. `/markets Fintech` is now `/jobseeker markets Fintech`, `/curate` is `/jobseeker curate`, `/job-run` is `/jobseeker job-run`, and so on for track, apply, apply-fill, followup, send-approval, onboard and parse-cv. The old names are gone. Two are new: `/jobseeker reconcile` closes tasks you have already done, and `/jobseeker check` looks for problems in your tracker. `/jobseeker` on its own lists them all and shows where your search stands.
 - Each part of JobSeeker now runs on the model it is set to, however you reach it. Reading your mail and chats, researching markets, closing finished tasks and checking the tracker use Claude Sonnet. Scoring roles, filling applications and writing messages in your voice use Claude Opus. Before, asking "jobseeker" to research a market ran it on whatever model your session was using.
 - "jobseeker" in plain English still answers what is due, adds tasks and marks things done. For anything bigger it now tells you which `/jobseeker` command to run instead of doing the work itself.
-
+- You can now add a task from any tab: **+ Add task** sits beside Run now and opens a box under itself. Type the task as you would say it, such as "call Dana Friday about the referral", and before you press OK it shows the due date, the person and the kind of task it read from what you typed. Enter adds it and Escape cancels.
+- Fixed: a task that said "Tuesday" was saved with no due date. Every other day of the week worked; that one had been missed.
+- Fixed: after an update, a JobSeeker window that was already open went on showing the old version until you reloaded it. It now notices the new version and reloads itself as soon as you come back to it, never while you are typing, and your browser no longer keeps old copies of the dashboard's pages.
+- Fixed: on Windows, opening JobSeeker while it was already open gave you a second window, and reinstalling left the old window next to the new one. You get one window now: the open one comes to the front, and one left over from before is replaced.
+- The Mac app opens straight onto your dashboard behind a single loading screen. It no longer flashes a setup page, flickers between light and dark, or moves its window between displays on the way.
+- Fixed: in light mode, the message that confirms a save was dark text on a dark background, and the messages that turn down an entry or warn you had no background at all. Every kind now reads clearly in both themes.
+- Fixed: on Windows, every market research run since 0.7.6 was reported as "wrote no companies", including the ones that worked.
+- Fixed: on Windows, when a Run now failed, the dashboard could not read the reason and showed nothing. A run that was refused the tools it needs is now reported as that, instead of as having found no companies.
+- The Run now menu is as wide as it was meant to be, and the Settings footer drops the sentence and back link it repeated from elsewhere on the page.
 ---
 
 ## v0.7.7 — 11 September 2026
