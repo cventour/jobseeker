@@ -4,11 +4,17 @@ Every release, in plain language. Newest first.
 
 ---
 
-## Unreleased
+## v0.7.6 — 11 September 2026
 
 - A run no longer fills Chrome with tabs. Reading forty careers pages opened forty tabs; it now opens one, moves that one from page to page, and closes it at the end. Looking through LinkedIn jobs and filling in an application work the same way: one tab, reused, closed when it is finished with.
 - Tabs you opened yourself stay yours. A WhatsApp Web or LinkedIn tab that is already open is read where it sits and never sent anywhere else — moving that tab is what would cost you your WhatsApp session — and JobSeeker's Chrome extension now refuses to steer or close any tab it did not open itself.
 - On Windows, reload the JobSeeker Bridge extension (it is now version 0.3.0) to get this. Until you do, everything still works exactly as before, one tab per page.
+- Fixed: researching a market could run, cost money and save nothing. When JobSeeker ran Claude Code in the background, Claude Code was refused permission to search the web or save a file — and still reported success. Background runs are now allowed exactly the things they need and nothing more: they can read your mail and prepare drafts, but sending anything still waits for your approval.
+- Fixed: the daily run could stop partway through and never write its digest. Claude Code gives up on work still running after about ten minutes; the daily run now waits for its own 45-minute limit, and the dashboard's buttons get thirty minutes.
+- Fixed: a list of markets pasted with semicolons — "Economic Development; Exporting; Trade" — was saved as one market with a long name. It is now three separate markets, and a list already saved that way is split up the first time this version starts.
+- Added a Problems filter to Activity. When a run, a market search, reading your CV or sending an approved message fails, it now says so there in plain words — what went wrong and what to do about it — instead of reporting "ok" and leaving the page empty.
+- Researching a market is now only called finished when the list actually has companies in it. A run that ends with nothing saved says so, and is recorded in your spending as a failed run rather than a successful one.
+- Market research now uses Claude Sonnet rather than the most expensive model. It is search-and-summarise work, and one run had spent its whole $5 budget in three steps.
 
 ---
 
