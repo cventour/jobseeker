@@ -156,9 +156,18 @@ try {
       $jrDetail = Get-JobRunField "detail"
     }
   } else {
+    # How much of the log was already there, so a failure can be explained in words rather than as
+    # an exit code.
+    $before = 0
+    if (Test-Path $Log) { $before = @(Get-Content $Log -ErrorAction SilentlyContinue).Count }
     $rc = Invoke-ClaudeRun $Prompt $Budget "$Label (dashboard)"
+    $runOut = ""
+    if (Test-Path $Log) {
+      $runOut = (@(Get-Content $Log -ErrorAction SilentlyContinue) | Select-Object -Skip $before) -join "`n"
+    }
   }
 
+  if ($null -eq $runOut) { $runOut = "" }
   [void](Invoke-Record @("log", "run-finish", "$Label finished (exit $rc)"))
   if ($jrState) {
     if (-not $jrDetail) { $jrDetail = "finished" }
@@ -170,7 +179,11 @@ try {
   } elseif ($rc -eq 0) {
     Write-Status "ok" "$Label completed"
   } else {
-    Write-Status "failed" "$Label exited $rc"
+    # Say why, and say it where someone will see it. job-run writes its own row, so this covers the
+    # other buttons; a status file is overwritten by the next run, the activity log is not.
+    $why = Get-FailureReason $runOut "$Label exited $rc — the full output is in data\.run-now.log."
+    Write-Status "failed" $why
+    Write-Problem "run-failed" "$Label did not finish. $why"
   }
 
   Write-RunLog "==================== done $(Get-LocalStamp) (exit $rc) ===================="

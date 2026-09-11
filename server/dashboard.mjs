@@ -1688,6 +1688,12 @@ const ACTIVITY_FAMILY = {
   done:    { hue: 70,  types: ["task-done", "task-open", "task-add", "task-add-nl", "task-in-progress"] },
   config:  { hue: 322, types: ["criteria-edit", "cv-upload", "cv-parse", "correction"] },
   notice:  { hue: 45,  types: ["notification"] },
+  // Things that did not work. Its own family, its own red, its own filter chip — because the
+  // question this log gets opened to answer is usually "I pressed the button and nothing
+  // happened", and until now the answer to that was a status file that had already been
+  // overwritten, or a .log under data/ that nobody knows to open. The scripts write these
+  // (scripts/lib/claude-tools.sh, log_problem) with the cause in plain words, not an exit code.
+  problem: { hue: 0,   types: ["run-failed", "run-partial", "markets-failed", "cv-failed", "send-failed", "run-skipped"] },
 };
 const ACTIVITY_HUE = (() => {
   const m = {};
@@ -1700,8 +1706,10 @@ function activityHue(type) {
   for (let i = 0; i < String(type).length; i++) h = (h * 31 + String(type).charCodeAt(i)) % 360;
   return h;
 }
-// A run boundary is the one row worth spotting from across the page.
+// A run boundary is the one row worth spotting from across the page. So is a failure — and for the
+// same reason: you are scanning for where something changed, not reading top to bottom.
 const isRunStart = (t) => t === "run-start";
+const isProblem = (t) => ACTIVITY_FAMILY.problem.types.includes(t);
 
 function activityHTML(table) {
   if (!table.rows.length) return `<p class="empty">Nothing logged yet.</p>`;
@@ -1709,7 +1717,8 @@ function activityHTML(table) {
     .map((r) => {
       const type = String(r.type || "").trim();
       const fam = Object.entries(ACTIVITY_FAMILY).find(([, f]) => f.types.includes(type));
-      return `<tr data-type="${esc(type)}" data-fam="${esc(fam ? fam[0] : "other")}"${isRunStart(type) ? ' class="runrow"' : ""}>
+      const rowClass = isRunStart(type) ? " class=\"runrow\"" : isProblem(type) ? " class=\"probrow\"" : "";
+      return `<tr data-type="${esc(type)}" data-fam="${esc(fam ? fam[0] : "other")}"${rowClass}>
         <td class="nw">${esc(r.timestamp || "")}</td>
         <td><span class="atype${isRunStart(type) ? " arun" : ""}" style="--h:${activityHue(type)}">${esc(type)}</span></td>
         <td>${cell(r.detail)}</td>
@@ -1726,7 +1735,7 @@ function activitySection(table) {
     key === "all"
       ? table.rows.length
       : table.rows.filter((r) => ACTIVITY_FAMILY[key]?.types.includes(String(r.type || "").trim())).length;
-  const label = { run: "Runs", track: "Tracking", find: "Finding", apply: "Applying", close: "Dismissals", done: "Tasks", config: "Config", notice: "Notifications" };
+  const label = { run: "Runs", track: "Tracking", find: "Finding", apply: "Applying", close: "Dismissals", done: "Tasks", config: "Config", notice: "Notifications", problem: "Problems" };
   return `<div class="taskfilters afilters">
       <button type="button" class="tf active" data-f="all">All (${table.rows.length})</button>
       ${fams.map(([k]) => `<button type="button" class="tf" data-f="${k}" style="--h:${ACTIVITY_FAMILY[k].hue}">${label[k]} (${count(k)})</button>`).join("")}
@@ -1780,7 +1789,7 @@ const isOn = (v, dflt = true) => {
  * `suggestions` renders a native <datalist>, which is a dropdown you can also type past — the exact
  * "pick one or add your own" behaviour wanted, with no library and no custom popup to get wrong.
  */
-function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = "", hint = "", sep: sepOpt = "" } = {}) {
+function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = "", hint = "", sep: sepOpt = "", split: splitOpt = "" } = {}) {
   // Which character separates entries is a property of the DATA, not a global choice. `locations`
   // is stored as "Dubai, UAE; Remote" — semicolons separate, and the comma is part of a single
   // place name. Splitting that on commas would turn one location into two ("Dubai" and "UAE") and
@@ -1793,8 +1802,15 @@ function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = ""
   // and read back as two places. So a caller that knows the field's shape can say so, and
   // `locations` does.
   const sep = sepOpt || (String(value || "").includes(";") ? ";" : ",");
+  // Writing and READING can differ. `markets` writes commas but must accept semicolons too: a value
+  // saved during the window when this field inferred its own separator is semicolon-joined, and a
+  // comma-only field would render the whole line as one chip -- disagreeing with marketList(), just
+  // in the other direction. Accepting both shows the four markets that were actually picked, and
+  // the next Save rewrites them with commas, so the file heals itself by being looked at.
+  const split = splitOpt || sep;
+  const splitRe = new RegExp(`[${split}]`);   // only , and ; are used; both are literal in a class
   const values = String(value || "")
-    .split(sep)
+    .split(splitRe)
     .map((s) => s.trim())
     .filter(Boolean);
   const listId = `dl_${name}`;
@@ -1810,7 +1826,7 @@ function chipsFieldHTML(name, label, value, { suggestions = [], placeholder = ""
     .filter((s) => !chosen.has(String(s).toLowerCase().replace(/[^a-z0-9]+/g, "")))
     .map((s) => `<option value="${esc(s)}"></option>`)
     .join("");
-  return `<div class="chipfield" data-name="${esc(name)}" data-sep="${sep}">
+  return `<div class="chipfield" data-name="${esc(name)}" data-sep="${sep}" data-split="${esc(split)}">
     <label class="chiplabel">${label}</label>
     <div class="chipbox">
       ${chips}
@@ -1835,6 +1851,17 @@ function criteriaFormHTML(criteria, marketNames = [], extraHidden = "") {
       suggestions: marketNames,
       placeholder: "pick or type a market…",
       hint: "— from your market lists; typing a new one creates it on the next /markets run",
+      // Commas, said out loud rather than inferred. Without this, one pasted value containing a
+      // semicolon flipped the whole field to semicolon-separated and SAVED it that way, while
+      // marketList() below went on splitting only on commas -- so the box showed four markets and
+      // every agent read one, named "Economic Development; Exporting; Trade; Government". A market
+      // name has no comma in it, which is exactly why this field can say so and `locations` cannot.
+      //
+      // Semicolons are still ACCEPTED, for the lists already stored that way and for the paste that
+      // caused this in the first place: someone copying "Economic Development; Exporting; Trade"
+      // out of an industry list is doing the obvious thing, and it should become three markets.
+      sep: ",",
+      split: ",;",
     })}
     ${chipsFieldHTML("roles", "Target roles", raw("roles"), {
       suggestions: ["Product Management", "Solution Architect", "Solutions Engineer", "VP Product", "System Engineer", "Presales Engineer", "Technical Account Manager"],
@@ -4075,6 +4102,8 @@ footer{padding:18px 24px}
 .atype.arun{background:oklch(var(--ton-bg-l) var(--ton-bg-c) var(--h));color:oklch(var(--ton-fg-l) var(--ton-fg-c) var(--h));
   box-shadow:inset 0 0 0 1px oklch(var(--tring-l) var(--tring-c) var(--h))}
 tr.runrow td{border-top:2px solid oklch(var(--tring-l) calc(var(--tring-c) * .7) 213);background:rgba(110,168,254,.06)}
+tr.probrow td{background:rgba(220,80,80,.07)}
+tr.probrow td:first-child{box-shadow:inset 3px 0 0 oklch(var(--tring-l) calc(var(--tring-c) * .9) 22)}
 .prowact{margin:0}.prowact button{background:transparent;color:var(--mut);border:0;padding:0 4px;font-size:16px;line-height:1;cursor:pointer;border-radius:6px}
 .prowact button.xbtn{color:#d06;font-weight:700}.prowact button:hover{background:var(--line);filter:none}
 tr.pdismissed{opacity:.45}tr.pdismissed td:nth-child(3){text-decoration:line-through}
@@ -5199,6 +5228,12 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
     // Per-field, decided server-side from the stored value — see chipsFieldHTML. Locations use
     // semicolons because a single entry ("Dubai, UAE") contains a comma.
     var SEP = field.getAttribute('data-sep') || ',';
+    // What may separate a pasted list, which is not always what we write back — see chipsFieldHTML.
+    var SPLIT = field.getAttribute('data-split') || SEP;
+    // Only , and ; are ever used, and both are literal inside a character class, so this needs no
+    // escaping — which matters, because this script lives inside a template literal and a $ here
+    // would be interpolated by the page that carries it.
+    var SPLIT_RE = new RegExp('[' + SPLIT + ']');
 
     function values(){
       return Array.prototype.slice.call(box.querySelectorAll('.chip')).map(function(c){
@@ -5210,7 +5245,7 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
     function add(raw){
       // A pasted "a, b, c" becomes three chips rather than one nonsense value — pasting a list into
       // a list field is the obvious thing to try.
-      var parts = String(raw).split(SEP).map(function(s){ return s.trim(); }).filter(Boolean);
+      var parts = String(raw).split(SPLIT_RE).map(function(s){ return s.trim(); }).filter(Boolean);
       var existing = values().map(key);
       parts.forEach(function(p){
         if (existing.indexOf(key(p)) !== -1) return;   // already there, in some spelling
@@ -5231,7 +5266,7 @@ Array.prototype.slice.call(document.querySelectorAll('.dbtn')).forEach(function(
     }
 
     input.addEventListener('keydown', function(e){
-      if (e.key === 'Enter' || e.key === SEP) { e.preventDefault(); if (input.value.trim()) add(input.value); }
+      if (e.key === 'Enter' || SPLIT.indexOf(e.key) !== -1) { e.preventDefault(); if (input.value.trim()) add(input.value); }
       // Backspace on an empty box removes the last chip — standard for this control, and quicker
       // than aiming for a small ×.
       else if (e.key === 'Backspace' && !input.value) {
@@ -7345,9 +7380,14 @@ async function handleRunAction(form) {
   return out.text.split("\n").filter(Boolean).pop() || `${name} done`;
 }
 
+// Commas separate markets, and the settings field now says so. Semicolons are accepted too, because
+// for a while it did not: a value containing one flipped the field to semicolon-separated and saved
+// it, and every list stored in that window reads as a single market with a punctuated name until
+// someone opens Settings and presses Save. Splitting on both is what makes those lists work now
+// rather than at the next edit -- and costs nothing, since no market is named with either mark.
 const marketList = (s) =>
   String(s || "")
-    .split(",")
+    .split(/[,;]/)
     .map((x) => x.trim())
     .filter(Boolean);
 
@@ -7435,10 +7475,17 @@ async function criteriaImpact(nextMarkets) {
  * from a settings save would be a surprising thing for a form to do. The file and the restored
  * roles are the setup; the flash message names the command that fills it.
  */
-async function setUpAddedMarkets(added) {
+// `added` is what changed — it decides which auto-dismissed proposals come back. `scaffold` is what
+// should EXIST, which is every market currently targeted, not only the new ones. Those came apart
+// when the markets field and marketList() disagreed about separators: a list stored as
+// "A; B; C" was one market on disk and, once read correctly, three in criteria with two of them
+// having no file at all — and a market with no file is invisible to audit.mjs, so the daily run
+// would never research it. Scaffolding everything wanted is idempotent (an existing file is left
+// exactly as it is) and means one Save in Settings repairs the whole set.
+async function setUpAddedMarkets(added, scaffold = added) {
   const created = [];
   const restored = [];
-  for (const name of added) {
+  for (const name of scaffold) {
     const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     if (!slug) continue;
     const file = path.join(DATA, "markets", `${slug}.md`);
@@ -7476,6 +7523,64 @@ async function setUpAddedMarkets(added) {
   return { created, restored };
 }
 
+// ---- markets saved with the wrong separator (repaired on start, from 0.7.6) ---------------------
+// Before 0.7.6 the Markets box inferred its separator from the value, so a pasted semicolon list was
+// SAVED as one market: one empty file under data/markets/, headed with all four names. A tester's
+// dashboard duly asked "Shall I research Economic Development; Exporting; Trade; Government now?".
+// Reading criteria correctly fixes the list going forward; this removes the file the bug left behind
+// and creates the separate ones a Save in Settings would — so the person it happened to never needs
+// to know it happened, or to delete anything by hand.
+//
+// It deletes, so it only deletes what cannot be anyone's work:
+//   * the heading contains a semicolon — the bug's signature; no market is named with one,
+//   * it splits into two or more names,
+//   * and its table has NO rows. A researched list is kept whatever it is called.
+// Only the names still in criteria.md get a file: someone who has since changed their markets does
+// not get old ones back. Idempotent — once nothing matches it does nothing — so it simply runs on
+// every start rather than keeping a record of having run.
+async function migrateSemicolonMarkets() {
+  const dir = path.join(DATA, "markets");
+  let files = [];
+  try {
+    files = await fs.readdir(dir);
+  } catch {
+    return { removed: [], created: [] };
+  }
+  const wanted = marketList((parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {}).markets);
+  const wantedKeys = new Set(wanted.map(marketKey));
+  const removed = [];
+  const toCreate = [];
+  for (const f of files) {
+    if (!f.endsWith(".md") || f.startsWith(".")) continue;
+    const p = path.join(dir, f);
+    let text = "";
+    try {
+      text = await fs.readFile(p, "utf8");
+    } catch {
+      continue;
+    }
+    const m = /^#\s*Market:\s*(.+)$/m.exec(text);
+    if (!m || !m[1].includes(";")) continue;
+    const parts = m[1].split(/[,;]/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+    if ((await readTable(p)).rows.length) continue;
+    for (const name of parts) if (wantedKeys.has(marketKey(name))) toCreate.push(name);
+    await fs.unlink(p);
+    removed.push(m[1].trim());
+  }
+  // No `added`: nothing was added by the user here, so no auto-dismissed proposal comes back.
+  const setup = toCreate.length ? await setUpAddedMarkets([], toCreate) : { created: [] };
+  if (removed.length) {
+    await logActivity(
+      "correction",
+      `Split ${removed.map((r) => `'${r}'`).join(", ")} into separate markets` +
+        (setup.created.length ? `: ${setup.created.join(", ")}` : "") +
+        " — it had been saved as one market with semicolons in its name"
+    );
+  }
+  return { removed, created: setup.created };
+}
+
 async function handleSaveCriteria(form) {
   const file = path.join(DATA, "criteria.md");
   const { body } = parseFrontmatter(await safeRead(file));
@@ -7509,7 +7614,8 @@ async function handleSaveCriteria(form) {
     );
   }
 
-  const setup = added.length ? await setUpAddedMarkets(added) : { created: [], restored: [] };
+  const wanted = marketList(form.markets ?? "");
+  const setup = wanted.length ? await setUpAddedMarkets(added, wanted) : { created: [], restored: [] };
   if (setup.created.length) {
     await logActivity("market-add", `Market file created for ${setup.created.join(", ")} — run /markets to research vendors`);
   }
@@ -8795,6 +8901,22 @@ server.on("error", async (e) => {
   console.error(`The dashboard could not start: ${e?.message || e}`);
   process.exit(1);
 });
+
+// The one-off repair above. Under the same lock every other writer takes, and before the port opens,
+// so the first page after an update is already clean. Bounded: record.mjs holds that lock for
+// milliseconds at a time, but a start must never hang behind it, so after a few seconds the port
+// opens anyway and the repair finishes when the lock comes free. And never fatal — it is tidying,
+// not a precondition for anything.
+try {
+  const repair = withLock(() => migrateSemicolonMarkets()).catch((e) => {
+    console.error(`Market repair skipped: ${e?.message || e}`);
+    return null;
+  });
+  const fixed = await Promise.race([repair, new Promise((r) => setTimeout(() => r(null), 4000))]);
+  if (fixed?.removed?.length) console.log(`Repaired ${fixed.removed.length} market list(s) saved as one`);
+} catch (e) {
+  console.error(`Market repair skipped: ${e?.message || e}`);
+}
 
 server.listen(PORT, HOST, () => {
   console.log(`Job-seeker dashboard on http://127.0.0.1:${PORT}`);

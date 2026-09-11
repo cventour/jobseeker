@@ -8,7 +8,8 @@
 #   * the actual cost must be parsed out of the JSON and written to the ledger, or Settings reports
 #     "$0.00 across 0 runs" while real money is going out (this happened for five runs),
 #   * stdout must carry ONLY the JSON — a stray stderr line breaks the parse and loses the cost,
-#   * and two runs must never overlap, because Chrome is a serial resource (AGENT-RULES §13).
+#   * two runs must never overlap, because Chrome is a serial resource (AGENT-RULES §13),
+#   * and the run must be ALLOWED TO USE ITS TOOLS — see the permissions section below.
 #
 # Source it, do not execute it:  . "$(dirname "$0")/lib/claude-run.sh"
 # It expects REPO to be set to the repo root and the cwd to be there.
@@ -59,6 +60,51 @@ take_run_lock() { # slug — fails (rc 1) if another live run holds it
   return 0
 }
 
+# ---- permissions and saying so -----------------------------------------------------------------
+# What a run may do, whether the CLI can be told, and how a failure reaches the activity log. Shared
+# with job-run.sh, which is standalone and would otherwise keep its own copy of the list.
+. "$REPO/scripts/lib/claude-tools.sh"
+
+# Which tools the last run_claude was refused, if any. The response JSON carries permission_denials
+# as a real array, so this is the CLI's own account of what happened rather than a guess made by
+# pattern-matching the model's prose.
+RUN_CLAUDE_DENIED=""
+
+# What to tell the user, read off what actually happened. Ordered by how specific the evidence is:
+# a refused tool and an authentication line are unambiguous, and the caller's own fallback is what
+# is left when nothing else explains it.
+classify_failure() { # runlog, fallback message
+  local log="$1" fallback="$2" out=""
+  [ -r "$log" ] && out="$(cat "$log")"
+
+  if [ -n "$RUN_CLAUDE_DENIED" ]; then
+    printf '%s' "JobSeeker was not allowed to use the tools it needs (${RUN_CLAUDE_DENIED}), so the run did nothing. Update JobSeeker — older copies could not grant them."
+    return
+  fi
+  case "$out" in
+    *"OAuth"*|*"authenticate"*|*"Authentication"*|*"not logged in"*|*"/login"*)
+      printf '%s' "Your Claude login has expired. Open Terminal, run claude, sign in, then try again." ;;
+    *"Unknown command"*)
+      printf '%s' "This copy of JobSeeker is missing the command this step runs, so nothing happened. Reinstall or update JobSeeker." ;;
+    *"Credit balance"*|*"credit balance"*|*"insufficient"*|*"quota"*|*"rate limit"*|*"Rate limit"*)
+      printf '%s' "Claude refused the request — out of credit, or rate limited. Check your Claude account, then try again." ;;
+    *"budget"*)
+      printf '%s' "The per-run spending cap stopped this before it finished. Raise it in Settings ▸ Spending." ;;
+    *"ENOTFOUND"*|*"ETIMEDOUT"*|*"ECONNREFUSED"*|*"network"*|*"Network"*)
+      printf '%s' "Claude could not be reached — this machine looks offline. Check the connection and try again." ;;
+    *"too old to be told what it may do"*)
+      printf '%s' "The Claude Code CLI on this machine is too old for JobSeeker to grant it the tools it needs, so the run did nothing. Update it (run: claude install stable) and try again." ;;
+    *"waiting on your approval"*|*"permission denied"*|*"was denied"*|*"were denied"*|*"tool permissions"*)
+      # No denial in the JSON, but the model says it was blocked. Rarer and less certain than the
+      # array above, so it sits below the causes that name themselves — and deliberately matches
+      # PHRASES, not the bare word "permission": this file's own "no --permission-mode" warning
+      # contains it, and matched, which reported an out-of-date CLI as a mysterious block.
+      printf '%s' "JobSeeker was blocked from using a tool it needs, so the run did nothing. Update JobSeeker, then try again." ;;
+    *)
+      printf '%s' "$fallback" ;;
+  esac
+}
+
 # ---- spend ------------------------------------------------------------------------------------
 # Refuse before spending. A blocked run says so loudly and says how to lift it; a silent skip is
 # indistinguishable from a run that found nothing.
@@ -92,11 +138,34 @@ run_claude() {
   local started resp rc
   [ -n "${CLAUDE_BIN:-}" ] || CLAUDE_BIN="$(resolve_claude)"
   [ -n "$CLAUDE_BIN" ] || CLAUDE_BIN="claude"
+  RUN_CLAUDE_DENIED=""
   started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   resp="$(mktemp)"
+  # -p mode gives up on outstanding background subagents after ~10 minutes and ends the turn anyway,
+  # whatever --max-budget-usd says: "Background tasks still running after Ns; terminating. Set
+  # CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely." A /markets pass fans out up to
+  # three prioritization-agents doing live web research, and /curate and /track fan out too — none
+  # of which reliably finish inside ten minutes. When the ceiling fires the work is abandoned, the
+  # files are never written, and the run exits 0, which is the same silent nothing this whole file
+  # exists to stop.
+  #
+  # Bounded rather than 0 here. job-run.sh can afford to wait forever because run_with_timeout is
+  # already its real ceiling; these callers have no outer wrapper, so 0 would trade a silent
+  # truncation for a run lock held forever by a wedged pass. 30 minutes is headroom for a normal
+  # fan-out and still a hard stop. Export it before calling run_claude to override.
+  export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS="${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS:-1800000}"
   # stdout only — see the note at the top of this file.
-  "$CLAUDE_BIN" -p "$prompt" --max-budget-usd "$budget" --output-format json > "$resp"
-  rc=$?
+  if claude_perms_supported; then
+    "$CLAUDE_BIN" -p "$prompt" \
+      --permission-mode acceptEdits --allowedTools "$CLAUDE_ALLOWED_TOOLS" \
+      --max-budget-usd "$budget" --output-format json > "$resp"
+    rc=$?
+  else
+    echo "WARNING: this Claude CLI is too old to be told what it may do (no --permission-mode)."
+    echo "         The run will be refused its own tools and produce nothing. Update the CLI."
+    "$CLAUDE_BIN" -p "$prompt" --max-budget-usd "$budget" --output-format json > "$resp"
+    rc=$?
+  fi
 
   "$NODE_BIN" -e '
     const fs=require("fs");
@@ -108,7 +177,23 @@ run_claude() {
     if(!d){ process.stdout.write(raw); process.exit(0); }
     if(d.result) process.stdout.write(d.result+"\n");
     if(typeof d.total_cost_usd==="number") fs.writeFileSync(process.argv[2], String(d.total_cost_usd));
-  ' "$resp" "$resp.cost" 2>/dev/null || cat "$resp"
+    // The CLI names every tool it refused. Deduplicated into one readable phrase, because "Write,
+    // WebSearch" is a cause a person can act on and a JSON array is not.
+    const den=Array.isArray(d.permission_denials)?d.permission_denials:[];
+    const names=[...new Set(den.map(x=>String(x&&x.tool_name||"").trim()).filter(Boolean))];
+    if(names.length) fs.writeFileSync(process.argv[3], names.join(", "));
+  ' "$resp" "$resp.cost" "$resp.denied" 2>/dev/null || cat "$resp"
+
+  if [ -s "$resp.denied" ]; then
+    RUN_CLAUDE_DENIED="$(cat "$resp.denied")"
+    echo "TOOLS REFUSED: $RUN_CLAUDE_DENIED — the run could not do its work."
+  fi
+
+  # A run that was refused its tools is a failed run, whatever the exit code says. It has to be
+  # both here and in the ledger: the four denied research runs were each written down as
+  # `outcome: ok`, so the one record that could have shown $1.48 buying nothing agreed with the
+  # status file instead of contradicting it.
+  if [ $rc -eq 0 ] && [ -n "$RUN_CLAUDE_DENIED" ]; then rc=1; fi
 
   if [ -s "$resp.cost" ]; then
     local cost; cost="$(cat "$resp.cost")"
@@ -118,7 +203,7 @@ run_claude() {
   else
     echo "spend NOT recorded — no cost returned (crash, timeout, or non-JSON response)"
   fi
-  rm -f "$resp" "$resp.cost"
+  rm -f "$resp" "$resp.cost" "$resp.denied"
   return $rc
 }
 

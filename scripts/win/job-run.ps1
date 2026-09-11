@@ -23,6 +23,11 @@ $ErrorActionPreference = "Stop"
 $REPO = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $REPO
 
+# What this run is allowed to do, and how it reports a failure to the activity log. This script is
+# otherwise standalone -- it carries its own lock, budget and watchdog because the scheduled path
+# needs hardening the dashboard buttons do not -- but the permission list is shared, because a list
+# kept in two places is a list that drifts.
+. (Join-Path $PSScriptRoot "lib\claude-tools.ps1")
 . (Join-Path $PSScriptRoot "lib\timeout.ps1")
 . (Join-Path $PSScriptRoot "lib\notify.ps1")
 . (Join-Path $PSScriptRoot "lib\keepawake.ps1")
@@ -471,6 +476,9 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
 
   for ($attempt = 1; $attempt -le $ATTEMPTS; $attempt++) {
     Log ("---- attempt " + $attempt + "/" + $ATTEMPTS + " (timeout " + $TIMEOUT_SECS + "s, budget `$" + $MAX_BUDGET_USD + ") ----")
+    # Per attempt, not per run: a retry that fails for its own reason must not inherit the previous
+    # attempt's verdict.
+    $DENIED = ""
     # -p runs a single prompt headlessly and exits. The pipeline queues approvals; it never
     # applies or sends on its own.
     # Tells /job-run this is the scheduled run rather than a manual one, so the run-start row in
@@ -490,9 +498,31 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
     # stderr goes to the run log, where it is readable but cannot corrupt the payload.
     $savedSource = $env:JOBRUN_SOURCE
     $env:JOBRUN_SOURCE = "scheduled"
+    # CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0: -p mode's own default abandons outstanding background
+    # subagents (role-scout, the trackers, the reconciler) after ~10 minutes and ends the turn
+    # anyway — well inside a normal run, and regardless of the budget. A run on 2026-09-10 hit
+    # exactly this: role-scout was still working when the ceiling fired, so reconcile, supervise and
+    # the digest never ran, and the run "succeeded" with no data\.last-digest.md. That is the
+    # "completed but produced no digest" verdict below, and it was never the model's fault.
+    # Invoke-WithTimeout IS the real ceiling here ($TIMEOUT_SECS, 45 minutes) — a wedged run should
+    # die to this script's own budget, not to an internal default with no relation to it.
+    $savedBgCeiling = $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS
+    $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "0"
     try {
+      # --permission-mode / --allowedTools: without them every tool the pipeline's agents need is
+      # refused, one at a time, and the run narrates its way to a clean exit 0 having done nothing.
+      # See lib\claude-tools.ps1 for the list and why it is not a settings file.
+      if (Test-ClaudePermsSupported $CLAUDE_BIN) {
+        $claudeArgs = @("-p", "/job-run", "--permission-mode", "acceptEdits",
+                        "--allowedTools", $ClaudeAllowedTools,
+                        "--max-budget-usd", "$MAX_BUDGET_USD", "--output-format", "json")
+      } else {
+        Log "WARNING: this Claude CLI is too old to be told what it may do (no --permission-mode)."
+        Log "         The run will be refused its own tools and produce nothing. Update the CLI."
+        $claudeArgs = @("-p", "/job-run", "--max-budget-usd", "$MAX_BUDGET_USD", "--output-format", "json")
+      }
       $rc = Invoke-WithTimeout -Seconds $TIMEOUT_SECS -FilePath $CLAUDE_BIN `
-        -ArgumentList @("-p", "/job-run", "--max-budget-usd", "$MAX_BUDGET_USD", "--output-format", "json") `
+        -ArgumentList $claudeArgs `
         -StdoutPath $RESP -StderrPath $RESP_ERR -WorkingDirectory $REPO `
         -OnStarted { param($proc) Start-Guard $proc.Id }
     } catch {
@@ -500,6 +530,7 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
       $rc = 127
     } finally {
       $env:JOBRUN_SOURCE = $savedSource
+      $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = $savedBgCeiling
       Stop-Guard
     }
     if (Test-Path $RESP_ERR) { LogBlock ([System.IO.File]::ReadAllText($RESP_ERR)); Remove-Item $RESP_ERR -Force -ErrorAction SilentlyContinue }
@@ -536,6 +567,13 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
       
 '@, $RESP, $COST_FILE)
     if ($parsed.ExitCode -eq 0) { LogBlock $parsed.StdOut } else { LogBlock ([System.IO.File]::ReadAllText($RESP)) }
+    # A run that was refused its tools is a failed run however it exited: the pipeline cannot read
+    # mail, search the web or write a digest without them.
+    $DENIED = Get-DeniedTools $RESP
+    if ($DENIED) {
+      Log ("TOOLS REFUSED: " + $DENIED + " — the run could not do its work.")
+      if ($rc -eq 0) { $rc = 1 }
+    }
     Remove-Item $RESP -Force -ErrorAction SilentlyContinue
 
     if ($rc -eq 0) {
@@ -610,14 +648,25 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
   # Failure dominates coverage: a run that did not finish cannot be "partial", and a run that
   # produced no digest did not deliver the one thing an unattended run exists to produce -- that
   # used to be recorded as `ok` while the log line right above said the opposite.
+  # Whatever the verdict is, a failed run says so in the activity log as well as in its status file.
+  # A status file is one line on one screen and is overwritten by the next run; the activity log is
+  # where somebody scrolls back to ask what happened on Tuesday.
   $GAPS = Get-GapsJson
   if ($rc -ne 0) {
-    Write-Status "failed" $attempt ("exit code " + $rc + " after " + $attempt + " attempt(s) of " + $ATTEMPTS) $GAPS
-    Notify "JobSeeker daily run failed" ("Exit " + $rc + " after " + $attempt + " attempt(s). See data\.job-run.log")
+    if ($DENIED) {
+      $why = "JobSeeker was not allowed to use the tools it needs (" + $DENIED + "), so the run did nothing. Update JobSeeker — older copies could not grant them."
+    } else {
+      $why = "The run exited " + $rc + " after " + $attempt + " attempt(s) of " + $ATTEMPTS + ". The full output is in data\.job-run.log."
+    }
+    Write-Status "failed" $attempt $why $GAPS
+    Write-Problem "run-failed" ("The daily run failed. " + $why)
+    Notify "JobSeeker daily run failed" $why
   } elseif ($DIGEST_MISSING -eq 1) {
     Write-Status "failed" $attempt "completed but produced no digest — the run's only deliverable is missing" $GAPS
+    Write-Problem "run-failed" "The daily run finished but produced no digest — the one thing it exists to deliver is missing. See data\.job-run.log."
   } elseif ($GAPS -ne "[]") {
     Write-Status "partial" $attempt ("completed, but part of the pipeline could not run: " + $GAPS) $GAPS
+    Write-Problem "run-partial" ("The daily run completed, but part of the pipeline could not run: " + $GAPS)
     Notify "JobSeeker ran, but not fully" (($GAPS -replace '[\[\]"]', '') + " — see the dashboard")
   } else {
     Write-Status "ok" $attempt ("completed on attempt " + $attempt + " of " + $ATTEMPTS) "[]"

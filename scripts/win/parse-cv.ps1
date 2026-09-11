@@ -57,38 +57,19 @@ if (-not $Cv) {
 
 Write-Status "running" "reading $Cv"
 
-# What to tell the user, read off what claude actually said. Ordered by how specific the evidence
-# is: an authentication line is unambiguous, an unreadable PDF is what is left when nothing else
-# explains it. Twin of classify_failure() in scripts/parse-cv.sh -- change both together.
-function Get-FailureDetail {
-  param([string]$Out, [string]$Name)
-  if ($null -eq $Out) { $Out = "" }
-  if ($Out -match 'OAuth|authenticate|Authentication|not logged in|/login') {
-    return "Your Claude login has expired. Open a terminal, run claude, sign in, then try again."
-  }
-  if ($Out -match 'Unknown command') {
-    return "This copy of JobSeeker is missing its /parse-cv command, so the CV was never read. Reinstall or update JobSeeker."
-  }
-  if ($Out -match 'redit balance|insufficient|quota|ate limit') {
-    return "Claude refused the request - out of credit, or rate limited. Check your Claude account, then try again."
-  }
-  if ($Out -match 'budget|max-budget') {
-    return "The per-run spending cap stopped the read before it finished. Raise it in Settings > Spending."
-  }
-  if ($Out -match 'ENOTFOUND|ETIMEDOUT|ECONNREFUSED|network|Network') {
-    return "Claude could not be reached - this PC looks offline. Check the connection and try again."
-  }
-  return "Nothing could be read from $Name. If it is a scan rather than a text PDF, export it again from Word, Pages or Google Docs."
-}
-
 $script:LogFile = $Log
 $rc = 1
 try {
   Write-RunLog "==================== parse-cv '$Cv' $(Get-LocalStamp) ===================="
-  if (-not (Require-Claude)) { Write-Status "failed" "The Claude Code CLI is not on this machine's PATH."; exit 127 }
+  if (-not (Require-Claude)) {
+    Write-Status "failed" "The Claude Code CLI is not on this machine's PATH."
+    Write-Problem "cv-failed" "Reading $CvName could not start: the Claude Code CLI is not on this machine."
+    exit 127
+  }
 
   if (Test-MonthCeiling) {
     Write-Status "failed" "The monthly spending limit has been reached, so the CV was not read."
+    Write-Problem "cv-failed" "Reading $CvName did not start: the monthly spend ceiling has been reached. Raise it in Settings > Spending."
     exit 0
   }
 
@@ -127,7 +108,9 @@ try {
   } elseif ($Parsed -eq "1") {
     Write-Status "ok" "Read $CvName (the run reported exit $rc)"
   } else {
-    Write-Status "failed" (Get-FailureDetail $runOut $CvName)
+    $why = Get-FailureReason $runOut "Nothing could be read from $CvName. If it is a scan rather than a text PDF, export it again from Word, Pages or Google Docs."
+    Write-Status "failed" $why
+    Write-Problem "cv-failed" "Reading $CvName produced nothing. $why"
   }
 
   Write-RunLog "==================== done $(Get-LocalStamp) (exit $rc, parsed=$Parsed) ===================="
