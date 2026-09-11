@@ -143,9 +143,9 @@ try {
     [void](Invoke-Record @("log", "markets", "Market research for '$Market' finished: $rows companies ranked"))
   } else {
     if ($rc -ne 0) {
-      $fallback = "The research pass exited $rc — the full output is in data\.markets-run.log."
+      $fallback = "The research pass exited $rc — the full output is in data/.markets-run.log."
     } elseif ($rows -gt 0) {
-      $fallback = "The run finished but did not update the list — data\markets\ still holds what was there before."
+      $fallback = "The run finished but did not update the list — data/markets/ still holds what was there before."
     } else {
       $fallback = "The run finished but wrote no companies, so nothing was saved."
     }
