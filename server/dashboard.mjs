@@ -3977,6 +3977,47 @@ tr.bform td{background:rgba(110,168,254,.06);border-bottom:2px solid var(--line)
 .st-needs-url{background:#6b2330}.st-manual{background:#3a2f67}
 .st-pending{background:#2b3a67}.st-unknown{background:#3a3f57;color:var(--mut)}
 .tier{font-size:10px;background:#2b3a67}.tier-1{background:#1f6b2f}.tier-2{background:#2b3a67}.tier-3{background:#3a3f57}
+/* Light mode. Every pill above is a dark fill with no text colour of its own, which is correct
+   against dark-mode ink and unreadable against light-mode ink — near-black text on a near-black
+   pill. The status pills solved this with per-state --s-*-bg/fg pairs; these never got the same
+   treatment, so they get it here: a tinted fill and a dark ink, in the same families as the fills
+   they replace, so a green pill stays green. */
+:root[data-theme="light"] .st-readable,
+:root[data-theme="light"] .b-json{background:#d3f0e2;color:#10503a}
+:root[data-theme="light"] .st-queued,
+:root[data-theme="light"] .b-browser{background:#f7e6c4;color:#6b4708}
+:root[data-theme="light"] .st-needs-url,
+:root[data-theme="light"] .b-blocked{background:#fbdadf;color:#7a1b2a}
+:root[data-theme="light"] .st-manual,
+:root[data-theme="light"] .b-manual{background:#e6dffa;color:#402a78}
+:root[data-theme="light"] .st-pending,
+:root[data-theme="light"] .b-html{background:#dbe6fb;color:#1d3a72}
+:root[data-theme="light"] .st-unknown{background:#e2e5f0;color:#4a5068}
+:root[data-theme="light"] .b-none{background:#fadfe3;color:#6e2430}
+:root[data-theme="light"] .b-volatile{background:#f5e6d2;color:#5c4020}
+:root[data-theme="light"] .tier{background:#dbe6fb;color:#1d3a72}
+:root[data-theme="light"] .tier-1{background:#d6f0d6;color:#14561f}
+:root[data-theme="light"] .tier-2{background:#dbe6fb;color:#1d3a72}
+:root[data-theme="light"] .tier-3{background:#e2e5f0;color:#4a5068}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]) .st-readable,
+  :root:not([data-theme="dark"]) .b-json{background:#d3f0e2;color:#10503a}
+  :root:not([data-theme="dark"]) .st-queued,
+  :root:not([data-theme="dark"]) .b-browser{background:#f7e6c4;color:#6b4708}
+  :root:not([data-theme="dark"]) .st-needs-url,
+  :root:not([data-theme="dark"]) .b-blocked{background:#fbdadf;color:#7a1b2a}
+  :root:not([data-theme="dark"]) .st-manual,
+  :root:not([data-theme="dark"]) .b-manual{background:#e6dffa;color:#402a78}
+  :root:not([data-theme="dark"]) .st-pending,
+  :root:not([data-theme="dark"]) .b-html{background:#dbe6fb;color:#1d3a72}
+  :root:not([data-theme="dark"]) .st-unknown{background:#e2e5f0;color:#4a5068}
+  :root:not([data-theme="dark"]) .b-none{background:#fadfe3;color:#6e2430}
+  :root:not([data-theme="dark"]) .b-volatile{background:#f5e6d2;color:#5c4020}
+  :root:not([data-theme="dark"]) .tier{background:#dbe6fb;color:#1d3a72}
+  :root:not([data-theme="dark"]) .tier-1{background:#d6f0d6;color:#14561f}
+  :root:not([data-theme="dark"]) .tier-2{background:#dbe6fb;color:#1d3a72}
+  :root:not([data-theme="dark"]) .tier-3{background:#e2e5f0;color:#4a5068}
+}
 /* Fixed layout, explicit widths. With auto layout the endpoint column grew to fit 200-character
    agent notes, pushing the actions column off the right edge and letting the rationale text spill
    over the neighbouring cell. Percentages keep it responsive without a horizontal scrollbar. */
