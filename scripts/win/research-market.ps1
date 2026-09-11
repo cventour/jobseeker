@@ -123,8 +123,7 @@ try {
     let rows=0, fresh=0;
     try{
       const t=fs.readFileSync(file,"utf8");
-      rows=t.split("
-").filter((l)=>{ const s=l.trim();
+      rows=t.split("\n").filter((l)=>{ const s=l.trim();
         return s.startsWith("|") && !/^\|\s*-+/.test(s) && !/^\|\s*company\s*\|/i.test(s); }).length;
       fresh=fs.statSync(file).mtimeMs>=since-1000 ? 1 : 0;
     }catch{}
