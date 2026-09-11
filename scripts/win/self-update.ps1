@@ -9,7 +9,7 @@
 # replaced, so the ordinary failure is reported to a dashboard that is still running with the
 # install untouched.
 #
-# Two things differ from the Mac, and both are Windows facts rather than choices:
+# Three things differ from the Mac, and all are Windows facts rather than choices:
 #   * The stage-1 copy is NOT about the parser. PowerShell reads the whole file into an AST before
 #     it runs a line, so it cannot be rewritten under itself the way bash can. It moves out because
 #     Windows refuses to remove a directory that is any process's current directory, and the server
@@ -17,6 +17,10 @@
 #     another process".
 #   * There is no app bundle to rebuild and no window to reopen: the window is the user's own
 #     browser in --app mode, and scripts\win\launch.ps1 brings the server back without touching it.
+#   * launch.ps1 is started, not piped. Its Start-Process with redirected logs hands the new server
+#     every inheritable handle it holds, including a pipe we would be reading its output through, so
+#     that read would not end until the server did -- see "start it again". The Mac `open`s the app,
+#     which returns at once and passes nothing down, so scripts/self-update.sh needs no matching change.
 
 param(
   [string]$Tag = "",
@@ -387,9 +391,21 @@ if ($env:JOBSEEKER_NO_LAUNCH -ne "1") {
   # Opening another would leave a dead window beside a live one, which reads as a bug.
   $env:JOBSEEKER_NO_WINDOW = "1"
   Say "starting the dashboard again"
+  # Started, never piped. `& powershell ... | Out-Null` reads launch.ps1's output through a pipe, and
+  # launch.ps1 starts node with redirected logs, which on Windows PowerShell 5.1 is a CreateProcess
+  # that hands the server every inheritable handle -- that pipe included. The read then waits for
+  # the SERVER to exit: this sat at "restarting" for as long as the new dashboard ran, never said
+  # done, and left update.lock naming a live pid, so the next update was refused as already running.
+  #
+  # Not -Wait either: in 5.1 that waits for the whole process tree, which is the server again. And
+  # bounded, because a failing launch.ps1 raises a dialog that waits for a click. The poll below,
+  # not this, is what decides whether the update worked.
   try {
-    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $Repo "scripts\win\launch.ps1") 2>$null | Out-Null
-  } catch { }
+    $launcher = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $Repo "scripts\win\launch.ps1")`"")
+    if ($launcher.WaitForExit(30000)) { Say ("launch.ps1 exited " + $launcher.ExitCode) }
+    else { Say "launch.ps1 is still running after 30s" }
+  } catch { Say ("could not start launch.ps1: " + $_.Exception.Message) }
 
   for ($i = 0; $i -lt 60; $i++) {
     try {
