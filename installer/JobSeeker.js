@@ -138,6 +138,55 @@ function push() {
 // ------------------------------------------------------------------ run loop
 var app = $.NSApplication.sharedApplication;
 var win, wv;
+
+// ---- link opener ---------------------------------------------------------------------------------
+// Every external link on the dashboard is <a target="_blank">. In a WKWebView, clicking one asks the
+// host's WKUIDelegate for a new window -- and this app used to set no delegate at all, so WebKit got
+// no answer and the click did nothing, silently: job postings, LinkedIn profiles, "See everything
+// that changed". The same page in a browser, and on Windows (Edge/Chrome in --app mode), always
+// worked, which is why it looked like a page bug and was not one.
+//
+// So the delegate answers the new-window request by handing the link to the default browser --
+// where the user is already signed in to LinkedIn and the job sites -- and returns NO window.
+//
+// The return value is the trap. It must be $(), JXA's nil. Returning null from a JXA method typed
+// 'id' segfaults the whole process on the first click (measured: exit 139, every time), so a
+// "harmless" null here would have turned a dead link into a crashed app.
+//
+// Only http and https leave the app. A file:, javascript: or custom-scheme link is dropped: this is
+// the one path by which page content can make the Mac open something, and none of those is a page.
+//
+// linkOpener is kept in a global because WKWebView holds its UI delegate WEAKLY: a local would be
+// collected and the webview would quietly go back to having no delegate.
+var openExternally = function (url) { $.NSWorkspace.sharedWorkspace.openURL(url); };
+try {
+  ObjC.registerSubclass({
+    name: 'JobSeekerLinkOpener',
+    protocols: ['WKUIDelegate'],
+    methods: {
+      'webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:': {
+        types: ['id', ['id', 'id', 'id', 'id']],
+        implementation: function (webView, configuration, navigationAction, windowFeatures) {
+          try {
+            var url = navigationAction.request.URL;
+            var scheme = String(ObjC.unwrap(url.scheme) || '').toLowerCase();
+            if (scheme === 'http' || scheme === 'https') {
+              openExternally(url);
+              // The host only: enough to see that a click was handled, without writing job URLs
+              // (and whatever tracking tokens ride on them) into a log that goes into bug reports.
+              appendFile(FULLLOG, stamp() + '  opened a link in the browser: ' + ObjC.unwrap(url.host) + '\n');
+            }
+          } catch (e) {
+            appendFile(FULLLOG, stamp() + '  link opener error: ' + e.message + '\n');
+          }
+          return $();
+        }
+      }
+    }
+  });
+} catch (e) { /* already registered in this process -- $.JobSeekerLinkOpener still exists */ }
+var linkOpener = $.JobSeekerLinkOpener.alloc.init;
+// ---- end link opener -----------------------------------------------------------------------------
 var mode = 'setup';
 
 // ------------------------------------------------------------------ native chrome follows the page
@@ -605,6 +654,7 @@ function run() {
 
   var cfg = $.WKWebViewConfiguration.alloc.init;
   wv = $.WKWebView.alloc.initWithFrameConfiguration(rect, cfg);
+  wv.setUIDelegate(linkOpener);   // see "link opener" above: without it, no link opens
   wv.loadFileURLAllowingReadAccessToURL(
     $.NSURL.fileURLWithPath($(UI)), $.NSURL.fileURLWithPath($(RES)));
   win.contentView = wv;

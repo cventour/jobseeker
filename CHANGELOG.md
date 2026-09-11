@@ -4,6 +4,12 @@ Every release, in plain language. Newest first.
 
 ---
 
+## Unreleased
+
+- Fixed: links in the Mac app did nothing when clicked — job postings, LinkedIn profiles, "open ↗", and "See everything that changed" after an update. They now open in your web browser, where you are already signed in to LinkedIn and the job sites. In a browser tab and on Windows they always worked.
+
+---
+
 ## v0.7.6 — 11 September 2026
 
 - A run no longer fills Chrome with tabs. Reading forty careers pages opened forty tabs; it now opens one, moves that one from page to page, and closes it at the end. Looking through LinkedIn jobs and filling in an application work the same way: one tab, reused, closed when it is finished with.
