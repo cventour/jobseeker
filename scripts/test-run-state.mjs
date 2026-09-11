@@ -223,7 +223,13 @@ async function main() {
   {
     await seedRun(dir, { canRead: true, digest: "delivered: whatsapp" });
     await runScript(dir, "run-now", ["job-run"]);   // leaves a genuine `ok` on disk
-    const jobRun = plat.scriptCommand("job-run").args[0];
+    // The script's own path, found by name rather than by position. On macOS the command is
+    // `bash <script>`, so it is args[0]; on Windows it is `powershell -NoProfile ... -File <script>`,
+    // and args[0] is "-NoProfile". Taking args[0] made this suite open a file called "-NoProfile" and
+    // die with a harness error -- on every Windows run from v0.7.4 on, silently skipping everything
+    // below this point, market research and the schedule ladder included.
+    const jobRun = plat.scriptCommand("job-run").args.find((a) => /job-run\.(sh|ps1)$/.test(a));
+    if (!jobRun) throw new Error("could not find the job-run script in scriptCommand's arguments");
     const saved = await fs.readFile(jobRun, "utf8");
     await fs.writeFile(jobRun, IS_WIN ? "exit 3\r\n" : "#!/usr/bin/env bash\nexit 3\n");
     try {
