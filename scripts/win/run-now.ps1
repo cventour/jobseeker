@@ -181,7 +181,7 @@ try {
   } else {
     # Say why, and say it where someone will see it. job-run writes its own row, so this covers the
     # other buttons; a status file is overwritten by the next run, the activity log is not.
-    $why = Get-FailureReason $runOut "$Label exited $rc — the full output is in data\.run-now.log."
+    $why = Get-FailureReason $runOut "$Label exited $rc — the full output is in data/.run-now.log."
     Write-Status "failed" $why
     Write-Problem "run-failed" "$Label did not finish. $why"
   }

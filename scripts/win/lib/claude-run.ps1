@@ -73,10 +73,15 @@ function Write-Utf8File { # path, text — atomic enough for a small status file
 function Get-UtcStamp { (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") }
 function Get-LocalStamp { Get-Date -Format "yyyy-MM-dd HH:mm:ss" }
 
-function ConvertTo-JsonString { # the bash does sed 's/"/\\"/g' — same, and nothing more
+# Backslash FIRST, then the quote. The bash twin only escapes quotes (sed 's/"/\\"/g') and gets away
+# with it, because nothing it writes contains a backslash. PowerShell text does, constantly: every
+# Windows path, and every exception message that mentions one. An unescaped "data\.run-now.log" put
+# `\.` into the status file -- an invalid JSON escape -- so the dashboard could not read the status
+# of a failed run at all, which made a failure on Windows exactly as silent as the bug it reported.
+function ConvertTo-JsonString {
   param([AllowEmptyString()][AllowNull()][string]$Text)
   if ($null -eq $Text) { return "" }
-  return $Text.Replace('"', '\"')
+  return $Text.Replace('\', '\\').Replace('"', '\"')
 }
 
 # ---- running native programs ---------------------------------------------------------------------

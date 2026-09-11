@@ -123,8 +123,7 @@ try {
     let rows=0, fresh=0;
     try{
       const t=fs.readFileSync(file,"utf8");
-      rows=t.split("
-").filter((l)=>{ const s=l.trim();
+      rows=t.split("\n").filter((l)=>{ const s=l.trim();
         return s.startsWith("|") && !/^\|\s*-+/.test(s) && !/^\|\s*company\s*\|/i.test(s); }).length;
       fresh=fs.statSync(file).mtimeMs>=since-1000 ? 1 : 0;
     }catch{}
@@ -143,9 +142,9 @@ try {
     [void](Invoke-Record @("log", "markets", "Market research for '$Market' finished: $rows companies ranked"))
   } else {
     if ($rc -ne 0) {
-      $fallback = "The research pass exited $rc — the full output is in data\.markets-run.log."
+      $fallback = "The research pass exited $rc — the full output is in data/.markets-run.log."
     } elseif ($rows -gt 0) {
-      $fallback = "The run finished but did not update the list — data\markets\ still holds what was there before."
+      $fallback = "The run finished but did not update the list — data/markets/ still holds what was there before."
     } else {
       $fallback = "The run finished but wrote no companies, so nothing was saved."
     }

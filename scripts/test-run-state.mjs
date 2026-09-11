@@ -223,7 +223,13 @@ async function main() {
   {
     await seedRun(dir, { canRead: true, digest: "delivered: whatsapp" });
     await runScript(dir, "run-now", ["job-run"]);   // leaves a genuine `ok` on disk
-    const jobRun = plat.scriptCommand("job-run").args[0];
+    // The script's own path, found by name rather than by position. On macOS the command is
+    // `bash <script>`, so it is args[0]; on Windows it is `powershell -NoProfile ... -File <script>`,
+    // and args[0] is "-NoProfile". Taking args[0] made this suite open a file called "-NoProfile" and
+    // die with a harness error -- on every Windows run from v0.7.4 on, silently skipping everything
+    // below this point, market research and the schedule ladder included.
+    const jobRun = plat.scriptCommand("job-run").args.find((a) => /job-run\.(sh|ps1)$/.test(a));
+    if (!jobRun) throw new Error("could not find the job-run script in scriptCommand's arguments");
     const saved = await fs.readFile(jobRun, "utf8");
     await fs.writeFile(jobRun, IS_WIN ? "exit 3\r\n" : "#!/usr/bin/env bash\nexit 3\n");
     try {
@@ -267,11 +273,16 @@ async function main() {
   // told what it may do, and a stub that says nothing is correctly treated as one that cannot.
   const HELP_SH = `if [ "$1" = "--help" ]; then echo '  --allowedTools <tools...>'; echo '  --permission-mode <mode>'; exit 0; fi\n`;
   const HELP_CMD = 'if "%1"=="--help" (echo   --allowedTools ^<tools...^>& echo   --permission-mode ^<mode^>& exit /b 0)\r\n';
+  await fs.writeFile(path.join(dir, "bin", "row.txt"), ROW.replace(/\n$/, "\r\n"));
   const writesRows = `#!/bin/bash\n${HELP_SH}printf '%s' '${ROW.trim()}' >> data/markets/fintech.md\nprintf '\\n' >> data/markets/fintech.md\nprintf '{"result":"ranked","total_cost_usd":0}\\n'\nexit 0\n`;
   await writeStub(dir, "claude", writesRows,
-    `@echo off\r\n${HELP_CMD}echo ${ROW.trim()}>> data\\markets\\fintech.md\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
+    // The Windows stub copies a row file the test writes, rather than echoing the row: cmd reads every
+    // | as a pipe, and escaping them with ^| still left the "worked" pass writing no row on Windows.
+    // `type` of a file has nothing on its command line for cmd to reinterpret. %~dp0 is the stub's
+    // own directory, bin\ -- outside data/markets, so the row file is never mistaken for a market.
+    `@echo off\r\n${HELP_CMD}type "%~dp0row.txt" >> data\\markets\\fintech.md\r\necho {"result":"ranked","total_cost_usd":0}\r\nexit /b 0\r\n`);
   let mk = await researchWith();
-  check(mk.state === "ok", "a research pass that worked says so", mk.state);
+  check(mk.state === "ok", "a research pass that worked says so", mk.detail ? `${mk.state} — ${mk.detail}` : mk.state);
   check(mk.market === "Fintech", "…and names the market it was asked for", mk.market);
 
   // The regression that made "markets scan does not work" unanswerable: the run finishes clean and

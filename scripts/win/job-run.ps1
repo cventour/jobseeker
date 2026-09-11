@@ -656,14 +656,14 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
     if ($DENIED) {
       $why = "JobSeeker was not allowed to use the tools it needs (" + $DENIED + "), so the run did nothing. Update JobSeeker — older copies could not grant them."
     } else {
-      $why = "The run exited " + $rc + " after " + $attempt + " attempt(s) of " + $ATTEMPTS + ". The full output is in data\.job-run.log."
+      $why = "The run exited " + $rc + " after " + $attempt + " attempt(s) of " + $ATTEMPTS + ". The full output is in data/.job-run.log."
     }
     Write-Status "failed" $attempt $why $GAPS
     Write-Problem "run-failed" ("The daily run failed. " + $why)
     Notify "JobSeeker daily run failed" $why
   } elseif ($DIGEST_MISSING -eq 1) {
     Write-Status "failed" $attempt "completed but produced no digest — the run's only deliverable is missing" $GAPS
-    Write-Problem "run-failed" "The daily run finished but produced no digest — the one thing it exists to deliver is missing. See data\.job-run.log."
+    Write-Problem "run-failed" "The daily run finished but produced no digest — the one thing it exists to deliver is missing. See data/.job-run.log."
   } elseif ($GAPS -ne "[]") {
     Write-Status "partial" $attempt ("completed, but part of the pipeline could not run: " + $GAPS) $GAPS
     Write-Problem "run-partial" ("The daily run completed, but part of the pipeline could not run: " + $GAPS)
