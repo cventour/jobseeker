@@ -1,5 +1,5 @@
 ---
-description: The one JobSeeker command — "/jobseeker <subcommand> [args]". markets, curate, track, apply, apply-fill, followup, send-approval, job-run, onboard, parse-cv. Each specialist runs on its own model. "/jobseeker" alone lists them and shows your pipeline.
+description: The one JobSeeker command — "/jobseeker <subcommand> [args]". markets, curate, track, apply, apply-fill, followup, send-approval, reconcile, check, job-run, onboard, parse-cv. Each specialist runs on its own model. "/jobseeker" alone lists them and shows your pipeline.
 argument-hint: "<subcommand> [args]"
 ---
 
@@ -21,6 +21,8 @@ arguments (call them *ARGS*, possibly empty).
 | `apply-fill` | `<proposal-id>` | Fill an application form and STOP; you review and submit (application-agent) |
 | `followup` | `[who or id]` | Draft a follow-up, get approval, then send (comms-agent) |
 | `send-approval` | `<approval-id>` | Send one message you have already approved (comms-agent) |
+| `reconcile` | | Close open tasks that another channel proves are already done (reconciler) |
+| `check` | | Audit the tracker: failed runs, duplicates, pending approvals, overdue, stale markets (supervisor) |
 | `job-run` | `[deep]` | The full daily pipeline; queues approvals, sends nothing |
 | `onboard` | | First-run questionnaire: markets, roles, locations, answers, preferences |
 | `parse-cv` | | Parse `templates/cv/*.pdf` into `data/profile.md` |

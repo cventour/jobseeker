@@ -283,6 +283,8 @@ The subcommands:
 | `/jobseeker apply <id>` | Prepare an application — **pauses for your approval before submitting** |
 | `/jobseeker followup` | Draft a follow-up — **pauses for your approval before sending** |
 | `/jobseeker markets` | Build or refresh the ranked company list for a market |
+| `/jobseeker reconcile` | Close tasks you have already done, using evidence from any channel |
+| `/jobseeker check` | Health check: failed runs, duplicates, pending approvals, anything overdue |
 | `/jobseeker onboard` · `/jobseeker parse-cv` | First-run setup and CV parsing — the terminal version of the dashboard wizard |
 
 And two things you run in the terminal:

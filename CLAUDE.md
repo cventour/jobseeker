@@ -28,7 +28,8 @@ Natural request → what to run:
 | "follow up with X" | `/jobseeker followup <who>` (draft → approve → send) |
 | "run my morning routine" | `/jobseeker job-run` |
 | "set me up" / "parse my CV" | `/jobseeker onboard`, `/jobseeker parse-cv` — or point them at the dashboard wizard (`/welcome`), which writes the same files |
-| "close what I've already done" | spawn the `reconciler` agent |
+| "close what I've already done" | `/jobseeker reconcile` |
+| "anything wrong with my tracker" / health check | `/jobseeker check` |
 | "what's my pipeline / status" | jobseeker agent → `server/audit.mjs` + summarize |
 | "add task …" (plain English) | jobseeker agent → `record.mjs add-task` (parse date/who/type, keep raw detail) |
 

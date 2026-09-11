@@ -36,7 +36,8 @@ their words filled in as arguments:
 | apply to a proposal | `/jobseeker apply <proposal-id>` (or `apply-fill` to fill and stop) |
 | the whole daily run | `/jobseeker job-run` (`deep` for the weekly pass) |
 | set up / parse a CV | `/jobseeker onboard`, `/jobseeker parse-cv` |
-| close tasks already done, or "anything wrong with my tracker" | ask the main session to spawn `reconciler` / `supervisor` |
+| close tasks already done | `/jobseeker reconcile` |
+| "anything wrong with my tracker" / health check | `/jobseeker check` |
 
 One line per handoff: what it will do and the command. If the request mixes a quick ask with
 specialist work, answer the quick ask and hand off the rest. `/jobseeker` is a project command: if the
