@@ -207,6 +207,12 @@ var themeSeen = null, themeApplied = null, themeTick = 0;
 // reads as setup running again, on an app you have used for weeks. Quiet mode keeps the same work
 // and drops the costume.
 var quietStart = false;
+// A set-up install starting: the window opens at dashboard size on the boot veil (installer/ui.html)
+// and hands over to the dashboard underneath an identical one (BOOT_VEIL in server/dashboard.mjs).
+// Decided once in run(), from the same files setupFinished() reads, before the window exists -- the
+// window's size is the first thing that would otherwise jump. Cleared by leaveBoot() the moment the
+// launch turns out to need real setup work after all.
+var bootMode = false;
 
 function themeAnswer(result, error) {
   // A real function, never $() -- see THE RULE at the top of this file.
@@ -235,6 +241,9 @@ function syncAppearance() {
       app.appearance = $();
     }
     appendFile(FULLLOG, stamp() + '  appearance: ' + themeApplied + '\n');
+    // Only the DASHBOARD's setting is worth keeping: ui.html is a file:// page with storage of its
+    // own, and the next launch's veil must match the page it will hand over to, not this one.
+    if (mode === 'app') writeFile(WORK + '/appearance', themeApplied);
   } catch (e) {
     appendFile(FULLLOG, stamp() + '  appearance failed: ' + e.message + '\n');
   }
@@ -407,7 +416,8 @@ function startNext() {
   var s = stepById(id);
   if (s && s.state === 'ok') { startNext(); return; }
   queuedDone++;
-  state.view = 'work';
+  state.view = bootMode ? 'boot' : 'work';
+  if (bootMode) { state.say = 'Starting the dashboard'; state.pct = Math.max(state.pct, 20); }
   if (quietStart) {
     // Said once by decideWhatToDo and left alone: no step count, no row list, nothing to read.
     state.title = 'Starting JobSeeker';
@@ -445,6 +455,7 @@ function afterStep(ok) {
   }
   running = null; task = null;
   if (state.failed) {
+    leaveBoot();   // a failure is shown by the setup window's rows, never behind the veil
     // Stop the run and let the user decide: retry that row, or continue without it.
     state.title = 'One step did not finish';
     state.subtitle = 'Nothing else was changed. Try it again, or carry on without it.';
@@ -473,6 +484,7 @@ function onQueueEmpty() {
   // (or deliberately left), this launch is just opening the app: go to the dashboard.
   if (setupFinished() && startStep && startStep.state === 'ok') {
     state.brandnote = '';
+    if (bootMode) { finishBoot(); return; }
     openDashboard();
     return;
   }
@@ -530,6 +542,39 @@ function setupFinished() {
   return /^markets:[ \t]*\S/m.test(crit) || /^roles:[ \t]*\S/m.test(crit);
 }
 
+// ------------------------------------------------------------------ the boot veil
+// Paint the veil's last frame -- the full bar, "Opening your dashboard" -- and hand over a beat later.
+// The dashboard's veil paints exactly that frame, so the bar must reach it HERE first; loading at
+// once would race the render and the bar would visibly jump at the one moment meant to be still.
+// The ready loop's openAt check does the handover once the bar's .25s transition has run.
+function finishBoot() {
+  state.say = 'Opening your dashboard';
+  state.pct = 100;
+  push();
+  openAt = Date.now() + 350;
+}
+
+// The launch needs real setup work (a missing runtime, a failed start): go back to the setup window
+// and let its rows say why. The veil is for a Mac that is merely starting; it must never stand in
+// front of a problem.
+function leaveBoot() {
+  if (!bootMode) return;
+  bootMode = false;
+  quietStart = false;
+  state.view = 'work';
+  win.title = 'JobSeeker Setup';
+  try { win.styleMask = win.styleMask & ~$.NSWindowStyleMaskResizable; } catch (e) { /* keep it */ }
+  win.minSize = $.NSMakeSize(600, 500);
+  win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 800, 688), true, true);
+  placeWindow(win);
+  placementChecked = false; placementTries = 0;
+}
+
+function rememberedTheme() {
+  var t = readFile(WORK + '/appearance').trim();
+  return (t === 'light' || t === 'dark') ? t : 'auto';
+}
+
 // ------------------------------------------------------------------ the handoff
 function dashboardPort() {
   var cfg = readFile(REPO + '/config/job-seeker.config.md');
@@ -557,11 +602,18 @@ function openDashboard() {
   win.title = 'JobSeeker';
   // Breadcrumb. When someone reports "it opened on a blank window", this line in
   // data/.setup/setup.log is the difference between knowing the handoff happened and guessing.
-  appendFile(FULLLOG, stamp() + '  window handed over to ' + url + '\n');
-  win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 1180, 900), true, false);
-  placeWindow(win);
-  placementChecked = false; placementTries = 0;   // re-check once the resized window is up
-  win.minSize = $.NSMakeSize(880, 620);
+  if (bootMode) {
+    // Already at dashboard size, and the dashboard draws the same veil at its first paint and fades
+    // it: no resize, no page swap anyone can see.
+    url += '/?boot=1';
+    appendFile(FULLLOG, stamp() + '  window handed over to ' + url + '\n');
+  } else {
+    appendFile(FULLLOG, stamp() + '  window handed over to ' + url + '\n');
+    win.setFrameDisplayAnimate($.NSMakeRect(0, 0, 1180, 900), true, false);
+    placeWindow(win);
+    placementChecked = false; placementTries = 0;   // re-check once the resized window is up
+    win.minSize = $.NSMakeSize(880, 620);
+  }
   wv.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString($(url))));
 }
 
@@ -635,12 +687,23 @@ function run() {
   app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
   buildMenu();
 
-  var rect = $.NSMakeRect(0, 0, 800, 660);   // a title bar costs height; give it back
-  win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-    rect,
-    $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable,
-    2, false);
-  win.title = 'JobSeeker Setup';
+  // A set-up install opens where the dashboard will be, at the size it will be: the resize from
+  // setup size to dashboard size was one of the three jumps this launch used to make.
+  bootMode = setupFinished();
+  var rect = bootMode ? $.NSMakeRect(0, 0, 1180, 872)   // 900 tall with the title bar, as the dashboard
+                      : $.NSMakeRect(0, 0, 800, 660);   // a title bar costs height; give it back
+  var mask = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable;
+  if (bootMode) mask = mask | $.NSWindowStyleMaskResizable;
+  win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(rect, mask, 2, false);
+  win.title = bootMode ? 'JobSeeker' : 'JobSeeker Setup';
+  if (bootMode) {
+    win.minSize = $.NSMakeSize(880, 620);
+    state.view = 'boot';
+    state.title = 'Starting JobSeeker';
+    state.say = 'Checking this Mac';
+    state.pct = 12;
+    state.theme = rememberedTheme();
+  }
   // A normal title bar, not a transparent full-height one. The transparent version let the page
   // draw right to the top, but it left almost nothing to drag the window by -- only a thin,
   // invisible strip -- so the window was awkward to move. A real title bar is the obvious handle,
@@ -720,7 +783,7 @@ function tick() {
     // work after all, decideWhatToDo puts the wizard back.
     if (setupFinished()) {
       quietStart = true;
-      state.view = 'work';
+      state.view = bootMode ? 'boot' : 'work';
       state.title = 'Starting JobSeeker';
       state.subtitle = 'One moment.';
       state.brandnote = '';
@@ -752,6 +815,7 @@ function tick() {
 
   if (task) {
     drainStepLog();
+    if (bootMode) state.say = 'Starting the dashboard';   // the step's own words repeat the title
     if (!task.isRunning) afterStep(task.terminationStatus === 0);
     push();
     return;
@@ -812,6 +876,7 @@ function decideWhatToDo() {
   if (missing.length === 0) {
     // Set up, and already answering: an ordinary launch of an app configured weeks ago.
     state.brandnote = '';
+    if (bootMode) { finishBoot(); return; }
     openDashboard();
     return;
   }
@@ -828,6 +893,7 @@ function decideWhatToDo() {
   // There is real work to do, so open on the welcome rather than dropping someone straight into
   // a list of things about to be installed on their Mac. Whatever the quiet start assumed, this
   // launch IS a setup run.
+  leaveBoot();
   quietStart = false;
   state.view = 'welcome';
   state.status = 'Nothing has been installed yet.|';
