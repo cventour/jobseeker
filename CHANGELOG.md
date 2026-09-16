@@ -4,6 +4,12 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.10 — 16 September 2026
+
+- Fixed: **Send test message** in WhatsApp setup failed with a line of code about your number not being allowlisted, on a connection that was working. The test was asking the channel to send in the moment before it had finished connecting, which is the one moment it cannot send to your own number. It now waits for the channel, and if it still cannot send, it says what to do in plain words instead of showing the raw error.
+
+---
+
 ## v0.7.9 — 11 September 2026
 
 - Fixed: on Windows, updating from inside JobSeeker stopped at "restarting" and never finished. The new version was already running, but the update never tidied up after itself, so the next Update was turned down as one already in progress. It now finishes in seconds.
