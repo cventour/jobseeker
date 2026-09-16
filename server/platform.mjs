@@ -271,6 +271,63 @@ export async function browserAgentStatus() {
 
 // ---------- Small OS conveniences ----------
 
+/**
+ * Is Claude Code signed in?
+ *
+ * Installing the CLI and being able to use it are two different facts. The binary lands signed
+ * out, and every agent JobSeeker runs then fails at its first call with an auth error that says
+ * nothing about setup -- which is how someone spent an afternoon re-uploading a CV that was never
+ * the problem. Same rule as Test-ClaudeSignedIn in scripts/win/setup-step.ps1 and
+ * claude_signed_in() in scripts/lib/claude-run.sh; three languages need it, so there are three
+ * copies, and they are kept in step.
+ *
+ * A hint, never proof: presence is good enough to stop nagging someone who has already signed in,
+ * and absence must never be the reason an action is refused. Claude itself is the only authority
+ * on its own session.
+ *
+ * On macOS the credential lives in the login keychain as well as on disk. The lookup below asks
+ * only whether the item EXISTS (no -w, so no secret is read), which is what keeps it from raising
+ * the keychain permission dialog at someone who only opened a dashboard.
+ */
+export async function claudeSignedIn() {
+  if (process.env.ANTHROPIC_API_KEY) return true;
+  if (existsSync(path.join(homeDir(), ".claude", ".credentials.json"))) return true;
+  if (IS_MAC) return (await run("security", ["find-generic-password", "-s", "Claude Code-credentials"], { timeout: 4000 })).ok;
+  return false;
+}
+
+/**
+ * Open a terminal window with `bin` already running in it.
+ *
+ * Signing in to Claude can only happen in a terminal -- it is an interactive prompt and a browser
+ * round-trip, and a web page in a WKWebView can host neither. The next best thing to doing it for
+ * someone is opening the window with the command already running, so "run claude and sign in"
+ * stops being an instruction to carry out and becomes a button.
+ *
+ * `bin` is an absolute path, not a command line: installer/JobSeeker.js already opens a terminal
+ * this exact way, and a path needs no quoting rules on either OS. A binary that could not be found
+ * is the caller's problem to report -- passing "" here just returns false.
+ *
+ * Returns false where there is no terminal to open, and the caller must then still say what to
+ * type: an offer that silently does nothing is worse than no offer.
+ */
+export function openTerminalRunning(bin) {
+  if (!bin) return false;
+  let child = null;
+  try {
+    if (IS_WIN) child = spawnDetached("cmd", ["/c", "start", "", "cmd", "/k", bin]);
+    else if (IS_MAC) child = spawnDetached("open", ["-a", "Terminal", bin]);
+  } catch {
+    return false;
+  }
+  if (!child) return false;
+  // spawn reports a missing binary through an 'error' EVENT, and an unhandled one on a detached
+  // child would take the dashboard down with it. A terminal that could not be opened is a message,
+  // never a crash.
+  child.on("error", () => {});
+  return true;
+}
+
 export function openUrl(url) {
   if (IS_WIN) return spawnDetached("cmd", ["/c", "start", "", url]);
   if (IS_MAC) return spawnDetached("open", [url]);
