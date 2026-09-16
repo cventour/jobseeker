@@ -163,12 +163,24 @@ async function main() {
         process.exit(0);
       }
       last = JSON.stringify(err).slice(0, 300);
-      if (!/not connected|starting|reconnect/i.test(last)) break;
+      // "not allowlisted" for our OWN number is a timing answer, not a verdict. The channel
+      // auto-adds the linked account to the allowlist when its socket opens, and its access check
+      // runs before its connected check -- so every call made in the second or two before that
+      // comes back refused rather than "not connected". Retried on exactly the same terms, and
+      // only for our own jid, so a real access refusal still fails fast.
+      const mine = /not allowlisted/i.test(last) && last.includes(jid);
+      if (!/not connected|starting|reconnect/i.test(last) && !mine) break;
       await new Promise((r) => setTimeout(r, 2000));
     }
     clearTimeout(giveUp);
     stop();
-    die(`the channel refused to send: ${last || "no reason given"}`);
+    // Raw MCP JSON is not an answer to "did it work". If we waited out the retries and the
+    // channel still would not send to the linked number, name the one command that fixes it.
+    die(
+      /not allowlisted/i.test(last)
+        ? `WhatsApp is linked, but the channel has not allowlisted ${jid} to send to. In Claude Code run: /whatsapp-channel:access allow ${jid}`
+        : `the channel refused to send: ${last || "no reason given"}`,
+    );
   } catch (e) {
     clearTimeout(giveUp);
     stop();
