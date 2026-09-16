@@ -4,6 +4,17 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.11 — 16 September 2026
+
+- You can now sign in to Claude from JobSeeker. Settings ▸ Setup says whether Claude is signed in, and **Sign in to Claude** opens a terminal with Claude already running. This matters more than it sounds: until it is done, reading your CV, researching a market and the daily run all fail at their first step, and they used to fail without ever saying why.
+- Fixed: the CV page said "No CV parsed" and left it there. When a CV could not be read the reason was written down but only ever shown by the setup wizard, so the page looked exactly like an upload that had not worked — and the only thing it suggested was uploading again. The reason is now on the CV page itself, with the button that fixes the commonest cause of it.
+- Fixed: replacing your CV looked like it had been refused. The CV step named whichever file the folder happened to list last rather than the one you had just added, so you were shown the old name and reasonably concluded nothing had happened. It now names the file JobSeeker actually read.
+- Fixed: a CV that was read successfully could still be called unreadable for the rest of the day, if an earlier attempt that day had failed.
+- Fixed: on a Mac, setting up WhatsApp always failed with "the plugin did not install". JobSeeker was pasting a line of its own log into the plugin's name. Windows was never affected.
+- Setting up on a Mac now says when Claude Code is installed but not signed in, on the row itself, the way Windows already did.
+
+---
+
 ## v0.7.10 — 16 September 2026
 
 - Fixed: **Send test message** in WhatsApp setup failed with a line of code about your number not being allowlisted, on a connection that was working. The test was asking the channel to send in the moment before it had finished connecting, which is the one moment it cannot send to your own number. It now waits for the channel, and if it still cannot send, it says what to do in plain words instead of showing the raw error.
