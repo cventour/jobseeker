@@ -598,6 +598,11 @@ async function loadAll() {
   ]);
   const markets = await loadMarkets();
   const marketAskDismissed = await readMarketAskDismissed();
+  // Why the CV is not parsed, and whether Claude can read one at all. Both are read here rather
+  // than in the CV tab's renderer because "No CV parsed" with no reason beside it is what sent
+  // someone re-uploading the same file all afternoon.
+  const cvStatus = await readCVStatus();
+  const claudeSignedIn = await platform.claudeSignedIn();
   const dismissedNotices = await readDismissedNotices();
   const update = await updateState();
   // Read separately from `update`, not off it. The update check is a background job that has not
@@ -689,6 +694,8 @@ async function loadAll() {
   return {
     criteria,
     profile,
+    cvStatus,
+    claudeSignedIn,
     applications,
     proposals,
     approvals,
@@ -2009,14 +2016,33 @@ function weightsHTML(criteria) {
     <button type="submit" form="criteriaform" class="btn-secondary btn-small">Save weights</button>`;
 }
 
-function profileHTML(profile) {
+function profileHTML(profile, cvStatus, claudeSignedIn) {
   const parsed = profile.data?.parsed_at;
   const status = parsed
     ? `<span class="pill s-offer">CV parsed ${esc(parsed)}</span>`
     : `<span class="pill s-rejected">No CV parsed</span>`;
+  // Say why, not just that.
+  //
+  // This pane used to render "No CV parsed" and nothing else, while the reason sat in
+  // .cv-parse.status.json being shown only by the wizard. Someone whose Claude login had expired
+  // therefore saw a page that looked exactly like "your upload did not work", and did the only
+  // thing it suggested -- uploaded again, twice, and then filed a bug about not being able to
+  // re-upload a CV. The failure that is still the latest word on this CV now appears here, in the
+  // same words, with the button that fixes the commonest cause of it.
+  const failure = cvFailure(cvStatus, profile.data, Boolean(parsed));
+  const why = failure
+    ? `<div class="alert bad"><strong>That file could not be read.</strong> ${esc(failure.detail || "")}${
+        cvFailureIsAuth(failure.detail) ? ` ${signInBtnHTML("cv", "settings")}` : ""
+      }</div>`
+    : !parsed && !claudeSignedIn
+      ? `<div class="alert warn"><strong>Claude is not signed in on this computer.</strong> Reading a CV is
+          the first thing that needs it, and every attempt will fail until it is done.
+          ${signInBtnHTML("cv", "settings")}</div>`
+      : "";
   // The upload form that used to live here left you to run /jobseeker parse-cv yourself, and a PDF uploaded
   // but never read is indistinguishable from no CV at all. One page now does both.
   return `<p>${status} ${profile.data?.source_cv ? esc(profile.data.source_cv) : ""}</p>
+    ${why}
     <p><a class="btn-small linkbtn" href="/setup-step?step=cv&back=cv">${parsed ? "Replace my CV" : "Add my CV"}</a></p>
     <p class="muted">Uploading it also reads it — Claude turns the PDF into <code>data/profile.md</code>,
       which is what roles are scored against. <code>/jobseeker parse-cv</code> in Claude Code does the same thing.</p>`;
@@ -2753,6 +2779,9 @@ function setupHTML(st, criteria, marketNames = [], subReq = "", upd = null) {
         ${chanRow("Gmail / Calendar", st.channels.gmail, "Connected in Claude Code, not here.")}
         ${chanRow("WhatsApp", st.channels.whatsapp, "Read through Chrome by the daily run.")}
         ${chanRow("LinkedIn", st.channels.linkedin, "Read through Chrome by the daily run.")}
+        ${/* Above the CV row deliberately: a signed-out Claude is the reason the CV row below it
+              says "not parsed", and reading them the other way round explains nothing. */""}
+        <tr><td class="nw"><b>Claude</b></td><td class="nw">${st.claudeSignedIn ? `<span class="ok-pill">signed in</span>` : `<span class="bad-pill">signed out</span>`}</td><td class="nw">${st.claudeSignedIn ? "" : signInBtnHTML("setup", "settings")}</td><td class="muted">${st.claudeSignedIn ? "Everything that reads, researches or writes goes through it." : "Until this is done, reading your CV, researching a market and the daily run all fail at their first step."}</td></tr>
         <tr><td class="nw"><b>CV</b></td><td class="nw">${st.profileParsed ? `<span class="ok-pill">parsed</span>` : `<span class="bad-pill">not parsed</span>`}</td><td class="nw"></td><td class="muted">Upload on the CV tab, then run <code>/jobseeker parse-cv</code> in Claude Code.</td></tr>
       </tbody></table></div>
 
@@ -2808,6 +2837,8 @@ async function systemStatus() {
     /* absent */
   }
 
+  const claudeSignedIn = await platform.claudeSignedIn();
+
   let config = {};
   try {
     config = parseFrontmatter(await fs.readFile(path.join(ROOT, "config", "job-seeker.config.md"), "utf8")).data || {};
@@ -2837,6 +2868,7 @@ async function systemStatus() {
       linkedin: ageDays(wm.linkedin),
     },
     profileParsed,
+    claudeSignedIn,
     bridge: bridge ? bridge.status() : null,
   };
 }
@@ -3578,7 +3610,7 @@ ${tabStrip(TABS, active)}
 <div id="panels">
 ${tabPanel("setup", on("setup"), sec("setup", `Setup`, unfinishedHTML(all.welcome, all.markets) + setupHTML(all.status, all.criteria, (all.markets ?? []).map((m) => m.label), all.sub, all.update)))}
 ${tabPanel("companies", on("companies"), sec("companies", `Companies <span class="muted">— who you are targeting and where their jobs are read from (🔎 to find a board, ✏️ to paste one)</span>`, companiesHTML(all)))}
-${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /jobseeker parse-cv</span>`, profileHTML(all.profile)))}
+${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into data/profile.md by /jobseeker parse-cv</span>`, profileHTML(all.profile, all.cvStatus, all.claudeSignedIn)))}
 </div>
 <footer class="muted">${
   platform.IS_WIN
@@ -6342,6 +6374,90 @@ const flowIndex = (key) => WIZARD_FLOW.indexOf(key);
 const ANSWERS_FILE = path.join(ROOT, "templates", "answers.md");
 const CV_STATUS_FILE = path.join(DATA, ".cv-parse.status.json");
 
+/**
+ * Every uploaded CV, OLDEST FIRST -- so the last entry is the newest, which is the one
+ * scripts/parse-cv.sh actually reads (`ls -t templates/cv/*.pdf | head -1`).
+ *
+ * readdir returns the filesystem's order, not time's. With two CVs in the folder the page named
+ * whichever the directory happened to list last, so someone who replaced Profile_37_.pdf with
+ * David_CV.pdf was shown Profile_37_.pdf and reasonably concluded the upload had been refused --
+ * while the parser had read the new one all along. The page and the parser have to name the same
+ * file or neither of them can be believed.
+ */
+async function readCVFiles() {
+  try {
+    const names = (await fs.readdir(CV_DIR)).filter((f) => f.toLowerCase().endsWith(".pdf"));
+    const stamped = await Promise.all(
+      names.map(async (f) => {
+        let t = 0;
+        try {
+          t = (await fs.stat(path.join(CV_DIR, f))).mtimeMs;
+        } catch {
+          /* vanished between the readdir and the stat; sorts first, still listed */
+        }
+        return { f, t };
+      })
+    );
+    return stamped.sort((a, b) => a.t - b.t).map((x) => x.f);
+  } catch {
+    return []; // nothing uploaded yet
+  }
+}
+
+async function readCVStatus() {
+  try {
+    return JSON.parse(await fs.readFile(CV_STATUS_FILE, "utf8"));
+  } catch {
+    return null; // never parsed
+  }
+}
+
+/**
+ * The CV failure worth showing, or null.
+ *
+ * A failure stands only while it is still the LATEST thing that happened to the CV. Nothing but
+ * scripts/parse-cv.sh writes the status file, so `/jobseeker parse-cv` run from chat -- or any
+ * other path that fills data/profile.md -- leaves the old "failed" behind untouched, and a
+ * perfectly good profile was then reported as unreadable for as long as that file survived.
+ *
+ * The two stamps are not the same kind of thing and cannot be compared as they stand:
+ * `parsed_at` is a DATE (`date +%F`), so Date.parse makes it midnight UTC, which loses to any
+ * failure that finished later the same day -- precisely what a retry produces (fails at 10:30,
+ * succeeds at 10:32, and the banner then calls a good profile unreadable until tomorrow). Both
+ * are reduced to their UTC day, the only granularity `parsed_at` actually carries, and a tie goes
+ * to the parse: profile.md holding a real person is stronger evidence than a stamp with no clock.
+ */
+function cvFailure(cvStatus, profileData, parsed) {
+  if (cvStatus?.state !== "failed") return null;
+  const day = (v) => {
+    const t = Date.parse(v || "");
+    return Number.isNaN(t) ? null : Math.floor(t / 86400000);
+  };
+  const failedDay = day(cvStatus.finished);
+  const parsedDay = day(profileData?.parsed_at);
+  if (parsed && (failedDay === null || (parsedDay !== null && parsedDay >= failedDay))) return null;
+  return cvStatus;
+}
+
+/** Does this failure look like "nobody is signed in to Claude"? */
+function cvFailureIsAuth(detail) {
+  return /sign(ed)? in|log(ged)? ?in|login/i.test(String(detail || ""));
+}
+
+/**
+ * The button that opens a terminal with `claude` already running.
+ *
+ * Signing in cannot happen on this page -- it is an interactive prompt and a browser round-trip --
+ * so the most a dashboard can do is remove every step between reading the problem and fixing it.
+ */
+function signInBtnHTML(tab = "", page = "") {
+  return `<form method="POST" action="/claude-login" class="inline" style="display:inline">
+      <input type="hidden" name="_tab" value="${esc(tab)}">
+      <input type="hidden" name="_page" value="${esc(page)}">
+      <button type="submit" class="btn-small">Sign in to Claude</button>
+    </form>`;
+}
+
 // The lists behind step 5. These questions are asked from a fixed set by every form that asks them
 // at all, so they are lists to pick from — typing them invites typos an agent must then interpret.
 // Every list ends in an escape hatch: a closed list you cannot get out of is software telling
@@ -6466,18 +6582,8 @@ async function welcomeState({ schedule = false } = {}) {
   const criteria = parseFrontmatter(await safeRead(path.join(DATA, "criteria.md"))).data || {};
   const profileText = await safeRead(path.join(DATA, "profile.md"));
   const profile = parseFrontmatter(profileText).data || {};
-  let cvFiles = [];
-  try {
-    cvFiles = (await fs.readdir(CV_DIR)).filter((f) => f.toLowerCase().endsWith(".pdf"));
-  } catch {
-    /* nothing uploaded yet */
-  }
-  let cvStatus = null;
-  try {
-    cvStatus = JSON.parse(await fs.readFile(CV_STATUS_FILE, "utf8"));
-  } catch {
-    /* never parsed */
-  }
+  const cvFiles = await readCVFiles();
+  const cvStatus = await readCVStatus();
   const answers = await readAnswers();
   // Reading the schedule means running the OS scheduler's reader, so it happens only on the step
   // that shows it — not on every dashboard load.
@@ -6631,15 +6737,10 @@ const PICK_BTN = `<button type="submit" formaction="/pick-cv" formnovalidate cla
 function welcomeCVCard(st) {
   const running = st.cvStatus?.state === "running";
   const parsed = st.profileParsed;
-  // A failure stands only while it is still the LATEST thing that happened to the CV. Nothing but
-  // scripts/parse-cv.sh writes this status file, so `/jobseeker parse-cv` run from chat — or any other path
-  // that fills data/profile.md — leaves the old "failed" behind untouched. Checking the status
-  // first meant a perfectly good profile was reported as unreadable for as long as the stale file
-  // survived, and the reader's reasonable conclusion was that the CV step is broken.
-  const failedAt = Date.parse(st.cvStatus?.finished || "");
-  const parsedAt = Date.parse(st.profile?.parsed_at || "");
-  const superseded = parsed && (Number.isNaN(failedAt) || (!Number.isNaN(parsedAt) && parsedAt >= failedAt));
-  const failed = st.cvStatus?.state === "failed" && !superseded;
+  // Whether a recorded failure is still the latest word on this CV is one rule, shared with the
+  // CV tab -- see cvFailure.
+  const failure = cvFailure(st.cvStatus, st.profile, parsed);
+  const failed = Boolean(failure);
   const newest = st.cvFiles.length ? st.cvFiles[st.cvFiles.length - 1] : "";
 
   if (!st.cvFiles.length) {
@@ -6672,6 +6773,10 @@ function welcomeCVCard(st) {
           ? `<button type="button" class="linkbtn" id="wreplace">Try another file</button>`
           : `${PICK_BTN}Try another file</button>`
       }</p>
+      ${/* Nothing about the file was ever wrong when this is the reason, so the button that fixes
+            it belongs next to the sentence that names it -- not in a tab the reader has no cause
+            to open. */""}
+      ${cvFailureIsAuth(st.cvStatus.detail) ? `<p class="wnote">${signInBtnHTML()}</p>` : ""}
       <div class="wprog hide" id="wupprog"><i class="anim"></i></div>
       ${platform.IS_WIN ? `<input type="file" id="wfile" accept="application/pdf" class="hide">` : ""}`;
   }
@@ -9029,6 +9134,35 @@ async function handlePost(req, res, url) {
     res.end("Bye");
     setTimeout(() => process.exit(0), 200);
     return;
+  }
+  // Open a terminal with `claude` already running.
+  //
+  // Nothing here can sign anybody in: it is an interactive prompt and a browser round-trip, and a
+  // web page in a WKWebView can host neither. What it can do is delete every step between reading
+  // "your Claude login has expired" and being at the prompt that fixes it. The check is never a
+  // gate -- Claude is the only authority on its own session -- so this is always offered and never
+  // required.
+  if (url.pathname === "/claude-login") {
+    // The absolute path, not the word "claude": the dashboard's own PATH is launchd's when the Mac
+    // app started it, and that PATH cannot see any of the three places the CLI installs itself.
+    const bin = platform.resolveBin("claude");
+    const opened = bin ? platform.openTerminalRunning(bin) : false;
+    await logActivity(
+      "claude-login",
+      opened ? "Opened a terminal to sign in to Claude" : "No terminal could be opened to sign in to Claude"
+    );
+    if (opened) {
+      return redirect(res, {
+        kind: "ok",
+        msg: "A terminal is open with Claude running. Sign in there, then come back and try again.",
+      });
+    }
+    return redirect(res, {
+      kind: "bad",
+      msg: bin
+        ? "No terminal could be opened. Open one yourself, run claude, and sign in."
+        : "The Claude Code CLI could not be found on this computer. Install it from Settings ▸ Setup, then sign in.",
+    });
   }
   if (url.pathname === "/save-config") {
     try {

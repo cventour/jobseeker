@@ -271,10 +271,36 @@ do_node() {
 }
 
 # ---------------------------------------------------------------------------- claude code
+# Installing Claude Code and being able to use it are two different things: the binary lands
+# signed out, and every agent JobSeeker runs then fails at its first call with an auth error that
+# says nothing about setup. The row says so, on the row, while the person is still looking at the
+# window that put it there. Twin of Test-ClaudeSignedIn in scripts/win/setup-step.ps1 and
+# claudeSignedIn() in server/platform.mjs -- Windows has said this since it was written and this
+# side never did, which is how a Mac reached a finished setup, a signed-out CLI, and an afternoon
+# of re-uploading a CV that was never the problem.
+#
+# The files are the ones Claude Code writes when a sign-in succeeds. On macOS it also keeps the
+# credential in the login keychain; the lookup below asks only whether the item EXISTS (no -w, so
+# no secret is read), which is what stops it raising the keychain dialog. Presence is a good enough
+# hint to stop nagging someone who has already signed in; absence is never treated as an error.
+claude_signed_in() {
+  [ -n "${ANTHROPIC_API_KEY:-}" ] && return 0
+  [ -f "$HOME/.claude/.credentials.json" ] && return 0
+  security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+claude_detail() { # version, "already" | ""
+  local t="$1"
+  [ -n "${2:-}" ] && t="$1 (already installed)"
+  claude_signed_in || t="$t — sign in to Claude before the first run"
+  detail claude "$t"
+}
+
 do_claude() {
   local v
   if v="$(check_claude)"; then
-    step claude ok; detail claude "$v (already installed)"; finish ok
+    step claude ok; claude_detail "$v" already; finish ok
   fi
   step claude running; pct 5
   say "Installing Claude Code from claude.ai"
@@ -291,7 +317,8 @@ do_claude() {
   export PATH="$HOME/.local/bin:$PATH"
   if v="$(check_claude)"; then
     log "verified: claude $v at $(claude_bin)"
-    detail claude "$v"; step claude ok; pct 100; finish ok
+    claude_signed_in || log "not signed in yet - the row will say so"
+    claude_detail "$v"; step claude ok; pct 100; finish ok
   fi
   log "installer ran but claude is not on PATH"
   detail claude "Installed, but not found on PATH — the agents will not run yet"
@@ -512,8 +539,13 @@ wa_plugin_name() {
       } catch {}
     ' "$m" 2>/dev/null)"
   fi
+  # NOTHING but the name may be printed here. This function is called in a command substitution,
+  # so its stdout IS its return value -- and log() writes to stdout, so a log line from inside
+  # became part of the name. The install ref ended up as "17:15:49  the marketplace now calls the
+  # plugin 'whatsapp-channel'\nwhatsapp-channel@whatsapp-claude-plugin", which no marketplace has
+  # ever heard of, and WhatsApp setup failed on every machine that reached this line. The caller
+  # does the logging, where stdout is nobody's return value.
   if [ -n "$n" ]; then
-    [ "$n" = "$WA_PLUGIN_FALLBACK" ] || log "the marketplace now calls the plugin '$n'"
     printf '%s' "$n"
   else
     printf '%s' "$WA_PLUGIN_FALLBACK"
@@ -619,6 +651,7 @@ do_whatsapp() {
   pct 45
   local name ref
   name="$(wa_plugin_name)"
+  [ "$name" = "$WA_PLUGIN_FALLBACK" ] || log "the marketplace now calls the plugin '$name'"
   ref="$name@$WA_MARKETPLACE"
   say "Installing the WhatsApp plugin"
   log "claude plugin install $ref"
