@@ -129,19 +129,19 @@ optionally Chrome.
 
 **Optional — WhatsApp delivery.** By default the digest and approval prompts sit in the dashboard.
 To have them reach your phone instead, install
-[whatsapp-claude-channel](https://github.com/Rich627/whatsapp-claude-plugin), a third-party Claude
+[whatsapp-channel](https://github.com/Rich627/whatsapp-claude-plugin), a third-party Claude
 Code plugin (not maintained by this project — a linked-device messaging bridge with its own access
 control):
 
 ```bash
 claude plugin marketplace add Rich627/whatsapp-claude-plugin
-claude plugin install whatsapp-claude-channel@whatsapp-claude-plugin
+claude plugin install whatsapp-channel@whatsapp-claude-plugin
 ```
 
 Then, inside Claude Code, pair it to your own WhatsApp:
 
 ```text
-/whatsapp-claude-channel:setup
+/whatsapp-channel:setup
 ```
 
 `/jobseeker onboard` (below) then asks for your number and saves it as `whatsapp_owner_jid` in
