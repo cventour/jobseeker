@@ -798,8 +798,7 @@ do_whatsapp() {
       # connected: the phone then syncs history and app state to it, and its own screen sits on
       # "Logging in" until that finishes. Killing the channel a second after the handshake left the
       # link genuinely made and the phone spinning forever. The plugin says when it is really done.
-      local settle
-      for settle in $(seq 1 60); do
+      for _ in $(seq 1 60); do   # up to 30s for the plugin to say linking is finished
         grep -q 'Ready to receive messages' "$WORK/whatsapp-server.log" 2>/dev/null && break
         sleep 0.5
       done
