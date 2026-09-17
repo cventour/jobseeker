@@ -517,11 +517,11 @@ do_start() {
 WA_DIR="${JOBSEEKER_WA_DIR:-$HOME/.whatsapp-channel}"
 WA_PLUGIN_REPO="Rich627/whatsapp-claude-plugin"
 WA_MARKETPLACE="whatsapp-claude-plugin"
-# The name the plugin had when this was written. It is a fallback, not the answer: the author
+# The plugin's current name. It is a fallback, not the answer: the author
 # renamed it (whatsapp-claude-channel -> whatsapp-channel) without changing the marketplace, and
 # every install after that failed with "not found in marketplace". wa_plugin_name reads the name
 # out of the marketplace once it has been cloned, so the next rename costs nothing.
-WA_PLUGIN_FALLBACK="whatsapp-claude-channel"
+WA_PLUGIN_FALLBACK="whatsapp-channel"
 
 # What the marketplace calls its WhatsApp plugin, right now. Read from the clone rather than
 # remembered here: the marketplace kept its name and version while the plugin inside it was
@@ -663,7 +663,7 @@ do_whatsapp() {
   log "plugin installed"
 
   # ---- the number ----
-  # This is all that /whatsapp-claude-channel:configure <number> does: one line in one file. No
+  # This is all that /whatsapp-channel:configure <number> does: one line in one file. No
   # Claude session is needed for it, so the window writes it directly.
   pct 55
   mkdir -p "$WA_DIR"

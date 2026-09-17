@@ -6,7 +6,7 @@
 // Every case runs against a THROWAWAY COPY of the repo with a redirected HOME. That is a safety
 // requirement, not tidiness, and three separate things make it so:
 //
-//   * scripts/job-run.sh reap_whatsapp_mcp() does `pgrep -f whatsapp-claude-channel` and KILLS what
+//   * scripts/job-run.sh reap_whatsapp_mcp() does `pgrep -f whatsapp-channel` and KILLS what
 //     it finds. An unguarded run severs the developer's live WhatsApp device link (JOBRUN_REAP_WHATSAPP=0).
 //   * the ladder writes real launch agents through set-schedule.sh, so an unguarded run moves the
 //     developer's actual 08:00 schedule (fake HOME + stubbed launchctl).
