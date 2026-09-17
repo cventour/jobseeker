@@ -328,6 +328,54 @@ export function openTerminalRunning(bin) {
   return true;
 }
 
+/**
+ * Open a terminal window that runs `steps` one after another, where every step is
+ * [absoluteBin, ...args]. For fixes the user should SEE happen: the commands are printed as they
+ * run, the window stays open at the end, and a failed step stops the rest.
+ *
+ * Written to a small script file rather than a command line, because a command line has to survive
+ * two layers of quoting on Windows (start, then cmd /k) and one on the Mac (open -a Terminal takes a
+ * file, not a command). Every argument here is a path or a plugin name from our own code, never user
+ * text, and is still quoted.
+ *
+ * Returns false where no terminal could be opened; the caller then shows the commands instead.
+ */
+export async function openTerminalSteps(title, steps) {
+  if (!steps?.length || steps.some((s) => !s[0])) return false;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jobseeker-term-"));
+  let child = null;
+  try {
+    if (IS_WIN) {
+      const q = (a) => `"${String(a).replace(/"/g, "")}"`;
+      const file = path.join(dir, "fix.cmd");
+      const body = ["@echo off", `title ${title.replace(/[&|<>^%]/g, "")}`, `echo ${title.replace(/[&|<>^%]/g, "")}`, "echo."];
+      for (const st of steps) {
+        body.push(`echo ^> ${st.slice(1).join(" ").replace(/[&|<>^%]/g, "")}`);
+        body.push(`${st.map(q).join(" ")} || (echo. & echo That step failed. Close this window and try again from JobSeeker. & goto :end)`);
+      }
+      body.push("echo.", "echo Done. You can close this window and go back to JobSeeker.", ":end");
+      await fs.writeFile(file, body.join("\r\n") + "\r\n");
+      child = spawnDetached("cmd", ["/c", "start", "", "cmd", "/k", file]);
+    } else if (IS_MAC) {
+      const q = (a) => `'${String(a).replace(/'/g, "'\\''")}'`;
+      const file = path.join(dir, "fix.command");
+      const body = ["#!/bin/bash", `echo ${q(title)}`, "echo"];
+      for (const st of steps) {
+        body.push(`echo ${q("> " + st.slice(1).join(" "))}`);
+        body.push(`${st.map(q).join(" ")} || { echo; echo 'That step failed. Close this window and try again from JobSeeker.'; exit 1; }`);
+      }
+      body.push("echo", "echo 'Done. You can close this window and go back to JobSeeker.'");
+      await fs.writeFile(file, body.join("\n") + "\n", { mode: 0o755 });
+      child = spawnDetached("open", ["-a", "Terminal", file]);
+    }
+  } catch {
+    return false;
+  }
+  if (!child) return false;
+  child.on("error", () => {});
+  return true;
+}
+
 export function openUrl(url) {
   if (IS_WIN) return spawnDetached("cmd", ["/c", "start", "", url]);
   if (IS_MAC) return spawnDetached("open", [url]);

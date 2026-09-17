@@ -41,7 +41,7 @@ import { companyAliases } from "./config.mjs";
 import { DISMISS_TAGS } from "./record.mjs";
 import { buildBundle } from "./feedback.mjs";
 import { usageSnapshot } from "./usage.mjs";
-import { whatsappPluginState, fixWhatsappPlugin } from "./whatsapp-plugin.mjs";
+import { whatsappPluginState, whatsappFixSteps } from "./whatsapp-plugin.mjs";
 
 setCompanyAliases(await companyAliases());
 
@@ -2311,6 +2311,91 @@ function updateSignal(all, forced) {
   }).replace(/</g, "\\u003c")};</script>`;
 }
 
+// ---------- WhatsApp plugin fix ----------
+// The plugin was renamed upstream and an install under the old name no longer loads, so the daily
+// update stops reaching the phone. This is the one problem nothing else will fix, so it interrupts:
+// a dialog over a blurred page, opened once per window session, with Fix (a terminal runs the two
+// commands while the user watches) and Skip. Settings keeps saying so until it is fixed.
+const WA_FIX_COMMANDS = [
+  "claude plugin install whatsapp-channel@whatsapp-claude-plugin",
+  "claude plugin uninstall whatsapp-claude-channel@whatsapp-claude-plugin",
+];
+
+function waFixModalHTML(wa, { auto = true } = {}) {
+  if (!wa?.needsFix) return "";
+  return `<div id="waFixOverlay" class="overlay wafix-overlay" role="dialog" aria-modal="true" aria-labelledby="waFixTitle" data-auto="${auto ? "1" : "0"}">
+    <div class="modal wafix-modal">
+      <div class="mhead"><h3 id="waFixTitle">Your WhatsApp integration needs to be fixed</h3></div>
+      <div id="waFixAsk">
+        <p>The WhatsApp plugin JobSeeker uses was renamed by its author, and the old install no longer loads.
+          Until it is fixed, your daily update cannot reach your phone.</p>
+        <p>JobSeeker can fix it now: a terminal window opens and runs two commands. Your WhatsApp link carries
+          over, so there is no need to pair again.</p>
+        <div class="actions confirm-acts">
+          <button type="button" class="btn-secondary" id="waFixSkip">Skip for now</button>
+          <button type="button" id="waFixGo">Fix WhatsApp</button>
+        </div>
+      </div>
+      <div id="waFixWait" hidden>
+        <p><b>Finish in the terminal window.</b> It runs the two commands and says Done when it is finished.
+          This dialog closes by itself once JobSeeker sees the fix.</p>
+        <div class="actions confirm-acts"><button type="button" class="btn-secondary" id="waFixLater">Close</button></div>
+      </div>
+      <div id="waFixManual" hidden>
+        <p id="waFixWhy"></p>
+        <p>Open ${platform.IS_WIN ? "PowerShell" : "Terminal"} and run:</p>
+        <pre class="wafix-cmds">${esc(WA_FIX_COMMANDS.join("\n"))}</pre>
+        <div class="actions confirm-acts"><button type="button" class="btn-secondary" id="waFixManualClose">Close</button></div>
+      </div>
+      <div id="waFixDone" hidden>
+        <p><b>WhatsApp is fixed.</b> The next daily update will reach your phone.</p>
+        <div class="actions confirm-acts"><button type="button" id="waFixDoneClose">Close</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+const WA_FIX_JS = `(function(){
+  var ov = document.getElementById('waFixOverlay');
+  if (!ov) return;
+  var $ = function(id){ return document.getElementById(id); };
+  var timer = null;
+  function show(which){ ['waFixAsk','waFixWait','waFixManual','waFixDone'].forEach(function(id){ $(id).hidden = id !== which; }); }
+  function open(){ show('waFixAsk'); ov.style.display = 'flex'; $('waFixGo').focus(); }
+  function close(){ ov.style.display = 'none'; clearInterval(timer); }
+  function done(){
+    clearInterval(timer); show('waFixDone');
+    document.querySelectorAll('.wafix-status').forEach(function(el){ el.innerHTML = '<span class="ok-pill">working</span>'; });
+    document.querySelectorAll('.wafix-open, .wafix-alert').forEach(function(el){ el.remove(); });
+  }
+  function watch(){
+    clearInterval(timer);
+    timer = setInterval(function(){
+      fetch('/whatsapp-plugin-state', { cache: 'no-store' }).then(function(r){ return r.json(); })
+        .then(function(d){ if (d && !d.needsFix) done(); }).catch(function(){});
+    }, 3000);
+  }
+  $('waFixSkip').addEventListener('click', function(){
+    try { sessionStorage.setItem('js_wafix_skipped', '1'); } catch(e){}
+    close();
+  });
+  $('waFixGo').addEventListener('click', function(){
+    var b = $('waFixGo'); b.disabled = true; b.textContent = 'Opening a terminal…';
+    fetch('/fix-whatsapp-plugin', { method: 'POST' }).then(function(r){ return r.json(); }).then(function(d){
+      b.disabled = false; b.textContent = 'Fix WhatsApp';
+      if (d.nothingToFix) return done();
+      if (d.opened) { show('waFixWait'); watch(); }
+      else { $('waFixWhy').textContent = d.why || 'No terminal window could be opened.'; show('waFixManual'); watch(); }
+    }).catch(function(){ b.disabled = false; b.textContent = 'Fix WhatsApp'; });
+  });
+  ['waFixLater','waFixManualClose','waFixDoneClose'].forEach(function(id){ $(id).addEventListener('click', close); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && ov.style.display === 'flex') close(); });
+  document.addEventListener('click', function(e){ if (e.target.closest && e.target.closest('.wafix-open')) { e.preventDefault(); open(); } });
+  var skipped = false;
+  try { skipped = sessionStorage.getItem('js_wafix_skipped') === '1'; } catch(e){}
+  if (ov.getAttribute('data-auto') === '1' && !skipped) open();
+})();`;
+
 // ---------- Daily update ----------
 // /jobseeker job-run writes the digest to data/.last-digest.md BEFORE trying to deliver it, with a
 // `delivered:` / `not-delivered: <reason>` first line.
@@ -3187,6 +3272,12 @@ function setupHTML(st, criteria, marketNames = [], subReq = "", upd = null) {
       <input type="hidden" name="_bools" value="whatsapp_web_enabled,linkedin_enabled,linkedin_open_tab">
 
       ${pane("channels", `
+        ${
+          st.waPlugin?.needsFix
+            ? `<div class="alert bad wafix-alert"><b>Your WhatsApp integration needs to be fixed.</b> The WhatsApp plugin was renamed by its author and the old install no longer loads, so your daily update cannot reach your phone.
+                <button type="button" class="btn-small wafix-open">Fix WhatsApp</button></div>`
+            : ""
+        }
         <div class="tglgrid">
           ${toggleHTML("whatsapp_web_enabled", "Read WhatsApp Web", isOn(cfg.whatsapp_web_enabled), "Reads threads you have already read; never opens an unread chat.")}
           ${toggleHTML("linkedin_enabled", "Read LinkedIn", isOn(cfg.linkedin_enabled), "Same rule, through your logged-in Chrome.")}
@@ -3240,6 +3331,11 @@ function setupHTML(st, criteria, marketNames = [], subReq = "", upd = null) {
         ${rows.map(([k, v, act, note]) => `<tr><td class="nw"><b>${esc(k)}</b></td><td class="nw">${v}</td><td class="nw">${act}</td><td class="muted">${note}</td></tr>`).join("")}
         ${chanRow("Gmail / Calendar", st.channels.gmail, "Connected in Claude Code, not here.")}
         ${chanRow("WhatsApp", st.channels.whatsapp, "Read through Chrome by the daily run.")}
+        ${
+          st.waPlugin?.needsFix
+            ? `<tr><td class="nw"><b>WhatsApp delivery</b></td><td class="nw wafix-status"><span class="bad-pill">needs fixing</span></td><td class="nw"><button type="button" class="btn-small wafix-open">Fix WhatsApp</button></td><td class="muted">The WhatsApp plugin was renamed by its author and the old install no longer loads, so your daily update cannot reach your phone.</td></tr>`
+            : ""
+        }
         ${chanRow("LinkedIn", st.channels.linkedin, "Read through Chrome by the daily run.")}
         ${/* Above the CV row deliberately: a signed-out Claude is the reason the CV row below it
               says "not parsed", and reading them the other way round explains nothing. */""}
@@ -3309,6 +3405,7 @@ async function systemStatus() {
   }
 
   return {
+    waPlugin: await whatsappPluginState().catch(() => ({ needsFix: false })),
     config,
     browser,
     agentInstalled: agent.ok,
@@ -3809,19 +3906,7 @@ function todayHTML(all, dueToday, appTok, appIds) {
       })
     : "";
 
-  // WhatsApp installed under the plugin's old name: digests silently stop reaching the phone. Not
-  // dismissible, because nothing else will ever fix it; the button runs the two commands.
-  const waPluginBanner = all.waPlugin?.needsFix
-    ? `<div class="alert bad noticebox"><div class="notice-body"><strong>Your WhatsApp integration needs to be fixed.</strong>
-        The WhatsApp plugin was renamed by its author, and the old install no longer loads, so your daily update cannot reach your phone.
-        JobSeeker can swap it for you. Your WhatsApp link carries over, so there is no need to pair again.
-        <form method="POST" action="/fix-whatsapp-plugin" class="inline wafix" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fixing… this takes up to a minute'">
-          <input type="hidden" name="_tab" value="today">
-          <button type="submit" class="btn-small">Fix WhatsApp</button>
-        </form></div></div>`
-    : "";
-  return `${waPluginBanner}
-    ${ladderBanner}
+  return `${ladderBanner}
     ${browserBanner}
     ${runBanner}
     ${digestBlock}
@@ -4016,8 +4101,9 @@ ${
 }
 ${FEEDBACK_MODAL}
 ${USAGE_LIGHT}
+${waFixModalHTML(all.waPlugin)}
 <script>${TOUR_JS}</script>
-<script>${JS}${FEEDBACK_JS}${USAGE_JS}${DIGEST_JS}</script>
+<script>${JS}${FEEDBACK_JS}${USAGE_JS}${DIGEST_JS}${WA_FIX_JS}</script>
 </body></html>`;
 }
 
@@ -4098,7 +4184,8 @@ ${updateModal(all.update, "settings")}
 ${updateSignal(all, forceUpdate)}
 ${FEEDBACK_MODAL}
 ${USAGE_LIGHT}
-<script>${JS}${FEEDBACK_JS}${USAGE_JS}</script>
+${waFixModalHTML(all.waPlugin, { auto: false })}
+<script>${JS}${FEEDBACK_JS}${USAGE_JS}${WA_FIX_JS}</script>
 </body></html>`;
 }
 
@@ -4395,7 +4482,11 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .wslider{width:100%;accent-color:var(--acc)}
 .wpct{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-size:12.5px}
 .noticebox{display:flex;align-items:flex-start;gap:10px}
-.wafix{display:block;margin-top:8px}
+.wafix-overlay{align-items:center}
+.wafix-modal{max-width:520px;padding:0 24px 20px}
+.wafix-modal p{font-size:13.5px;line-height:1.55;margin:12px 0 0}
+.wafix-cmds{white-space:pre-wrap;word-break:break-all;font-size:12px;padding:10px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line);user-select:all}
+.wafix-alert .btn-small{margin-left:8px}
 /* The daily update pill. Pulses until opened once; the full digest lives in its dialog. */
 .digestbar{margin:0 0 18px}
 .digestpill{display:inline-flex;align-items:center;gap:9px;max-width:100%;padding:7px 14px 7px 8px;border-radius:99px;
@@ -9424,6 +9515,11 @@ const server = http.createServer(async (req, res) => {
     }
     // The usage light. Cached inside usage.mjs, so the page asking every minute costs Anthropic one
     // request every 90 seconds at most; ?refresh=1 is the panel's Refresh button.
+    if (req.method === "GET" && url.pathname === "/whatsapp-plugin-state") {
+      const st = await whatsappPluginState().catch(() => ({ needsFix: false }));
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ needsFix: Boolean(st.needsFix) }));
+    }
     if (req.method === "GET" && url.pathname === "/usage") {
       const snap = await usageSnapshot({ repoRoot: ROOT, force: url.searchParams.get("refresh") === "1" && !crossSitePost(req) }).catch(() => ({
         level: "grey",
@@ -9691,12 +9787,24 @@ async function handlePost(req, res, url) {
   // "your Claude login has expired" and being at the prompt that fixes it. The check is never a
   // gate -- Claude is the only authority on its own session -- so this is always offered and never
   // required.
+  // Opens a terminal running the two plugin commands, so the user watches the fix happen. Answers
+  // JSON: the dialog then waits on /whatsapp-plugin-state, or shows the commands if no terminal opened.
   if (url.pathname === "/fix-whatsapp-plugin") {
-    const r = await fixWhatsappPlugin();
-    await logActivity("whatsapp-plugin", r.ok ? "Swapped the renamed WhatsApp plugin from the dashboard" : `WhatsApp plugin fix failed: ${r.why}`);
-    return redirect(res, r.ok
-      ? { kind: "ok", msg: "WhatsApp is fixed. The next daily update will reach your phone." }
-      : { kind: "bad", msg: `WhatsApp could not be fixed: ${r.why}` });
+    const bin = platform.resolveBin("claude");
+    const steps = bin ? await whatsappFixSteps(bin) : null;
+    const opened = steps ? await platform.openTerminalSteps("Fixing JobSeeker's WhatsApp integration", steps) : false;
+    await logActivity(
+      "whatsapp-plugin",
+      opened ? "Opened a terminal to swap the renamed WhatsApp plugin" : "Could not open a terminal to swap the WhatsApp plugin"
+    );
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    return res.end(
+      JSON.stringify({
+        opened,
+        nothingToFix: bin && !steps,
+        why: !bin ? "The Claude Code CLI could not be found on this computer." : opened ? "" : "No terminal window could be opened.",
+      })
+    );
   }
   if (url.pathname === "/claude-login") {
     // The absolute path, not the word "claude": the dashboard's own PATH is launchd's when the Mac

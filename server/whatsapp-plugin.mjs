@@ -3,7 +3,8 @@
 // The plugin's author renamed it (whatsapp-claude-channel -> whatsapp-channel) without renaming the
 // marketplace. Once Claude Code refreshes that marketplace, an install under the old name fails to
 // load, every run loses its WhatsApp tool, and digests stop reaching the phone with nothing on screen
-// to say why. The fix is two `claude plugin` commands, which the dashboard offers to run.
+// to say why. The fix is two `claude plugin` commands, which the dashboard runs in a terminal the
+// user can watch.
 //
 // Only reads files Claude Code keeps under ~/.claude/plugins, so it is cheap enough to ask on every
 // page. The WhatsApp link itself lives in ~/.whatsapp-channel and both names read it, so nothing
@@ -41,22 +42,12 @@ export async function whatsappPluginState() {
   return { needsFix: true, oldKey, newKey, newInstalled: Boolean(installed[newKey]) };
 }
 
-/** Run the fix: install the current name (unless it already is), then remove the old one. */
-export async function fixWhatsappPlugin() {
+/** The two commands that fix it, as [bin, ...args] steps, or null when there is nothing to fix. */
+export async function whatsappFixSteps(bin) {
   const st = await whatsappPluginState();
-  if (!st.needsFix) return { ok: true, already: true };
-  const bin = platform.resolveBin("claude");
-  if (!bin) return { ok: false, why: "The Claude Code CLI could not be found on this computer." };
+  if (!st.needsFix) return null;
   const steps = [];
-  if (!st.newInstalled) steps.push(["plugin", "install", st.newKey]);
-  steps.push(["plugin", "uninstall", st.oldKey]);
-  for (const args of steps) {
-    const r = await platform.run(bin, args, { timeout: 180000 });
-    if (!r.ok) {
-      const said = (r.err || r.out || "").split("\n").filter(Boolean).slice(-1)[0] || `exit ${r.code}`;
-      return { ok: false, why: `claude ${args.join(" ")} did not finish: ${said}` };
-    }
-  }
-  const after = await whatsappPluginState();
-  return after.needsFix ? { ok: false, why: "The commands ran, but the old plugin is still installed." } : { ok: true };
+  if (!st.newInstalled) steps.push([bin, "plugin", "install", st.newKey]);
+  steps.push([bin, "plugin", "uninstall", st.oldKey]);
+  return steps;
 }
