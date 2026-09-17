@@ -58,14 +58,48 @@ const labelHTML = (html) =>
   html.replace(LABEL, (_, k) => (k === "New" ? "<b><mark>New:</mark></b>" : `<b>${k}:</b>`));
 const labelMD = (body) => body.replace(/^- (New|Changed|Fixed):/gm, "- **$1:**");
 
+// A bullet is its first line plus anything indented under it: wrapped text joins the paragraph it
+// belongs to, a blank line starts a new paragraph, and a ``` fence is a command block. Commands get
+// their own copyable block on the site because a command run together with prose is the one thing a
+// reader cannot copy cleanly.
 function bullets(body) {
   const items = [];
+  let cur = null, code = null;
   for (const raw of body.split("\n")) {
     const line = raw.trim();
-    if (line.startsWith("- ")) items.push(line.slice(2));
-    else if (items.length && line) items[items.length - 1] += " " + line; // wrapped continuation
+    if (code) {
+      if (line.startsWith("```")) {
+        cur.blocks.push({ code: code.join("\n") });
+        code = null;
+      } else code.push(line);
+      continue;
+    }
+    if (raw.startsWith("- ")) {
+      cur = { blocks: [{ text: line.slice(2) }] };
+      items.push(cur);
+    } else if (!cur) continue;
+    else if (line.startsWith("```")) code = [];
+    else if (!line) cur.blocks.push({ text: "" });
+    else {
+      const last = cur.blocks[cur.blocks.length - 1];
+      if (last && "text" in last && last.text) last.text += " " + line;
+      else if (last && "text" in last) last.text = line;
+      else cur.blocks.push({ text: line });
+    }
   }
-  return items;
+  return items.map((it) => ({ blocks: it.blocks.filter((b) => "code" in b || b.text) }));
+}
+
+function itemHTML(item) {
+  return item.blocks
+    .map((b, i) =>
+      "code" in b
+        ? `<pre data-copy><code>${esc(b.code)}</code></pre>`
+        : i === 0
+          ? labelHTML(inline(b.text))
+          : `<p>${inline(b.text)}</p>`
+    )
+    .join("\n          ");
 }
 
 async function main() {
@@ -139,7 +173,7 @@ ${shown
         ${i === 0 ? '<span class="rel-tag">latest</span>' : ""}
       </summary>
       <ul class="problems">
-${bullets(r.body).map((b) => `        <li>${labelHTML(inline(b))}</li>`).join("\n")}
+${bullets(r.body).map((b) => `        <li>${itemHTML(b)}</li>`).join("\n")}
       </ul>
     </details>`
   )
@@ -155,6 +189,7 @@ ${bullets(r.body).map((b) => `        <li>${labelHTML(inline(b))}</li>`).join("\
     <a href="https://github.com/cventour/jobseeker">Source</a></p>
 </footer>
 <script src="reveal.js"></script>
+<script src="copy.js"></script>
 </body></html>
 `;
     await fs.writeFile(path.join(dest, "whats-new.html"), page);
