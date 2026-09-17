@@ -40,6 +40,7 @@ import { findRepost, setCompanyAliases} from "./match.mjs";
 import { companyAliases } from "./config.mjs";
 import { DISMISS_TAGS } from "./record.mjs";
 import { buildBundle } from "./feedback.mjs";
+import { usageSnapshot } from "./usage.mjs";
 
 setCompanyAliases(await companyAliases());
 
@@ -436,6 +437,151 @@ const FEEDBACK_BTN = `<button type="button" id="bugbtn" class="moonbtn" title="R
   </svg>
 </button>`;
 
+// The usage light: a small pill in the bottom-left corner that says how much of the Claude plan is
+// used up, and unrolls upward into the numbers when clicked. Green under 50%, yellow from 50%, red
+// once a limit is reached, grey when it cannot be read (with the reason in the panel). The numbers
+// come from /usage (server/usage.mjs); the markup ships empty and is filled in on load, so a slow
+// or failing usage read never holds up the page itself.
+const USAGE_LIGHT = `<div id="usagelight" class="ul-wrap" data-level="grey">
+  <div id="ulPanel" class="ul-panel" role="dialog" aria-label="Claude usage" hidden>
+    <div class="ul-head"><b>Claude usage</b><span id="ulPlan" class="ul-plan" hidden></span></div>
+    <div id="ulRows"></div>
+    <p id="ulNote" class="ul-note" hidden></p>
+    <form id="ulSignin" method="POST" action="/claude-login" class="ul-signin" hidden>
+      <input type="hidden" name="_page" id="ulSigninPage" value="">
+      <button type="submit" class="ul-signin-btn">Run Claude Code</button>
+    </form>
+    <div id="ulTok" class="ul-tok" hidden></div>
+    <div class="ul-foot"><span id="ulChecked">Not checked yet</span>
+      <button type="button" id="ulRefresh" class="ul-refresh" title="Check again now">Refresh</button></div>
+  </div>
+  <button type="button" id="ulBtn" class="ul-pill" aria-expanded="false" aria-controls="ulPanel" title="Claude usage">
+    <span class="ul-dot" aria-hidden="true"></span><span id="ulLabel">Usage</span><span class="ul-chev" aria-hidden="true">▴</span>
+  </button>
+</div>`;
+
+const USAGE_CSS = `
+.ul-wrap{position:fixed;left:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:40;font-size:12px}
+.ul-pill{display:inline-flex;align-items:center;gap:7px;padding:5px 11px 5px 7px;border-radius:99px;
+  border:1px solid var(--line);background:var(--card);color:var(--mut);font:inherit;cursor:pointer;
+  box-shadow:0 2px 10px rgba(0,0,0,.12)}
+.ul-pill:hover,.ul-pill[aria-expanded=true]{color:var(--fg);border-color:var(--mut)}
+.ul-dot{width:13px;height:13px;border-radius:50%;background:#8b8f9e;flex:0 0 auto}
+.ul-wrap[data-level=green] .ul-dot{background:#2ea043}
+.ul-wrap[data-level=yellow] .ul-dot{background:#d6a100}
+.ul-wrap[data-level=red] .ul-dot{background:#e5484d;animation:ulpulse 1.6s ease-in-out infinite}
+@keyframes ulpulse{50%{transform:scale(.78);opacity:.6}}
+.ul-chev{font-size:10px;transition:transform .2s ease}
+.ul-pill[aria-expanded=true] .ul-chev{transform:rotate(180deg)}
+.ul-panel{position:absolute;left:0;bottom:calc(100% + 8px);width:min(300px,calc(100vw - 32px));
+  background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+  box-shadow:0 8px 28px rgba(0,0,0,.18);transform-origin:bottom left;animation:ulopen .2s ease}
+@keyframes ulopen{from{transform:scaleY(.2);opacity:0}to{transform:none;opacity:1}}
+.ul-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px}
+.ul-plan{font-size:11px;padding:1px 8px;border-radius:99px;background:rgba(110,168,254,.16);color:var(--acc)}
+.ul-row{margin-top:10px}
+.ul-lab{display:flex;justify-content:space-between;color:var(--mut)}
+.ul-lab b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.ul-track{height:6px;border-radius:3px;background:var(--line);margin-top:4px;overflow:hidden}
+.ul-fill{height:100%;border-radius:3px;background:#2ea043}
+.ul-fill.y{background:#d6a100}.ul-fill.r{background:#e5484d}
+.ul-meta{font-size:11px;color:var(--mut);margin-top:2px}
+.ul-note{margin:10px 0 0;font-size:11.5px;line-height:1.45;color:var(--mut)}
+.ul-signin{margin:10px 0 0}
+.ul-signin-btn{font:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:7px;border:1px solid var(--acc);
+  background:var(--acc);color:var(--bg);cursor:pointer}
+.ul-signin-btn:hover{filter:brightness(1.08)}
+.ul-tok{display:grid;grid-template-columns:1fr auto;row-gap:3px;margin-top:12px;padding-top:9px;border-top:1px solid var(--line);color:var(--mut)}
+.ul-tok b{color:var(--fg);font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.ul-foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:11px;color:var(--mut)}
+.ul-refresh{font:inherit;font-size:11px;padding:2px 9px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer}
+.ul-refresh:hover{border-color:var(--acc);color:var(--acc)}
+@media (prefers-reduced-motion:reduce){.ul-wrap[data-level=red] .ul-dot,.ul-panel{animation:none}}
+@media print{.ul-wrap{display:none}}
+`;
+
+const USAGE_JS = `(function(){
+  var wrap = document.getElementById('usagelight');
+  if (!wrap) return;
+  var btn = document.getElementById('ulBtn'), panel = document.getElementById('ulPanel');
+  var $ = function(id){ return document.getElementById(id); };
+  var last = null, timer = null;
+  function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function fmtTok(n){ n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n); }
+  function resetIn(iso){
+    var t = Date.parse(iso || ''); if (!isFinite(t)) return '';
+    var m = Math.round((t - Date.now()) / 60000);
+    if (m <= 0) return 'Resets any moment';
+    if (m < 60) return 'Resets in ' + m + 'm';
+    if (m < 24 * 60) return 'Resets in ' + Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+    return 'Resets ' + new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  function ago(iso){
+    var s = Math.round((Date.now() - Date.parse(iso || '')) / 1000);
+    if (!isFinite(s)) return 'Not checked yet';
+    return 'Updated ' + (s < 60 ? 'just now' : Math.round(s / 60) + ' min ago');
+  }
+  function render(d){
+    last = d;
+    var lim = d.limits || {}, rows = lim.rows || [];
+    wrap.setAttribute('data-level', d.level || 'grey');
+    var top = rows.length ? rows.reduce(function(a, r){ return r.pct > a.pct ? r : a; }, rows[0]) : null;
+    $('ulLabel').textContent = lim.state === 'api' ? 'API key'
+      : !top ? 'Usage unknown'
+      : top.pct >= 100 ? 'Limit reached'
+      : top.pct + '% ' + (top.key === 'session' ? 'of session' : 'of week');
+    btn.title = 'Claude usage' + (top ? ': ' + top.label.toLowerCase() + ' ' + top.pct + '%' : '');
+    if (lim.plan) { $('ulPlan').textContent = lim.plan; $('ulPlan').hidden = false; } else $('ulPlan').hidden = true;
+    var box = $('ulRows'); box.textContent = '';
+    rows.forEach(function(r){
+      var row = el('div', 'ul-row'), lab = el('div', 'ul-lab');
+      lab.appendChild(el('span', '', r.label)); lab.appendChild(el('b', '', r.pct + '%'));
+      var track = el('div', 'ul-track'), fill = el('div', 'ul-fill' + (r.pct >= 100 ? ' r' : r.pct >= 50 ? ' y' : ''));
+      fill.style.width = Math.min(100, r.pct) + '%'; track.appendChild(fill);
+      row.appendChild(lab); row.appendChild(track);
+      var when = r.pct >= 100 ? 'Limit reached. ' + resetIn(r.resets) : resetIn(r.resets);
+      if (when) row.appendChild(el('div', 'ul-meta', when));
+      box.appendChild(row);
+    });
+    if (lim.extra) {
+      var er = el('div', 'ul-row'), el2 = el('div', 'ul-lab');
+      el2.appendChild(el('span', '', 'Extra usage this month')); el2.appendChild(el('b', '', (lim.extra.pct == null ? '—' : lim.extra.pct + '%')));
+      er.appendChild(el2); box.appendChild(er);
+    }
+    var note = lim.stale || (lim.state !== 'ok' ? lim.reason : '');
+    $('ulNote').textContent = note || ''; $('ulNote').hidden = !note;
+    /* Not signed in, or the sign-in lapsed: the fix is running Claude Code, so offer exactly that.
+       It is the same /claude-login the Setup tab uses, which opens a terminal with claude running. */
+    $('ulSignin').hidden = !lim.signin;
+    $('ulSigninPage').value = location.pathname === '/settings' ? 'settings' : '';
+    var tk = $('ulTok'); tk.textContent = '';
+    if (d.tokens) {
+      tk.appendChild(el('span', '', 'Tokens today, this computer')); tk.appendChild(el('b', '', fmtTok(d.tokens.total)));
+      tk.appendChild(el('span', '', 'Of which JobSeeker')); tk.appendChild(el('b', '', fmtTok(d.tokens.jobseeker)));
+      tk.title = 'Input, output and cache writes since midnight. Cached context re-read on top: ' + fmtTok(d.tokens.cached) + '.';
+      tk.hidden = false;
+    } else tk.hidden = true;
+    $('ulChecked').textContent = ago(lim.checked);
+  }
+  function load(force){
+    return fetch('/usage' + (force ? '?refresh=1' : ''), { cache: 'no-store' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ if (d) render(d); })
+      .catch(function(){});
+  }
+  function schedule(){ clearTimeout(timer); timer = setTimeout(function(){ if (!document.hidden) load(false); schedule(); }, 60000); }
+  function setOpen(open){
+    panel.hidden = !open; btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && last) $('ulChecked').textContent = ago((last.limits || {}).checked);
+  }
+  btn.addEventListener('click', function(){ setOpen(panel.hidden); });
+  $('ulRefresh').addEventListener('click', function(){ $('ulChecked').textContent = 'Checking…'; load(true); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && !panel.hidden) { setOpen(false); btn.focus(); } });
+  document.addEventListener('click', function(e){ if (!panel.hidden && !wrap.contains(e.target)) setOpen(false); });
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) load(false); });
+  load(false); schedule();
+})();`;
+
 // The dialog itself. Injected into every page that has a header, so a problem can be reported from
 // wherever it happened rather than only from Today.
 //
@@ -651,12 +797,6 @@ async function loadAll() {
   // after the click; without the second, a run that failed at 08:03 looks exactly like one that
   // worked.
   const runNow = await readRunLock();
-  let lastRunNow = null;
-  try {
-    lastRunNow = JSON.parse(await fs.readFile(path.join(DATA, ".run-now.status.json"), "utf8"));
-  } catch {
-    /* nothing has been run from the dashboard yet */
-  }
   // scripts/research-market.sh writes this. Market research is the only long job the dashboard
   // starts that used to report nothing at all: it is spawned detached with stdio ignored, so a
   // script that died on its first line looked exactly like one quietly working. Meanwhile the flash
@@ -679,18 +819,7 @@ async function loadAll() {
   // `not-delivered: <reason>` first line. If the push failed the digest still exists — surfacing it
   // here is what stops a failed send becoming a silently missing update (it happened three days
   // running before anyone noticed).
-  let lastDigest = null;
-  try {
-    const raw = await fs.readFile(path.join(DATA, ".last-digest.md"), "utf8");
-    const m = /^(delivered|not-delivered):\s*(.*)$/m.exec(raw);
-    lastDigest = {
-      delivered: m ? m[1] === "delivered" : null,
-      reason: m ? m[2].trim() : "",
-      body: raw.replace(/^(delivered|not-delivered):.*$/m, "").trim(),
-    };
-  } catch {
-    /* no digest yet */
-  }
+  const lastDigest = await readLastDigest();
   return {
     criteria,
     profile,
@@ -715,7 +844,7 @@ async function loadAll() {
     lastRun,
     ladder,
     runNow,
-    lastRunNow,
+    runStatus: await runStatus(),
     marketsRun,
     browser,
     status: await systemStatus(),
@@ -2180,6 +2309,122 @@ function updateSignal(all, forced) {
   }).replace(/</g, "\\u003c")};</script>`;
 }
 
+// ---------- Daily update ----------
+// /jobseeker job-run writes the digest to data/.last-digest.md BEFORE trying to deliver it, with a
+// `delivered:` / `not-delivered: <reason>` first line.
+async function readLastDigest() {
+  try {
+    const file = path.join(DATA, ".last-digest.md");
+    const raw = await fs.readFile(file, "utf8");
+    const m = /^(delivered|not-delivered):\s*(.*)$/m.exec(raw);
+    const body = raw.replace(/^(delivered|not-delivered):.*$/m, "").trim();
+    const key = createHash("sha1").update(body).digest("hex").slice(0, 16);
+    let seenKey = "";
+    try {
+      seenKey = JSON.parse(await fs.readFile(path.join(DATA, ".digest-seen.json"), "utf8")).key || "";
+    } catch {
+      /* never opened */
+    }
+    return {
+      delivered: m ? m[1] === "delivered" : null,
+      reason: m ? m[2].trim() : "",
+      body,
+      key,
+      seen: seenKey === key,
+      date: digestDate(body, (await fs.stat(file)).mtime),
+    };
+  } catch {
+    /* no digest yet */
+  }
+  return null;
+}
+
+// Which day a digest is about. Its own first line says so ("Update of 17 Sep 2026"); failing that,
+// the day the file was written. Returned as a local YYYY-MM-DD.
+function digestDate(body, mtime) {
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const m = /\b(\d{1,2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (\d{4})\b/.exec(String(body).slice(0, 300));
+  if (m) {
+    const d = new Date(`${m[1]} ${m[2]} ${m[3]}`);
+    if (Number.isFinite(d.getTime())) return ymd(d);
+  }
+  return mtime ? ymd(new Date(mtime)) : "";
+}
+
+function digestDayLabel(date) {
+  if (!date) return "";
+  const now = new Date();
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  if (date === ymd(now)) return "today";
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  if (date === ymd(y)) return "yesterday";
+  const d = new Date(`${date}T12:00:00`);
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
+function digestPillHTML(d) {
+  if (!d?.body) return "";
+  const day = digestDayLabel(d.date);
+  const undelivered = d.delivered === false;
+  return `<div class="digestbar">
+    <button type="button" id="digestPill" class="digestpill${d.seen ? "" : " unread"}${undelivered ? " undelivered" : ""}"
+      data-key="${esc(d.key)}" aria-haspopup="dialog" aria-controls="digestOverlay">
+      ${d.seen ? "" : `<b class="dp-new">New</b>`}<span class="dp-label">Daily update${day ? ` for ${esc(day)}` : ""}</span>
+      ${undelivered ? `<span class="dp-why" title="${esc(d.reason || "")}">not delivered on WhatsApp</span>` : ""}
+      <span class="dp-open" aria-hidden="true">Read ›</span>
+    </button>
+  </div>
+  <div id="digestOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="digestTitle">
+    <div class="modal digest-modal">
+      <button type="button" class="mclose" id="digestClose" aria-label="Close">&times;</button>
+      <div class="mhead"><h3 id="digestTitle">Daily update${day ? ` for ${esc(day)}` : ""}</h3></div>
+      ${
+        undelivered
+          ? `<p class="digest-undelivered">This update was not delivered on WhatsApp (${esc(d.reason || "reason not recorded")}), so this is the only place it reached you.</p>`
+          : ""
+      }
+      <pre class="digest">${esc(d.body)}</pre>
+    </div>
+  </div>`;
+}
+
+const DIGEST_JS = `(function(){
+  /* Delegated rather than bound to the elements: the poll swaps the whole pill and dialog in when a
+     new update lands, and handlers bound to the old nodes would be gone with them. */
+  var last = null;
+  function ov(){ return document.getElementById('digestOverlay'); }
+  function open(pill){
+    var o = ov(); if (!o) return;
+    last = pill;
+    o.style.display = 'flex';
+    var c = document.getElementById('digestClose'); if (c) c.focus();
+    if (pill.classList.contains('unread')) {
+      pill.classList.remove('unread');
+      var n = pill.querySelector('.dp-new'); if (n) n.remove();
+      fetch('/digest-seen', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'key=' + encodeURIComponent(pill.getAttribute('data-key')) }).catch(function(){});
+    }
+  }
+  function close(){ var o = ov(); if (o) o.style.display = 'none'; if (last && last.focus) last.focus(); }
+  document.addEventListener('click', function(e){
+    var pill = e.target.closest && e.target.closest('#digestPill');
+    if (pill) return open(pill);
+    if (e.target.closest && e.target.closest('#digestClose')) return close();
+    if (e.target === ov()) close();
+  });
+  document.addEventListener('keydown', function(e){ var o = ov(); if (e.key === 'Escape' && o && o.style.display === 'flex') close(); });
+  /* Called by the run-state poll: a different update than the one on screen swaps in, unread. */
+  window.__swapDigest = function(d){
+    var wrap = document.getElementById('digestwrap');
+    if (!wrap || !d || !d.key) return;
+    var cur = document.getElementById('digestPill');
+    if (cur && cur.getAttribute('data-key') === d.key) return;
+    var o = ov(); if (o && o.style.display === 'flex') return;   /* never swap under someone reading */
+    wrap.innerHTML = d.html;
+  };
+})();`
+
 // ---------- Notices ----------
 // The banners at the top of Today. Each one is a fact about the machinery — the run was partial,
 // the schedule switched itself off, Chrome cannot be read — and each one used to occupy a fifth of
@@ -2261,14 +2506,6 @@ function runElapsed(started) {
   return m < 1 ? "just now" : m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-// One running job, said the same way everywhere it appears.
-function runBadge(busy, { own = false } = {}) {
-  if (!busy) return "";
-  const el = runElapsed(busy.started);
-  const what = own ? "Already running" : `${runLabel(busy.slug)} is running`;
-  return `<span class="runbadge" title="Started ${esc(String(busy.started).slice(0, 16).replace("T", " "))} · pid ${esc(String(busy.pid))}">
-    <span class="rdot"></span>${esc(what)}${el ? ` · ${esc(el)}` : ""}</span>`;
-}
 
 // Two shapes, one form. `slugs` of length 1 is a plain button — the per-tab trigger, sitting in the
 // section header of the tab its result lands in. The full menu is a popover: one "Run now" button in
@@ -2293,23 +2530,254 @@ function runNowButton({ slug, tab, busy }) {
   </div>`;
 }
 
+// The steps a run goes through, in the order the checklist shows them. Only the full daily run has
+// more than one: its playbook (.claude/jobseeker/job-run.md) ticks each off with
+// `record.mjs progress <id> <state>`, so these ids and the playbook's must agree. The single
+// commands are one step each, shown as in progress until the run ends.
+const RUN_STEPS = {
+  "job-run": [
+    ["start", "Getting ready"],
+    ["track", "Reading your channels"],
+    ["curate", "Researching markets and finding roles"],
+    ["reconcile", "Closing tasks already done"],
+    ["supervise", "Checking the tracker for problems"],
+    ["digest", "Writing your digest"],
+  ],
+  track: [["track", "Reading your channels"]],
+  curate: [["curate", "Finding new roles"]],
+  followup: [["followup", "Drafting due follow-ups"]],
+  apply: [["apply", "Filling in the application"]],
+};
+
+function newRunProgress(slug, started) {
+  const steps = (RUN_STEPS[slug] || [[slug, runLabel(slug)]]).map(([id, label], i) => ({
+    id,
+    label,
+    state: i === 0 ? "running" : "pending",
+  }));
+  return { slug, started, steps };
+}
+
+// The checklist file, but only if it belongs to the run that is live now. A file left behind by an
+// earlier run, or by a scheduled run that ticked an old one, would otherwise show someone ticks
+// that have nothing to do with what they just started.
+async function readRunProgress(busy) {
+  if (!busy) return null;
+  try {
+    const prog = JSON.parse(await fs.readFile(path.join(DATA, ".run-progress.json"), "utf8"));
+    const gap = Math.abs(Date.parse(prog.started) - Date.parse(busy.started));
+    if (prog.slug === busy.slug && Number.isFinite(gap) && gap < 15 * 60 * 1000) return prog;
+  } catch {
+    /* no checklist for this run */
+  }
+  // No file for this run: it was started by something that does not report steps (a scheduled run,
+  // or a dashboard from before the checklist existed). Show no boxes rather than boxes that never move.
+  return null;
+}
+
+// "2026-09-17 08:50" in the computer's own time zone. The stamps on disk are UTC, and a start time
+// three hours off the clock on the wall reads as a run that has hung.
+function localStamp(iso) {
+  const d = new Date(iso || "");
+  if (!Number.isFinite(d.getTime())) return String(iso || "");
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const STEP_SAYS = { pending: "Not started", running: "In progress", done: "Done", failed: "Did not finish", skipped: "Skipped" };
+
+// Rendered here for the first paint and again in the page's poll (renderProgress in JS) — the two
+// build the same markup, so a change to one is a change to both.
+function progressHTML(prog) {
+  if (!prog?.steps?.length) return "";
+  return `<ul class="runsteps" id="runsteps">${prog.steps
+    .map(
+      (st) => `<li class="rs rs-${esc(st.state)}"><span class="rs-box" aria-hidden="true"></span>
+        <span class="rs-label">${esc(st.label)}</span><span class="sr-only">${esc(STEP_SAYS[st.state] || st.state)}</span></li>`
+    )
+    .join("")}</ul>`;
+}
+
+// What the daily run's attempts have done so far, read from data/.job-run.log.
+//
+// job-run.sh (and its twin, scripts/win/job-run.ps1, which writes the same markers) retries a
+// failed attempt once. From outside, that looked like one long run that "finished at 10:15 but is
+// still running": the first attempt had ended and been judged a failure, and the second had
+// started. The status file only says `running` for the whole thing, so the attempts are read from
+// the log markers the two scripts already share:
+//
+//   ==================== job-run 2026-09-17 09:50:25 ====================   (local time)
+//   ---- attempt 2/2 (timeout 2700s, budget $5) ----
+//   TOOLS REFUSED: Bash — the run could not do its work.
+//   ---- attempt 1 TIMED OUT after 2700s ---- | ---- attempt 1 failed (exit 1) ---- | ---- attempt 1 succeeded ----
+//   ==================== done 2026-09-17 10:42:10 (exit 0) ====================
+//
+// Only the section whose header is within a few minutes of `started` counts, so an older run's
+// attempts are never shown against a new one. Read-only, best effort: null when anything is off.
+async function readJobRunAttempts(started) {
+  const t0 = Date.parse(started || "");
+  if (!Number.isFinite(t0)) return null;
+  let text;
+  try {
+    const fh = await fs.open(path.join(DATA, ".job-run.log"), "r");
+    try {
+      const { size } = await fh.stat();
+      const len = Math.min(size, 1024 * 1024);
+      const buf = Buffer.alloc(len);
+      await fh.read(buf, 0, len, size - len);
+      text = buf.toString("utf8");
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return null;
+  }
+  const lines = text.split(/\r?\n/);
+  const localTime = (s) => Date.parse(s.replace(" ", "T")); // no zone: parsed as this computer's time
+  let from = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^=+ job-run (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) =+$/.exec(lines[i]);
+    if (m) {
+      if (Math.abs(localTime(m[1]) - t0) < 3 * 60 * 1000) from = i;
+      break;
+    }
+  }
+  if (from < 0) return null;
+  const attempts = [];
+  let total = 0, refused = "", retrying = false, done = null;
+  for (const line of lines.slice(from + 1)) {
+    let m;
+    if ((m = /^---- attempt (\d+)\/(\d+) /.exec(line))) {
+      total = Number(m[2]);
+      attempts.push({ n: Number(m[1]), state: "running", why: "" });
+      refused = "";
+      retrying = false;
+    } else if ((m = /^TOOLS REFUSED: (.*?) — /.exec(line))) {
+      refused = m[1];
+    } else if ((m = /^---- attempt (\d+) succeeded ----/.exec(line))) {
+      const a = attempts.find((x) => x.n === Number(m[1]));
+      if (a) a.state = "ok";
+    } else if ((m = /^---- attempt (\d+) TIMED OUT after (\d+)s ----/.exec(line))) {
+      const a = attempts.find((x) => x.n === Number(m[1]));
+      if (a) Object.assign(a, { state: "failed", why: `it ran out of time after ${Math.round(Number(m[2]) / 60)} min` });
+    } else if ((m = /^---- attempt (\d+) failed \(exit (\d+)\) ----/.exec(line))) {
+      const a = attempts.find((x) => x.n === Number(m[1]));
+      if (a) {
+        Object.assign(a, {
+          state: "failed",
+          why: refused ? `Claude Code refused a tool it needed (${refused})` : `it stopped with an error (exit ${m[2]})`,
+        });
+      }
+    } else if (/^retrying in \d+s/.test(line)) {
+      retrying = true;
+    } else if ((m = /^=+ done (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \(exit (\d+)\) =+$/.exec(line))) {
+      done = { at: localStamp(new Date(localTime(m[1])).toISOString()), exit: Number(m[2]) };
+    }
+  }
+  if (!attempts.length) return null;
+  return { total, attempts, retrying, done };
+}
+
+// The run's status, said once and rendered in two places: the badge in the stat bar and the block
+// at the top of the Run now menu. Both are served again by /run-state, and the page swaps them in
+// place every minute while a run is live, so the elapsed time and the ticks keep moving without
+// the page reloading under anyone.
+//
+// Four shapes:
+//   running                  amber   "Everything is running · 28 min"
+//   running after a failure  amber, with the failure said: an attempt failed and a retry is under way
+//   finished                 green / amber (partly) / red (failed and stopped), for 12 hours after
+//   nothing recent           no badge
+const RECENT_FINISH = 12 * 60 * 60 * 1000;
+
+function recentLast(busy, last) {
+  if (busy || !last?.finished) return null;
+  const t = Date.parse(last.finished);
+  return Number.isFinite(t) && Date.now() - t < RECENT_FINISH ? last : null;
+}
+
+function lastVerdict(last) {
+  const st = String(last.state || "");
+  if (st === "ok") return { cls: "ok", says: "finished" };
+  if (st === "partial") return { cls: "warn", says: "finished, partly" };
+  if (st.startsWith("skipped-")) return { cls: "warn", says: st === "skipped-budget" ? "skipped: spending limit" : "skipped" };
+  return { cls: "bad", says: "failed and stopped" };
+}
+
+function runStatusBadge({ busy, last, attempts }) {
+  if (busy) {
+    const el = runElapsed(busy.started);
+    const failed = (attempts?.attempts || []).filter((a) => a.state === "failed").length;
+    const extra = failed ? ` · retrying after a failure` : "";
+    return `<span class="runbadge${failed ? " warnfail" : ""}" title="Started ${esc(localStamp(busy.started))}">
+      <span class="rdot"></span>${esc(runLabel(busy.slug))} is running${el ? ` · ${esc(el)}` : ""}${esc(extra)}</span>`;
+  }
+  const recent = recentLast(busy, last);
+  if (!recent) return "";
+  const v = lastVerdict(recent);
+  return `<button type="button" class="runbadge done ${v.cls}" onclick="popToggle('runmenu', document.querySelector('.runmenu-wrap .runmenu-btn'))"
+      title="${esc(recent.detail || "")}">${esc(recent.label || runLabel(recent.slug))} ${esc(v.says)} · ${esc(localStamp(recent.finished).slice(11))}</button>`;
+}
+
+function attemptsHTML(attempts, live) {
+  if (!attempts?.attempts?.length) return "";
+  const rows = attempts.attempts.map((a) => {
+    const of = attempts.total ? ` of ${attempts.total}` : "";
+    if (a.state === "failed") {
+      return `<li class="ra ra-failed"><b>Attempt ${a.n}${of} failed</b> — ${esc(a.why)}.</li>`;
+    }
+    if (a.state === "ok") return `<li class="ra ra-ok"><b>Attempt ${a.n}${of} succeeded.</b></li>`;
+    return live ? `<li class="ra ra-running"><b>Attempt ${a.n}${of} in progress</b>${a.n > 1 ? " — starting the run again from the top" : ""}.</li>` : "";
+  });
+  if (live && attempts.retrying && attempts.attempts.at(-1)?.state === "failed") {
+    rows.push(`<li class="ra ra-running"><b>Retrying in a moment.</b></li>`);
+  }
+  // One attempt that is simply running says nothing the badge above has not already said.
+  if (attempts.attempts.length === 1 && attempts.attempts[0].state === "running") return "";
+  return `<ul class="runattempts">${rows.join("")}</ul>`;
+}
+
+function runStatusPanel({ busy, last, progress, attempts }) {
+  if (busy) {
+    const failed = (attempts?.attempts || []).some((a) => a.state === "failed");
+    return `<div class="runmenu-busy${failed ? " hasfail" : ""}">${runStatusBadge({ busy, attempts })}
+      <span class="muted" title="pid ${esc(String(busy.pid))}">Started ${esc(localStamp(busy.started))}${busy.starting ? ", starting up" : ""}</span>
+      ${failed ? `<p class="runfail-note">Something failed, but the run is still working.</p>` : ""}
+      ${attemptsHTML(attempts, true)}
+      ${progressHTML(progress)}</div>`;
+  }
+  if (!last) return "";
+  const v = lastVerdict(last);
+  const recent = recentLast(busy, last);
+  return `<div class="runmenu-last ${recent ? `recent ${v.cls}` : ""}">
+      <p>Last run from here: <b>${esc(last.label || runLabel(last.slug))}</b>
+        <span class="${v.cls === "ok" ? "ok-pill" : v.cls === "warn" ? "warn-pill" : "bad-pill runfail-pill"}">${esc(v.says)}</span>
+        <span class="muted">${esc(localStamp(last.finished))}</span></p>
+      ${last.detail && v.cls !== "ok" ? `<p class="runlast-why">${esc(last.detail)}</p>` : ""}
+      ${attemptsHTML(attempts, false)}
+      ${recent ? `<p class="runlast-act"><a href="" onclick="location.reload();return false">Reload to see what it found</a></p>` : ""}
+    </div>`;
+}
+
+// Everything the two status fragments need, gathered once per page render and once per poll.
+async function runStatus() {
+  const busy = await readRunLock();
+  let last = null;
+  try {
+    last = JSON.parse(await fs.readFile(path.join(DATA, ".run-now.status.json"), "utf8"));
+  } catch {
+    /* nothing has been run from here yet */
+  }
+  const slug = busy ? busy.slug : last?.slug;
+  const started = busy ? busy.started : last?.started;
+  const attempts = slug === "job-run" ? await readJobRunAttempts(started) : null;
+  const progress = busy ? await readRunProgress(busy) : null;
+  return { busy, last, attempts, progress };
+}
+
 // The menu, folded. Rides in the tab bar on the far right, on every tab, next to the badge that says
 // what is already running — so the answer to "is this worth clicking" is beside the button itself.
-function runNowMenu({ tab, busy, lastNow }) {
-  const lastLine = (() => {
-    if (!lastNow || busy) return "";
-    const st = String(lastNow.state || "");
-    const pill =
-      st === "ok"
-        ? `<span class="ok-pill">finished</span>`
-        : st === "partial"
-          ? `<span class="warn-pill">finished, partly</span>`
-          : st.startsWith("skipped-")
-            ? `<span class="warn-pill">${esc(st.replace("skipped-", "skipped: "))}</span>`
-            : `<span class="bad-pill">${esc(st)}</span>`;
-    return `<p class="runmenu-last">Last run from here: <b>${esc(lastNow.label || lastNow.slug)}</b> ${pill}
-      <span class="muted">${esc(String(lastNow.finished || "").slice(0, 16).replace("T", " "))}</span></p>`;
-  })();
+function runNowMenu({ tab, busy, status = null }) {
   return `<span class="popwrap runmenu-wrap">
     <button type="button" class="runmenu-btn" aria-haspopup="dialog" aria-expanded="false"
       onclick="popToggle('runmenu', this)"
@@ -2319,14 +2787,7 @@ function runNowMenu({ tab, busy, lastNow }) {
       <p class="pop-h">Run now</p>
       <p class="pop-sub">Nothing here applies or sends — it queues approvals for you, exactly as the
         scheduled run does. One at a time: Chrome cannot be driven by two.</p>
-      ${
-        busy
-          ? `<div class="runmenu-busy">${runBadge(busy)}
-               <span class="muted">Started ${esc(String(busy.started).slice(0, 16).replace("T", " "))}${
-                 busy.starting ? ", starting up" : ""
-               } · pid ${esc(String(busy.pid))}. Progress is in <code>data/.run-now.log</code>.</span></div>`
-          : ""
-      }
+      <div id="runstatus-menu" class="runstatus-menu">${runStatusPanel(status || { busy })}</div>
       <div class="runmenu-list">
         ${RUN_MENU.map(
           ([slug, label, sub]) => `<form method="POST" action="/run-now">
@@ -2338,7 +2799,6 @@ function runNowMenu({ tab, busy, lastNow }) {
             </button></form>`
         ).join("")}
       </div>
-      ${lastLine}
     </div>
   </span>`;
 }
@@ -2897,29 +3357,10 @@ function todayHTML(all, dueToday, appTok, appIds) {
   // and nothing complains. It goes first, above everything.
   // A digest that never reached the user is invisible by definition — so when delivery failed, the
   // digest itself is shown here rather than left in a log file.
-  const d = all.lastDigest;
-  const digestNotice =
-    d && d.delivered === false
-      ? notice({
-          // The reason is free text from the delivery layer; the key has to survive being written to
-          // JSON and matched by NOTICE_KEY_OK, so it carries a slug of the reason, not the reason.
-          key: `digest:undelivered:${String(d.reason || "none")
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "")
-            .slice(0, 40) || "none"}`,
-          kind: "bad",
-          title: "Your last digest was not delivered.",
-          body: `${esc(d.reason || "reason not recorded")} — so it is reproduced below.`,
-          summary: `Digest not delivered — ${d.reason || "reason not recorded"}`,
-          dismissed: NX,
-        })
-      : "";
-  // The digest body itself is not a notice: it is the content the failed delivery was carrying, and
-  // it goes on being shown until the next digest replaces it.
-  const digestBlock = digestNotice
-    ? `${digestNotice}<div class="tblock"><pre class="digest">${esc(d.body)}</pre></div>`
-    : "";
+  // The daily update is a pill, not a wall of text: "New  Daily update for today", pulsing until it
+  // has been opened once. The digest itself opens in a dialog. A failed WhatsApp delivery is said on
+  // the pill, since the dashboard is then the only place the update reaches you.
+  const digestBlock = `<div id="digestwrap">${digestPillHTML(all.lastDigest)}</div>`;
 
   // Reading messages can be blocked while the digest still sends — they are different capabilities
   // (AGENT-RULES §10). The blockers array carries the specific one-time fix, so it is shown verbatim
@@ -3480,7 +3921,7 @@ function page(all, flash, forceUpdate = false) {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Seeker — Dashboard</title>
 ${HEAD_ICONS}
-<style>${CSS}</style>
+<style>${CSS}${USAGE_CSS}</style>
 </head><body>
 ${all.boot ? BOOT_VEIL : ""}
 <header>
@@ -3504,10 +3945,10 @@ ${flash ? `<div class="flash ${esc(flash.kind)}">${esc(flash.msg)}</div>` : ""}
   ${
     // A run takes minutes to tens of minutes and reports nothing until it lands, so the one place
     // it must be visible is every place — not only the tab you happened to start it from.
-    all.runNow ? runBadge(all.runNow) : ""
+    `<span id="runstatus-badge">${runStatusBadge(all.runStatus)}</span>`
   }
 </div>
-${tabStrip(TABS, active, addTaskMenu() + runNowMenu({ tab: active, busy: all.runNow, lastNow: all.lastRunNow }))}
+${tabStrip(TABS, active, addTaskMenu() + runNowMenu({ tab: active, busy: all.runNow, status: all.runStatus }))}
 </div>
 <div id="panels">
 ${tabPanel("today", on("today"), sec("today", "", todayHTML(all, dueToday, appTok, appIds)))}
@@ -3560,8 +4001,9 @@ ${
     : ""
 }
 ${FEEDBACK_MODAL}
+${USAGE_LIGHT}
 <script>${TOUR_JS}</script>
-<script>${JS}${FEEDBACK_JS}</script>
+<script>${JS}${FEEDBACK_JS}${USAGE_JS}${DIGEST_JS}</script>
 </body></html>`;
 }
 
@@ -3593,7 +4035,7 @@ function settingsPage(all, flash, forceUpdate = false) {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Settings — Job Seeker</title>
 ${HEAD_ICONS}
-<style>${CSS}</style>
+<style>${CSS}${USAGE_CSS}</style>
 </head><body>
 <header>
   ${BRAND("Settings")}
@@ -3641,7 +4083,8 @@ ${tabPanel("cv", on("cv"), sec("cv", `CV <span class="muted">— parsed into dat
 ${updateModal(all.update, "settings")}
 ${updateSignal(all, forceUpdate)}
 ${FEEDBACK_MODAL}
-<script>${JS}${FEEDBACK_JS}</script>
+${USAGE_LIGHT}
+<script>${JS}${FEEDBACK_JS}${USAGE_JS}</script>
 </body></html>`;
 }
 
@@ -3938,6 +4381,20 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .wslider{width:100%;accent-color:var(--acc)}
 .wpct{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-size:12.5px}
 .noticebox{display:flex;align-items:flex-start;gap:10px}
+/* The daily update pill. Pulses until opened once; the full digest lives in its dialog. */
+.digestbar{margin:0 0 18px}
+.digestpill{display:inline-flex;align-items:center;gap:9px;max-width:100%;padding:7px 14px 7px 8px;border-radius:99px;
+  border:1px solid rgba(46,160,110,.45);background:rgba(46,160,110,.10);color:var(--fg);font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.digestpill:hover{background:rgba(46,160,110,.16);filter:none}
+.digestpill:not(.unread){padding-left:14px;border-color:var(--line);background:var(--card)}
+.digestpill.unread{animation:advpulse 2s ease-in-out infinite}
+.dp-new{background:#2ea06e;color:#04160e;border-radius:99px;padding:1px 9px;font-size:11.5px;font-weight:800;letter-spacing:.02em}
+.dp-label{font-weight:400}
+.dp-why{font-size:11.5px;color:#d0224a;white-space:nowrap}
+.dp-open{font-size:12px;color:var(--acc);white-space:nowrap}
+.digest-modal pre.digest{margin:14px 0 0}
+.digest-undelivered{margin:14px 0 0;font-size:12.5px;line-height:1.5;color:#d0224a}
+@media (prefers-reduced-motion:reduce){.digestpill.unread{animation:none}}
 .noticebox .notice-body{flex:1;min-width:0}
 .noticebox .notice-x{margin:-2px -4px 0 0;flex:0 0 auto}
 .noticebox .notice-x .xbtn{font-size:17px;line-height:1;padding:2px 7px;opacity:.55}
@@ -4002,6 +4459,38 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .runmenu-busy{display:flex;flex-direction:column;gap:5px;margin:0 0 10px;padding:9px 10px;
   border-radius:8px;background:rgba(214,138,0,.10)}
 .runmenu-busy .muted{font-size:11px;line-height:1.45}
+.runmenu-busy.hasfail{background:rgba(229,72,77,.08);box-shadow:inset 0 0 0 1px rgba(229,72,77,.35)}
+.runmenu-busy .runbadge{white-space:normal;align-self:flex-start}
+.runfail-note{margin:2px 0 0;font-size:12px;font-weight:600;color:#e5484d}
+.runattempts{list-style:none;margin:2px 0 4px;padding:0;display:flex;flex-direction:column;gap:3px;font-size:11.5px;line-height:1.45;color:var(--mut)}
+.ra b{font-weight:600;color:var(--fg)}
+.ra-failed b{color:#e5484d}
+.ra-ok b{color:#2ea043}
+.runbadge.warnfail{background:rgba(229,72,77,.14);color:#e5484d}
+button.runbadge{font:inherit;font-size:12px;font-weight:600;border:0;cursor:pointer}
+.runbadge.done.ok{background:rgba(46,160,67,.16);color:#2ea043}
+.runbadge.done.warn{background:rgba(214,138,0,.16);color:#d68a00}
+.runbadge.done.bad{background:rgba(229,72,77,.14);color:#e5484d}
+.runmenu-last p{margin:0}
+.runfail-pill{background:rgba(229,72,77,.14);color:#e5484d}
+.runmenu-last.recent.bad{border-top-color:rgba(229,72,77,.45)}
+.runlast-why{margin-top:4px!important;font-size:11.5px;line-height:1.45;color:var(--fg)}
+.runlast-act{margin-top:6px!important}
+/* The run checklist: a box per step, ticked when the playbook says the step is done. */
+.runsteps{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
+.rs{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mut)}
+.rs-box{position:relative;width:15px;height:15px;flex:0 0 auto;border-radius:4px;border:1.5px solid var(--line);background:var(--card)}
+.rs-running{color:var(--fg);font-weight:600}
+.rs-running .rs-box{border-color:#d68a00}
+.rs-running .rs-box::after{content:"";position:absolute;inset:3px;border-radius:2px;background:#d68a00;animation:rpulse 1.6s ease-in-out infinite}
+.rs-done{color:var(--fg)}
+.rs-done .rs-box{border-color:#2ea043;background:#2ea043}
+.rs-done .rs-box::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.rs-failed .rs-box{border-color:#e5484d}
+.rs-failed .rs-box::after{content:"\\00d7";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;line-height:1;color:#e5484d}
+.rs-skipped .rs-label{text-decoration:line-through}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media (prefers-reduced-motion:reduce){.rs-running .rs-box::after{animation:none}}
 .runmenu-list{display:flex;flex-direction:column;gap:5px}
 .runmenu-list form{margin:0}
 .runmenu-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
@@ -4876,11 +5365,31 @@ const JS = `${VIEWPORT_JS}
       var sel = window.getSelection && window.getSelection();
       return !!(sel && String(sel).length > 2);
     }
+    /* The run's status, swapped in place: the badge in the stat bar and the block at the top of the
+       Run now menu. The server renders both (runStatusBadge / runStatusPanel), so the page never
+       reloads for a run -- not while it moves, not when it ends. An open menu stays open. */
+    /* Seeded from the page itself: a page rendered mid-run starts out knowing a run is live. */
+    var live = busyNow() ? true : null;
+    function swapStatus(d){
+      if (!d.status) return;
+      var b = document.getElementById('runstatus-badge'), m = document.getElementById('runstatus-menu');
+      if (b && b.innerHTML !== d.status.badge) b.innerHTML = d.status.badge;
+      if (m && m.innerHTML !== d.status.menu) m.innerHTML = d.status.menu;
+      /* The run ended while this page was open: the buttons it greyed out work again. */
+      if (live && !d.running) {
+        document.querySelectorAll('[data-busy]').forEach(function(el){
+          el.removeAttribute('data-busy'); el.removeAttribute('aria-disabled');
+        });
+      }
+      live = d.running;
+    }
     function tick(){
       fetch('/run-state', { cache: 'no-store' })
         .then(function(r){ return r.ok ? r.json() : null; })
         .then(function(d){
           if (!d) return;
+          swapStatus(d);
+          if (window.__swapDigest) window.__swapDigest(d.digest);
           /* A different build is answering: this page is left over from before an update. Reload for
              the new one -- at a quiet moment, like any other reload here. The session note stops a
              loop if something between here and the server keeps handing back the old page. */
@@ -4894,10 +5403,10 @@ const JS = `${VIEWPORT_JS}
             }
             return;
           }
-          /* A version this page has never heard of is a change worth reloading for, the same as a
-             run finishing: the reload is what puts the dialog in front of the user. */
-          var now = (d.running ? d.running.slug + '@' + d.running.started : '') + '|' + (d.finished || '') +
-                    '|' + (d.update || '');
+          /* A version this page has never heard of is worth reloading for: the reload is what puts
+             the dialog in front of the user. A run starting or finishing is not -- swapStatus has
+             already said so in place, with a link to reload when the user wants the results. */
+          var now = d.update || '';
           if (seen === null) { seen = now; return; }      /* first answer is the baseline */
           if (now !== seen && !occupied()) {
             seen = now;
@@ -4910,7 +5419,8 @@ const JS = `${VIEWPORT_JS}
     }
     function schedule(){
       clearTimeout(timer);
-      timer = setTimeout(tick, busyNow() ? 5000 : 30000);
+      /* Once a minute while a run is live, which is what moves its elapsed time and its ticks. */
+      timer = setTimeout(tick, (live || busyNow()) ? 60000 : 30000);
     }
     /* A hidden tab costs the user nothing to leave open, and should cost the server nothing either. */
     document.addEventListener('visibilitychange', function(){
@@ -8343,18 +8853,21 @@ async function handleRunNow(form) {
   // Detached: these take minutes to tens of minutes. The page must come straight back, and the
   // run's own log and status file are how it reports, not this response.
   const child = platform.spawnScriptDetached("run-now", [slug]);
+  const started = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   // Claim the run immediately: run-now.sh takes its own lock seconds later, and until it does this
   // is the only record that something is starting.
   await fs
     .writeFile(
       path.join(DATA, ".run-now.pending.json"),
-      JSON.stringify({ pid: child.pid, slug, started: new Date().toISOString().replace(/\.\d+Z$/, "Z") })
+      JSON.stringify({ pid: child.pid, slug, started })
     )
     .catch(() => {});
+  // The checklist starts with every step pending; the run ticks them off (record.mjs progress).
+  await fs.writeFile(path.join(DATA, ".run-progress.json"), JSON.stringify(newRunProgress(slug, started), null, 2)).catch(() => {});
   await logActivity("run-now", `${slug} started from the dashboard`);
   return {
     kind: "ok",
-    msg: `${label} — it runs in the background. Reload to see what it found; progress is in data/.run-now.log.`,
+    msg: `${label} — it runs in the background. Open Run now to follow its progress.`,
   };
 }
 
@@ -8878,11 +9391,32 @@ const server = http.createServer(async (req, res) => {
       return res.end(
         JSON.stringify({
           running: live ? { slug: live.slug, started: live.started } : null,
+          // The daily update pill, so a run finishing (or the 08:00 run landing) puts its pill on the
+          // page without a reload. Only the key and the pill's own markup travel.
+          digest: await (async () => {
+            const dg = await readLastDigest();
+            return dg ? { key: dg.key, html: digestPillHTML(dg) } : null;
+          })(),
+          status: await (async () => {
+            const rs = await runStatus();
+            return { badge: runStatusBadge(rs), menu: runStatusPanel(rs), failed: (rs.attempts?.attempts || []).some((a) => a.state === "failed") };
+          })(),
           finished: last?.finished || "",
           update: upd?.available && !answered ? upd.latest : "",
           build: BUILD_ID,
         })
       );
+    }
+    // The usage light. Cached inside usage.mjs, so the page asking every minute costs Anthropic one
+    // request every 90 seconds at most; ?refresh=1 is the panel's Refresh button.
+    if (req.method === "GET" && url.pathname === "/usage") {
+      const snap = await usageSnapshot({ repoRoot: ROOT, force: url.searchParams.get("refresh") === "1" && !crossSitePost(req) }).catch(() => ({
+        level: "grey",
+        limits: { state: "unknown", reason: "Could not read your usage." },
+        tokens: null,
+      }));
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify(snap));
     }
     if (req.method === "GET" && url.pathname === "/welcome-status") {
       let st = null;
@@ -9270,6 +9804,16 @@ async function handlePost(req, res, url) {
   }
   if (url.pathname === "/apply-now") {
     return redirect(res, await handleApplyNow(form));
+  }
+  // The daily update pill stops pulsing once opened. Remembered here, not in the browser: the Mac app
+  // and the Windows app window do not reliably keep browser storage between launches.
+  if (url.pathname === "/digest-seen") {
+    const key = String(form.key || "");
+    if (/^[0-9a-f]{16}$/.test(key)) {
+      await fs.writeFile(path.join(DATA, ".digest-seen.json"), JSON.stringify({ key, at: nowISO() })).catch(() => {});
+    }
+    res.writeHead(204);
+    return res.end();
   }
   if (url.pathname === "/dismiss-notice") {
     return redirect(res, await handleDismissNotice(form));

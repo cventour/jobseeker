@@ -24,6 +24,7 @@
 //   node server/record.mjs list-spend [--month YYYY-MM] [--limit n] -> month total + recent runs
 //   node server/record.mjs get-watermark <channel>      -> last swept timestamp for gmail|whatsapp|linkedin
 //   node server/record.mjs set-watermark <channel> <iso> [note]
+//   node server/record.mjs progress <step> <running|done|failed|skipped> -> tick a step on the Run now checklist
 //   node server/record.mjs list-boards [access|needs-browser] [--include-dismissed] -> the registry
 //   node server/record.mjs dismiss-board '<company>' [reason] -> stop surfacing a board
 //   node server/record.mjs restore-board '<company>'          -> undo that
@@ -1005,6 +1006,30 @@ async function getWatermark(channel) {
   return { channel, timestamp: null, note: "no watermark — treat as first run", source: "none" };
 }
 
+// The Run now checklist. The dashboard writes data/.run-progress.json with every step pending the
+// moment it starts a run; the run's playbook ticks each step off here as it goes. A step this file
+// does not list, or no file at all (a scheduled run nobody is watching), is a no-op rather than an
+// error: progress is a courtesy to the person looking, and must never be why a run fails.
+const PROGRESS_STATES = new Set(["running", "done", "failed", "skipped"]);
+async function runProgress(step, state) {
+  if (!step || !PROGRESS_STATES.has(state)) {
+    throw new Error("Usage: progress <step> <running|done|failed|skipped>");
+  }
+  const file = path.join(DATA, ".run-progress.json");
+  let prog;
+  try {
+    prog = JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return { action: "no-progress" };
+  }
+  const row = (prog.steps || []).find((x) => x.id === step);
+  if (!row) return { action: "no-progress", step };
+  row.state = state;
+  row.at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  await writeFileAtomic(file, JSON.stringify(prog, null, 2));
+  return { action: "progress", step, state };
+}
+
 async function setWatermark(channel, timestamp, note) {
   if (!channel || !timestamp) throw new Error("Usage: set-watermark <channel> <iso-timestamp> [note]");
   const rows = await readWatermarks();
@@ -1296,6 +1321,9 @@ async function dispatch(cmd, rest) {
     }
     case "get-watermark":
       result = await getWatermark(rest[0]);
+      break;
+    case "progress":
+      result = await runProgress(rest[0], rest[1]);
       break;
     case "set-watermark":
       result = await setWatermark(rest[0], rest[1], rest.slice(2).join(" "));
