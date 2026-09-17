@@ -41,6 +41,7 @@ import { companyAliases } from "./config.mjs";
 import { DISMISS_TAGS } from "./record.mjs";
 import { buildBundle } from "./feedback.mjs";
 import { usageSnapshot } from "./usage.mjs";
+import { whatsappPluginState, fixWhatsappPlugin } from "./whatsapp-plugin.mjs";
 
 setCompanyAliases(await companyAliases());
 
@@ -825,6 +826,7 @@ async function loadAll() {
     profile,
     cvStatus,
     claudeSignedIn,
+    waPlugin: await whatsappPluginState().catch(() => ({ needsFix: false })),
     applications,
     proposals,
     approvals,
@@ -3807,7 +3809,19 @@ function todayHTML(all, dueToday, appTok, appIds) {
       })
     : "";
 
-  return `${ladderBanner}
+  // WhatsApp installed under the plugin's old name: digests silently stop reaching the phone. Not
+  // dismissible, because nothing else will ever fix it; the button runs the two commands.
+  const waPluginBanner = all.waPlugin?.needsFix
+    ? `<div class="alert bad noticebox"><div class="notice-body"><strong>Your WhatsApp integration needs to be fixed.</strong>
+        The WhatsApp plugin was renamed by its author, and the old install no longer loads, so your daily update cannot reach your phone.
+        JobSeeker can swap it for you. Your WhatsApp link carries over, so there is no need to pair again.
+        <form method="POST" action="/fix-whatsapp-plugin" class="inline wafix" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Fixing… this takes up to a minute'">
+          <input type="hidden" name="_tab" value="today">
+          <button type="submit" class="btn-small">Fix WhatsApp</button>
+        </form></div></div>`
+    : "";
+  return `${waPluginBanner}
+    ${ladderBanner}
     ${browserBanner}
     ${runBanner}
     ${digestBlock}
@@ -4381,6 +4395,7 @@ details.adv[open] > summary{margin-bottom:10px;color:var(--fg)}
 .wslider{width:100%;accent-color:var(--acc)}
 .wpct{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-size:12.5px}
 .noticebox{display:flex;align-items:flex-start;gap:10px}
+.wafix{display:block;margin-top:8px}
 /* The daily update pill. Pulses until opened once; the full digest lives in its dialog. */
 .digestbar{margin:0 0 18px}
 .digestpill{display:inline-flex;align-items:center;gap:9px;max-width:100%;padding:7px 14px 7px 8px;border-radius:99px;
@@ -9676,6 +9691,13 @@ async function handlePost(req, res, url) {
   // "your Claude login has expired" and being at the prompt that fixes it. The check is never a
   // gate -- Claude is the only authority on its own session -- so this is always offered and never
   // required.
+  if (url.pathname === "/fix-whatsapp-plugin") {
+    const r = await fixWhatsappPlugin();
+    await logActivity("whatsapp-plugin", r.ok ? "Swapped the renamed WhatsApp plugin from the dashboard" : `WhatsApp plugin fix failed: ${r.why}`);
+    return redirect(res, r.ok
+      ? { kind: "ok", msg: "WhatsApp is fixed. The next daily update will reach your phone." }
+      : { kind: "bad", msg: `WhatsApp could not be fixed: ${r.why}` });
+  }
   if (url.pathname === "/claude-login") {
     // The absolute path, not the word "claude": the dashboard's own PATH is launchd's when the Mac
     // app started it, and that PATH cannot see any of the three places the CLI installs itself.
