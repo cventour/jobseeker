@@ -4,6 +4,17 @@ Every release, in plain language. Newest first.
 
 ---
 
+## v0.7.12 — 17 September 2026
+
+- New: a small light in the bottom-left corner of the dashboard shows how much of your Claude plan you have used. It is green under half, yellow from half, and red once you hit a limit. Click it for your plan, your current 5-hour session and your week, when each resets, and how many tokens you and JobSeeker have used today. If Claude is not signed in, the light turns grey and offers to run Claude Code.
+- Changed: The "Run now" menu shows what a run is doing. The daily run ticks off each stage as it finishes (reading your channels, finding roles, closing finished tasks, checking the tracker, writing your digest), and the start time is now your own time instead of UTC.
+- Changed: When something goes wrong during a run, the dashboard says so. A run that failed and then retried shows "retrying after a failure" with the reason, and a finished run shows whether it finished, finished partly, or failed and stopped. Before, a run that had failed and started over simply looked like one run that would not end.
+- Changed: Run status updates by itself every minute without reloading the page. When a run ends, the buttons work again and a link offers to show what it found.
+- Changed: Your daily update is now a notification at the top of Today, marked New until you open it, instead of the whole digest filling the page. It opens in its own window, and a new one appears by itself as soon as a run finishes. If it did not reach your phone, the pill says so.
+- Fixed: The author of the whatsapp claude plugin made some changes that broke the integration with Whatsapp. It is now fixed. You do not need to make any changes or re-register JobSeeker with whatsapp again.
+
+---
+
 ## v0.7.11 — 16 September 2026
 
 - You can now sign in to Claude from JobSeeker. Settings ▸ Setup says whether Claude is signed in, and **Sign in to Claude** opens a terminal with Claude already running. This matters more than it sounds: until it is done, reading your CV, researching a market and the daily run all fail at their first step, and they used to fail without ever saying why.

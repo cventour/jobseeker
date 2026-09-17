@@ -50,6 +50,14 @@ const inline = (s) =>
     .replace(/`(.+?)`/g, "<code>$1</code>")
     .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
 
+// A bullet can open with what kind of change it is. "New:" is bold on the site's green highlighter,
+// the same <mark> the site uses for its headline phrases; "Changed:" and "Fixed:" are plain bold.
+// CHANGELOG.md keeps the plain words, so the file reads the same in a terminal.
+const LABEL = /^(New|Changed|Fixed):/;
+const labelHTML = (html) =>
+  html.replace(LABEL, (_, k) => (k === "New" ? "<b><mark>New:</mark></b>" : `<b>${k}:</b>`));
+const labelMD = (body) => body.replace(/^- (New|Changed|Fixed):/gm, "- **$1:**");
+
 function bullets(body) {
   const items = [];
   for (const raw of body.split("\n")) {
@@ -131,7 +139,7 @@ ${shown
         ${i === 0 ? '<span class="rel-tag">latest</span>' : ""}
       </summary>
       <ul class="problems">
-${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
+${bullets(r.body).map((b) => `        <li>${labelHTML(inline(b))}</li>`).join("\n")}
       </ul>
     </details>`
   )
@@ -163,7 +171,7 @@ ${bullets(r.body).map((b) => `        <li>${inline(b)}</li>`).join("\n")}
   }
   // Exactly what goes in the GitHub release body.
   process.stdout.write(
-    `${r.body}\n\n---\n\n` +
+    `${labelMD(r.body)}\n\n---\n\n` +
       `**Windows** — paste this into PowerShell:\n\n\`\`\`\nirm https://myjobseeker.ai/install.ps1 | iex\n\`\`\`\n\n` +
       `**macOS** — paste this into Terminal:\n\n\`\`\`\ncurl -fsSL https://myjobseeker.ai/install.sh | bash\n\`\`\`\n\n` +
       `Neither is a browser download, so there is no SmartScreen or Gatekeeper warning to click ` +
