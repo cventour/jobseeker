@@ -46,6 +46,19 @@ else finished. Specifically:
 - Concurrent `record.mjs` writes are safe: it takes a lock on `data/` and writes atomically, so
   parallel agents cannot lose each other's rows.
 
+**Then tick the Run now checklist as you go.** The dashboard shows each stage below as a box
+that fills in when you report it:
+
+```
+node server/record.mjs progress <step> <running|done|failed|skipped>
+```
+
+Steps, in order: `start`, `track`, `curate`, `reconcile`, `supervise`, `digest`. Mark `start done`
+right after the run-start row above. Mark each stage `running` as you launch it and `done` (or
+`failed` / `skipped`, e.g. chat-tracker skipped still leaves `track` done) when its agents return.
+Stages 2 and 3 run together, so both can be `running` at once. The command is a no-op when nobody
+started the run from the dashboard; never let it fail or delay the run.
+
 ## 1. Track (parallel, but Chrome is serial)
 
 Two agents — within the 3-agent cap, so they go together.
