@@ -34,28 +34,30 @@ let tokensCache = { at: 0, value: null };
 
 /** The Claude Code sign-in, or null. Only the fields this module needs. */
 async function readCredential() {
-  let raw = "";
+  const pick = (raw) => {
+    try {
+      const o = JSON.parse(raw).claudeAiOauth;
+      if (!o?.accessToken) return null;
+      return { token: o.accessToken, expiresAt: Number(o.expiresAt) || 0, plan: o.subscriptionType || "", tier: o.rateLimitTier || "" };
+    } catch {
+      return null;
+    }
+  };
+  // The file first (Windows, Linux), but only if it actually holds a Claude sign-in: on a Mac it can
+  // exist holding nothing but MCP server logins, and stopping there reported a signed-in Mac as
+  // signed out.
   const file = path.join(platform.homeDir(), ".claude", ".credentials.json");
-  if (existsSync(file)) raw = await fs.readFile(file, "utf8").catch(() => "");
-  if (!raw && platform.IS_MAC) {
+  if (existsSync(file)) {
+    const c = pick(await fs.readFile(file, "utf8").catch(() => ""));
+    if (c) return c;
+  }
+  if (platform.IS_MAC) {
     // `security` is the binary Claude Code itself stores the item with, so reading it back through
     // the same binary does not raise a keychain permission dialog.
     const r = await platform.run("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], { timeout: 4000 });
-    if (r.ok) raw = r.out;
+    if (r.ok) return pick(r.out);
   }
-  if (!raw) return null;
-  try {
-    const o = JSON.parse(raw).claudeAiOauth;
-    if (!o?.accessToken) return null;
-    return {
-      token: o.accessToken,
-      expiresAt: Number(o.expiresAt) || 0,
-      plan: o.subscriptionType || "",
-      tier: o.rateLimitTier || "",
-    };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /** "max" + "default_claude_max_20x" -> "Max 20x". */
