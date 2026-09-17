@@ -11,7 +11,7 @@ Every release, in plain language. Newest first.
 - Changed: When something goes wrong during a run, the dashboard says so. A run that failed and then retried shows "retrying after a failure" with the reason, and a finished run shows whether it finished, finished partly, or failed and stopped. Before, a run that had failed and started over simply looked like one run that would not end.
 - Changed: Run status updates by itself every minute without reloading the page. When a run ends, the buttons work again and a link offers to show what it found.
 - Changed: Your daily update is now a notification at the top of Today, marked New until you open it, instead of the whole digest filling the page. It opens in its own window, and a new one appears by itself as soon as a run finishes. If it did not reach your phone, the pill says so.
-- Fixed: The author of the whatsapp claude plugin made some changes that broke the integration with Whatsapp. It is now fixed. You do not need to make any changes or re-register JobSeeker with whatsapp again.
+- Fixed: The author of the whatsapp claude plugin made some changes that broke the integration with Whatsapp. It is now fixed. If your daily update stopped arriving on WhatsApp, open Terminal (Mac) or PowerShell (Windows) and run `claude plugin install whatsapp-channel@whatsapp-claude-plugin`, then `claude plugin uninstall whatsapp-claude-channel@whatsapp-claude-plugin`. You do not need to re-register JobSeeker with WhatsApp; your existing link carries over and the next daily run delivers as normal.
 
 ---
 
