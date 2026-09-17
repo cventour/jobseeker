@@ -442,11 +442,11 @@ if (-not $WaDir) {
   $WaDir = Join-Path $uh ".whatsapp-channel"
 }
 $WaPluginRepo = "Rich627/whatsapp-claude-plugin"
-# The name the plugin had when this was written. It is a fallback, not the answer: the author
+# The plugin's current name. It is a fallback, not the answer: the author
 # renamed it (whatsapp-claude-channel -> whatsapp-channel) without changing the marketplace, and
 # every install after that failed with "not found in marketplace". Get-WaPluginName reads the name
 # out of the marketplace the moment it has been cloned, so the next rename costs nothing.
-$WaPluginFallback = "whatsapp-claude-channel"
+$WaPluginFallback = "whatsapp-channel"
 $WaMarketplace = "whatsapp-claude-plugin"
 
 # Read a file SOMEONE ELSE IS STILL WRITING.
@@ -1584,7 +1584,7 @@ function Do-Whatsapp([string]$Phone) {
   Write-Log "plugin installed"
 
   # ---- the number ----
-  # This is all that /whatsapp-claude-channel:configure <number> does: one line in one file. No
+  # This is all that /whatsapp-channel:configure <number> does: one line in one file. No
   # Claude session is needed for it, so the window writes it directly.
   Write-Pct 55
   New-Item -ItemType Directory -Force -Path $WaDir | Out-Null

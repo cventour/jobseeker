@@ -51,7 +51,6 @@ $ClaudeAllowedTools = @(
   "mcp__claude_ai_Google_Calendar__list_events",
   "mcp__claude_ai_Google_Calendar__create_event",
   "mcp__claude_ai_Google_Calendar__update_event",
-  "mcp__plugin_whatsapp-claude-channel_whatsapp__reply",
   "mcp__plugin_whatsapp-channel_whatsapp__reply"
 ) -join " "
 
